@@ -2,7 +2,7 @@ version: "3.8"
 services:
   iroha0:
     build: .
-    image: iroha0:debug
+    image: iroha2:dev
     environment:
       KURA_BLOCK_STORE_PATH: /chain
       TORII_P2P_ADDR: iroha0:1337
@@ -19,12 +19,13 @@ services:
     command: iroha --submit-genesis
     volumes:
       - ./configs/peer:/config
+      - ./:/root/soramitsu/iroha
 
 
   iroha1:
     depends_on:
       - iroha0
-    image: iroha0:debug
+    image: iroha2:dev
     environment:
       KURA_BLOCK_STORE_PATH: /chain
       TORII_P2P_ADDR: iroha1:1338
@@ -40,12 +41,13 @@ services:
     init: true
     volumes:
       - ./configs/peer:/config
+      - ./:/root/soramitsu/iroha
 
 
   iroha2:
     depends_on:
       - iroha0
-    image: iroha0:debug
+    image: iroha2:dev
     environment:
       KURA_BLOCK_STORE_PATH: /chain
       TORII_P2P_ADDR: iroha2:1339
@@ -61,12 +63,13 @@ services:
     init: true
     volumes:
       - ./configs/peer:/config
+      - ./:/root/soramitsu/iroha
 
 
   iroha3:
     depends_on:
       - iroha0
-    image: iroha0:debug
+    image: iroha2:dev
     environment:
       KURA_BLOCK_STORE_PATH: /chain
       TORII_P2P_ADDR: iroha3:1340
@@ -82,3 +85,4 @@ services:
     init: true
     volumes:
       - ./configs/peer:/config
+      - ./:/root/soramitsu/iroha

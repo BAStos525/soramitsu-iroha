@@ -41,20 +41,29 @@ jobs:
       #     context: .
       #     file: Dockerfile.build
 
-      - name: build iroha2:dev docker image
-        run: |
-          docker build -f Dockerfile -t bastos525/iroha2:m1 .
-      - name: list docker images
-        run: |
-          docker images
+      # - name: build iroha2:dev docker image
+      #   run: |
+      #     docker build -f Dockerfile -t bastos525/iroha2:m1 .
+      # - name: list docker images
+      #   run: |
+      #     docker images
       - name: Login to DockerHub
         uses: docker/login-action@v1
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: push iroha2:dev docker image
-        run: |
-          docker push bastos525/iroha2:m1
+      # - name: push iroha2:dev docker image
+      #   run: |
+      #     docker push bastos525/iroha2:m1
+
+
+      - name: Build iroha2:m1 docker image
+        uses: docker/build-push-action@v3
+        with:
+          push: true
+          tags: bastos525/iroha2:m1
+          context: .
+          file: Dockerfile
 
       # - name: Build and push docker image (load-rs:dev)
       #   run: |

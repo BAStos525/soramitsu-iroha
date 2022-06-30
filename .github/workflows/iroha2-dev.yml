@@ -23,23 +23,23 @@ jobs:
         id: buildx
         with:
           install: true
-          driver: docker
+ #         driver: docker
 
-      - name: Build iroha2:env container
-        uses: docker/build-push-action@v3
-        with:
-          load: true
-          tags: iroha2:env
-          context: .
-          file: Dockerfile.ci        
+      # - name: Build iroha2:env container
+      #   uses: docker/build-push-action@v3
+      #   with:
+      #     load: true
+      #     tags: iroha2:env
+      #     context: .
+      #     file: Dockerfile.ci        
 
-      - name: Build iroha2:build docker image
-        uses: docker/build-push-action@v3
-        with:
-          load: true
-          tags: iroha2:build
-          context: .
-          file: Dockerfile.build
+      # - name: Build iroha2:build docker image
+      #   uses: docker/build-push-action@v3
+      #   with:
+      #     load: true
+      #     tags: iroha2:build
+      #     context: .
+      #     file: Dockerfile.build
 
       - name: build iroha2:dev docker image
         run: |
@@ -51,7 +51,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: push iroha2:dev docker image
         run: |
-          docker push bastos525/iroha2:dev
+          docker push bastos525/iroha2-M1:dev
 
       # - name: Build and push docker image (load-rs:dev)
       #   run: |

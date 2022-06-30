@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 iroha2:build AS builder
+FROM --platform=linux/amd64 bastos525/iroha2:build AS builder
 FROM --platform=linux/amd64 alpine:3.16
 
 ENV  BIN_PATH=/usr/local/bin/

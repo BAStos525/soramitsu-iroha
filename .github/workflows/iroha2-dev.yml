@@ -2,7 +2,7 @@ name: I2::Dev::Deploy
 
 on:
   push:
-    branches: [iroha2-dev]
+    branches: [feature/DOPS-1788/M1-build]
 
 env:
   CARGO_TERM_COLOR: always
@@ -12,7 +12,7 @@ env:
 # `ubuntu-latest` and not `[self-hosted, Linux]`.
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64]
     container:
       image: 7272721/i2-ci:latest
     steps:

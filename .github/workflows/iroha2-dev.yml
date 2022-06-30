@@ -51,7 +51,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: push iroha2:dev docker image
         run: |
-          docker push bastos525/iroha2-M1:dev
+          docker push bastos525/iroha2-m1:dev
 
       # - name: Build and push docker image (load-rs:dev)
       #   run: |

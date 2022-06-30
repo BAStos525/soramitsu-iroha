@@ -1,7 +1,7 @@
 FROM --platform=linux/amd64 archlinux:base-devel-20220612.0.61195
 
 RUN set -eux && \
-    pacman -Syu rustup mold rust-musl --noconfirm
+    pacman -Syu rustup mold musl rust-musl --noconfirm
 
 RUN rustup set profile minimal && \
     rustup toolchain add stable
@@ -15,6 +15,6 @@ RUN rustup component add rustfmt --toolchain nightly-2022-04-20-x86_64-unknown-l
 RUN rustup component add rust-std
 # RUN rustup target add wasm32-unknown-unknown
 RUN rustup target add wasm32-unknown-unknown --toolchain nightly-2022-04-20
-RUN cargo install cargo-lints cargo-nono webassembly-test-runner
+#RUN cargo install cargo-lints cargo-nono webassembly-test-runner
 RUN rustup target add x86_64-unknown-linux-musl
-RUN pacman -S musl rust-musl --noconfirm
+#RUN pacman -S musl rust-musl --noconfirm

@@ -19,7 +19,6 @@ use crate::{
         network_topology::Role,
         SumeragiTrait,
     },
-    wsv::WorldTrait,
     VersionedCommittedBlock,
 };
 
@@ -35,41 +34,38 @@ enum State {
 
 /// Structure responsible for block synchronization between peers.
 #[derive(Debug)]
-pub struct BlockSynchronizer<S: SumeragiTrait, W: WorldTrait> {
-    wsv: Arc<WorldStateView<W>>,
+pub struct BlockSynchronizer<S: SumeragiTrait> {
+    wsv: Arc<WorldStateView>,
     sumeragi: AlwaysAddr<S>,
     peer_id: PeerId,
     state: State,
     gossip_period: Duration,
-    batch_size: u32,
+    block_batch_size: u32,
     broker: Broker,
-    mailbox: u32,
+    actor_channel_capacity: u32,
 }
 
 /// Block synchronizer
 pub trait BlockSynchronizerTrait: Actor + Handler<ContinueSync> + Handler<Message> {
     /// Requires sumeragi for sending direct messages to it
     type Sumeragi: SumeragiTrait;
-    /// Requires world to read latest blocks commited
-    type World: WorldTrait;
 
     /// Constructs `BlockSync`
     fn from_configuration(
         config: &BlockSyncConfiguration,
-        wsv: Arc<WorldStateView<Self::World>>,
+        wsv: Arc<WorldStateView>,
         sumeragi: AlwaysAddr<Self::Sumeragi>,
         peer_id: PeerId,
         broker: Broker,
     ) -> Self;
 }
 
-impl<S: SumeragiTrait, W: WorldTrait> BlockSynchronizerTrait for BlockSynchronizer<S, W> {
+impl<S: SumeragiTrait> BlockSynchronizerTrait for BlockSynchronizer<S> {
     type Sumeragi = S;
-    type World = W;
 
     fn from_configuration(
         config: &BlockSyncConfiguration,
-        wsv: Arc<WorldStateView<W>>,
+        wsv: Arc<WorldStateView>,
         sumeragi: AlwaysAddr<S>,
         peer_id: PeerId,
         broker: Broker,
@@ -80,9 +76,9 @@ impl<S: SumeragiTrait, W: WorldTrait> BlockSynchronizerTrait for BlockSynchroniz
             sumeragi,
             state: State::Idle,
             gossip_period: Duration::from_millis(config.gossip_period_ms),
-            batch_size: config.batch_size,
+            block_batch_size: config.block_batch_size,
             broker,
-            mailbox: config.mailbox,
+            actor_channel_capacity: config.actor_channel_capacity,
         }
     }
 }
@@ -98,9 +94,9 @@ pub struct ContinueSync;
 pub struct ReceiveUpdates;
 
 #[async_trait::async_trait]
-impl<S: SumeragiTrait, W: WorldTrait> Actor for BlockSynchronizer<S, W> {
-    fn mailbox_capacity(&self) -> u32 {
-        self.mailbox
+impl<S: SumeragiTrait> Actor for BlockSynchronizer<S> {
+    fn actor_channel_capacity(&self) -> u32 {
+        self.actor_channel_capacity
     }
 
     async fn on_start(&mut self, ctx: &mut Context<Self>) {
@@ -111,7 +107,7 @@ impl<S: SumeragiTrait, W: WorldTrait> Actor for BlockSynchronizer<S, W> {
 }
 
 #[async_trait::async_trait]
-impl<S: SumeragiTrait, W: WorldTrait> Handler<ReceiveUpdates> for BlockSynchronizer<S, W> {
+impl<S: SumeragiTrait> Handler<ReceiveUpdates> for BlockSynchronizer<S> {
     type Result = ();
     async fn handle(&mut self, ReceiveUpdates: ReceiveUpdates) {
         let rng = &mut rand::rngs::StdRng::from_entropy();
@@ -124,7 +120,7 @@ impl<S: SumeragiTrait, W: WorldTrait> Handler<ReceiveUpdates> for BlockSynchroni
 }
 
 #[async_trait::async_trait]
-impl<S: SumeragiTrait, W: WorldTrait> Handler<ContinueSync> for BlockSynchronizer<S, W> {
+impl<S: SumeragiTrait> Handler<ContinueSync> for BlockSynchronizer<S> {
     type Result = ();
     async fn handle(&mut self, ContinueSync: ContinueSync) {
         self.continue_sync().await;
@@ -132,14 +128,14 @@ impl<S: SumeragiTrait, W: WorldTrait> Handler<ContinueSync> for BlockSynchronize
 }
 
 #[async_trait::async_trait]
-impl<S: SumeragiTrait, W: WorldTrait> Handler<Message> for BlockSynchronizer<S, W> {
+impl<S: SumeragiTrait> Handler<Message> for BlockSynchronizer<S> {
     type Result = ();
     async fn handle(&mut self, message: Message) {
         message.handle(self).await;
     }
 }
 
-impl<S: SumeragiTrait + Debug, W: WorldTrait> BlockSynchronizer<S, W> {
+impl<S: SumeragiTrait + Debug> BlockSynchronizer<S> {
     /// Sends request for latest blocks to a chosen peer
     async fn request_latest_blocks_from_peer(&mut self, peer_id: PeerId) {
         Message::GetBlocksAfter(GetBlocksAfter::new(
@@ -218,9 +214,7 @@ pub mod message {
     use parity_scale_codec::{Decode, Encode};
 
     use super::{BlockSynchronizer, State};
-    use crate::{
-        block::VersionedCommittedBlock, sumeragi::SumeragiTrait, wsv::WorldTrait, NetworkMessage,
-    };
+    use crate::{block::VersionedCommittedBlock, sumeragi::SumeragiTrait, NetworkMessage};
 
     declare_versioned_with_scale!(VersionedMessage 1..2, Debug, Clone, iroha_macro::FromVariant, iroha_actor::Message);
 
@@ -292,13 +286,10 @@ pub mod message {
     impl Message {
         /// Handles the incoming message.
         #[iroha_futures::telemetry_future]
-        pub async fn handle<S: SumeragiTrait, W: WorldTrait>(
-            &self,
-            block_sync: &mut BlockSynchronizer<S, W>,
-        ) {
+        pub async fn handle<S: SumeragiTrait>(&self, block_sync: &mut BlockSynchronizer<S>) {
             match self {
                 Message::GetBlocksAfter(GetBlocksAfter { hash, peer_id }) => {
-                    if block_sync.batch_size == 0 {
+                    if block_sync.block_batch_size == 0 {
                         warn!("Error: not sending any blocks as batch_size is equal to zero.");
                         return;
                     }
@@ -309,7 +300,7 @@ pub mod message {
                     let blocks: Vec<_> = block_sync
                         .wsv
                         .blocks_after_hash(*hash)
-                        .take(block_sync.batch_size as usize)
+                        .take(block_sync.block_batch_size as usize)
                         .collect();
 
                     if blocks.is_empty() {
@@ -348,9 +339,9 @@ pub mod config {
     use iroha_config::derive::Configurable;
     use serde::{Deserialize, Serialize};
 
-    const DEFAULT_BATCH_SIZE: u32 = 4;
+    const DEFAULT_BLOCK_BATCH_SIZE: u32 = 4;
     const DEFAULT_GOSSIP_PERIOD_MS: u64 = 10000;
-    const DEFAULT_MAILBOX_SIZE: u32 = 100;
+    const DEFAULT_ACTOR_CHANNEL_CAPACITY: u32 = 100;
 
     /// Configuration for `BlockSynchronizer`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Configurable)]
@@ -358,21 +349,21 @@ pub mod config {
     #[serde(default)]
     #[config(env_prefix = "BLOCK_SYNC_")]
     pub struct BlockSyncConfiguration {
-        /// The time between sending request for latest block.
+        /// The time between sending requests for latest block.
         pub gossip_period_ms: u64,
-        /// The number of blocks, which can be sent in one message.
+        /// The number of blocks that can be sent in one message.
         /// Underlying network (`iroha_network`) should support transferring messages this large.
-        pub batch_size: u32,
-        /// Mailbox size
-        pub mailbox: u32,
+        pub block_batch_size: u32,
+        /// Buffer capacity of actor's MPSC channel
+        pub actor_channel_capacity: u32,
     }
 
     impl Default for BlockSyncConfiguration {
         fn default() -> Self {
             Self {
                 gossip_period_ms: DEFAULT_GOSSIP_PERIOD_MS,
-                batch_size: DEFAULT_BATCH_SIZE,
-                mailbox: DEFAULT_MAILBOX_SIZE,
+                block_batch_size: DEFAULT_BLOCK_BATCH_SIZE,
+                actor_channel_capacity: DEFAULT_ACTOR_CHANNEL_CAPACITY,
             }
         }
     }

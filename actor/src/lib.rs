@@ -161,16 +161,9 @@ impl<A: Actor> Addr<A> {
         A: ContextHandler<M>,
     {
         let envelope = SyncEnvelopeProxy::pack(message, None);
-        let sender = self.sender.clone();
-        // TODO: BUG: remove deadlock from iroha (probably issue inside of `iroha_p2p` crate) and remove this task::spawn
-        tokio::spawn(
-            async move {
-                if let Err(error) = sender.send(envelope).await {
-                    iroha_logger::error!(%error, "Error sending actor message");
-                }
-            }
-            .in_current_span(),
-        );
+        if let Err(error) = self.sender.send(envelope).await {
+            iroha_logger::error!(%error, "Error sending actor message");
+        }
     }
 
     /// Constructs recipient for sending only specific messages (without answers)
@@ -289,7 +282,7 @@ where
 #[async_trait::async_trait]
 pub trait Actor: Send + Sized + 'static {
     /// Capacity of actor queue
-    fn mailbox_capacity(&self) -> u32 {
+    fn actor_channel_capacity(&self) -> u32 {
         100
     }
 
@@ -305,7 +298,7 @@ pub trait Actor: Send + Sized + 'static {
 
     /// Initialize actor with its address.
     fn preinit(self) -> InitializedActor<Self> {
-        let mailbox_capacity = self.mailbox_capacity();
+        let mailbox_capacity = self.actor_channel_capacity();
         InitializedActor::new(
             self,
             mailbox_capacity

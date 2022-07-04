@@ -16,9 +16,9 @@ use serde::{Deserialize, Serialize, Serializer};
 pub struct AtomicU32(core_atomic::AtomicU32);
 
 impl AtomicU32 {
-    /// Create new [`AtomicU32Wrapper`] instance
+    /// Create new [`AtomicU32`] instance
     #[inline]
-    pub fn new(num: u32) -> AtomicU32 {
+    pub const fn new(num: u32) -> AtomicU32 {
         Self(core_atomic::AtomicU32::new(num))
     }
 

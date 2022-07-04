@@ -5,6 +5,7 @@
 
 use std::{collections::HashSet, fmt::Debug, fs::File, io::BufReader, ops::Deref, path::Path};
 
+use derive_more::Deref;
 use eyre::{eyre, Result, WrapErr};
 use iroha_actor::Addr;
 use iroha_crypto::{KeyPair, PublicKey};
@@ -22,7 +23,6 @@ use crate::{
         network_topology::{GenesisBuilder as GenesisTopologyBuilder, Topology},
     },
     tx::VersionedAcceptedTransaction,
-    wsv::WorldTrait,
     IrohaNetwork,
 };
 
@@ -46,7 +46,7 @@ pub trait GenesisNetworkTrait:
     fn from_configuration(
         submit_genesis: bool,
         raw_block: RawGenesisBlock,
-        genesis_config: &GenesisConfiguration,
+        genesis_config: &Option<GenesisConfiguration>,
         transaction_limits: &TransactionLimits,
     ) -> Result<Option<Self>>;
 
@@ -69,11 +69,11 @@ pub trait GenesisNetworkTrait:
     ///
     /// # Errors
     /// Returns error if waiting for peers or genesis round itself fails
-    async fn submit_transactions<K: KuraTrait, W: WorldTrait, F: FaultInjection>(
+    async fn submit_transactions<K: KuraTrait, F: FaultInjection>(
         &self,
-        sumeragi: &mut SumeragiWithFault<Self, K, W, F>,
+        sumeragi: &mut SumeragiWithFault<Self, K, F>,
         network: Addr<IrohaNetwork>,
-        ctx: &mut iroha_actor::Context<SumeragiWithFault<Self, K, W, F>>,
+        ctx: &mut iroha_actor::Context<SumeragiWithFault<Self, K, F>>,
     ) -> Result<()> {
         iroha_logger::debug!("Starting submit genesis");
         let genesis_topology = self
@@ -91,25 +91,18 @@ pub trait GenesisNetworkTrait:
 }
 
 /// [`GenesisNetwork`] contains initial transactions and genesis setup related parameters.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deref)]
 pub struct GenesisNetwork {
     /// transactions from `GenesisBlock`, any transaction is accepted
+    #[deref]
     pub transactions: Vec<VersionedAcceptedTransaction>,
     /// Number of attempts to connect to peers, while waiting for them to submit genesis.
-    pub wait_for_peers_retry_count: u64,
+    pub wait_for_peers_retry_count_limit: u64,
     /// Period in milliseconds in which to retry connecting to peers, while waiting for them to submit genesis.
     pub wait_for_peers_retry_period_ms: u64,
     /// Delay before genesis block submission after minimum number of peers were discovered to be online.
     /// Used to ensure that other peers had time to connect to each other.
     pub genesis_submission_delay_ms: u64,
-}
-
-impl Deref for GenesisNetwork {
-    type Target = Vec<VersionedAcceptedTransaction>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.transactions
-    }
 }
 
 async fn try_get_online_topology(
@@ -173,9 +166,11 @@ impl GenesisNetworkTrait for GenesisNetwork {
     fn from_configuration(
         submit_genesis: bool,
         raw_block: RawGenesisBlock,
-        genesis_config: &GenesisConfiguration,
+        genesis_config: &Option<GenesisConfiguration>,
         tx_limits: &TransactionLimits,
     ) -> Result<Option<GenesisNetwork>> {
+        #![allow(clippy::unwrap_in_result)]
+        #![allow(clippy::expect_used)]
         if !submit_genesis {
             iroha_logger::debug!("Not submitting genesis");
             return Ok(None);
@@ -187,8 +182,14 @@ impl GenesisNetworkTrait for GenesisNetwork {
                 .iter()
                 .map(|raw_transaction| {
                     let genesis_key_pair = KeyPair::new(
-                        genesis_config.account_public_key.clone(),
                         genesis_config
+                            .as_ref()
+                            .expect("Should be `Some` when `submit_genesis` is true")
+                            .account_public_key
+                            .clone(),
+                        genesis_config
+                            .as_ref()
+                            .expect("Should be `Some` when `submit_genesis` is true")
                             .account_private_key
                             .clone()
                             .ok_or_else(|| eyre!("Genesis account private key is empty."))?,
@@ -205,9 +206,18 @@ impl GenesisNetworkTrait for GenesisNetwork {
                     .ok()
                 })
                 .collect(),
-            wait_for_peers_retry_count: genesis_config.wait_for_peers_retry_count,
-            wait_for_peers_retry_period_ms: genesis_config.wait_for_peers_retry_period_ms,
-            genesis_submission_delay_ms: genesis_config.genesis_submission_delay_ms,
+            wait_for_peers_retry_count_limit: genesis_config
+                .as_ref()
+                .expect("Should be `Some` when `submit_genesis` is true")
+                .wait_for_peers_retry_count_limit,
+            wait_for_peers_retry_period_ms: genesis_config
+                .as_ref()
+                .expect("Should be `Some` when `submit_genesis` is true")
+                .wait_for_peers_retry_period_ms,
+            genesis_submission_delay_ms: genesis_config
+                .as_ref()
+                .expect("Should be `Some` when `submit_genesis` is true")
+                .genesis_submission_delay_ms,
         }))
     }
 
@@ -218,7 +228,7 @@ impl GenesisNetworkTrait for GenesisNetwork {
         network: Addr<IrohaNetwork>,
     ) -> Result<Topology> {
         iroha_logger::info!("Waiting for active peers",);
-        for i in 0..self.wait_for_peers_retry_count {
+        for i in 0..self.wait_for_peers_retry_count_limit {
             if let Ok(topology) =
                 try_get_online_topology(&this_peer_id, &network_topology, network.clone()).await
             {
@@ -319,7 +329,7 @@ pub mod config {
     use iroha_crypto::{KeyPair, PrivateKey, PublicKey};
     use serde::{Deserialize, Serialize};
 
-    const DEFAULT_WAIT_FOR_PEERS_RETRY_COUNT: u64 = 100;
+    const DEFAULT_WAIT_FOR_PEERS_RETRY_COUNT_LIMIT: u64 = 100;
     const DEFAULT_WAIT_FOR_PEERS_RETRY_PERIOD_MS: u64 = 500;
     const DEFAULT_GENESIS_SUBMISSION_DELAY_MS: u64 = 1000;
 
@@ -335,8 +345,8 @@ pub mod config {
         /// Genesis account private key, only needed on the peer that submits the genesis block.
         pub account_private_key: Option<PrivateKey>,
         /// Number of attempts to connect to peers, while waiting for them to submit genesis.
-        #[serde(default = "default_wait_for_peers_retry_count")]
-        pub wait_for_peers_retry_count: u64,
+        #[serde(default = "default_wait_for_peers_retry_count_limit")]
+        pub wait_for_peers_retry_count_limit: u64,
         /// Period in milliseconds in which to retry connecting to peers, while waiting for them to submit genesis.
         #[serde(default = "default_wait_for_peers_retry_period_ms")]
         pub wait_for_peers_retry_period_ms: u64,
@@ -354,7 +364,7 @@ pub mod config {
             Self {
                 account_public_key: public_key,
                 account_private_key: Some(private_key),
-                wait_for_peers_retry_count: DEFAULT_WAIT_FOR_PEERS_RETRY_COUNT,
+                wait_for_peers_retry_count_limit: DEFAULT_WAIT_FOR_PEERS_RETRY_COUNT_LIMIT,
                 wait_for_peers_retry_period_ms: DEFAULT_WAIT_FOR_PEERS_RETRY_PERIOD_MS,
                 genesis_submission_delay_ms: DEFAULT_GENESIS_SUBMISSION_DELAY_MS,
             }
@@ -378,8 +388,8 @@ pub mod config {
         }
     }
 
-    const fn default_wait_for_peers_retry_count() -> u64 {
-        DEFAULT_WAIT_FOR_PEERS_RETRY_COUNT
+    const fn default_wait_for_peers_retry_count_limit() -> u64 {
+        DEFAULT_WAIT_FOR_PEERS_RETRY_COUNT_LIMIT
     }
 
     const fn default_wait_for_peers_retry_period_ms() -> u64 {
@@ -496,11 +506,11 @@ mod tests {
         let _genesis_block = GenesisNetwork::from_configuration(
             true,
             RawGenesisBlock::default(),
-            &GenesisConfiguration {
+            &Some(GenesisConfiguration {
                 account_public_key: public_key,
                 account_private_key: Some(private_key),
                 ..GenesisConfiguration::default()
-            },
+            }),
             &tx_limits,
         )?;
         Ok(())

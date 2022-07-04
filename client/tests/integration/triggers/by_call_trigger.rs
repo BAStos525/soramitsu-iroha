@@ -5,13 +5,14 @@ use std::{str::FromStr as _, sync::mpsc, thread, time::Duration};
 use eyre::{eyre, Result, WrapErr};
 use iroha_client::client::{self, Client};
 use iroha_data_model::prelude::*;
-use test_network::{Peer as TestPeer, *};
+use test_network::*;
 
 const TRIGGER_NAME: &str = "mint_rose";
 
 #[test]
 fn call_execute_trigger() -> Result<()> {
-    let (_rt, _peer, mut test_client) = <TestPeer>::start_test_with_runtime();
+    prepare_test_for_nextest!();
+    let (_rt, _peer, mut test_client) = <PeerBuilder>::new().start_with_runtime();
     wait_for_genesis_committed(&vec![test_client.clone()], 0);
 
     let asset_definition_id = "rose#wonderland".parse()?;
@@ -35,7 +36,8 @@ fn call_execute_trigger() -> Result<()> {
 
 #[test]
 fn execute_trigger_should_produce_event() -> Result<()> {
-    let (_rt, _peer, test_client) = <TestPeer>::start_test_with_runtime();
+    prepare_test_for_nextest!();
+    let (_rt, _peer, test_client) = <PeerBuilder>::new().start_with_runtime();
     wait_for_genesis_committed(&vec![test_client.clone()], 0);
 
     let asset_definition_id = "rose#wonderland".parse()?;
@@ -70,7 +72,8 @@ fn execute_trigger_should_produce_event() -> Result<()> {
 
 #[test]
 fn infinite_recursion_should_produce_one_call_per_block() -> Result<()> {
-    let (_rt, _peer, mut test_client) = <TestPeer>::start_test_with_runtime();
+    prepare_test_for_nextest!();
+    let (_rt, _peer, mut test_client) = <PeerBuilder>::new().start_with_runtime();
     wait_for_genesis_committed(&vec![test_client.clone()], 0);
 
     let asset_definition_id = "rose#wonderland".parse()?;
@@ -97,7 +100,8 @@ fn infinite_recursion_should_produce_one_call_per_block() -> Result<()> {
 
 #[test]
 fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<()> {
-    let (_rt, _peer, mut test_client) = <TestPeer>::start_test_with_runtime();
+    prepare_test_for_nextest!();
+    let (_rt, _peer, mut test_client) = <PeerBuilder>::new().start_with_runtime();
     wait_for_genesis_committed(&vec![test_client.clone()], 0);
 
     let asset_definition_id = "rose#wonderland".parse()?;
@@ -151,7 +155,8 @@ fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<()> {
 
 #[test]
 fn trigger_should_not_be_executed_with_zero_repeats_count() -> Result<()> {
-    let (_rt, _peer, mut test_client) = <TestPeer>::start_test_with_runtime();
+    prepare_test_for_nextest!();
+    let (_rt, _peer, mut test_client) = <PeerBuilder>::new().start_with_runtime();
     wait_for_genesis_committed(&vec![test_client.clone()], 0);
 
     let asset_definition_id = "rose#wonderland".parse()?;
@@ -193,7 +198,8 @@ fn trigger_should_not_be_executed_with_zero_repeats_count() -> Result<()> {
 
 #[test]
 fn trigger_should_be_able_to_modify_its_own_repeats_count() -> Result<()> {
-    let (_rt, _peer, mut test_client) = <TestPeer>::start_test_with_runtime();
+    prepare_test_for_nextest!();
+    let (_rt, _peer, mut test_client) = <PeerBuilder>::new().start_with_runtime();
     wait_for_genesis_committed(&vec![test_client.clone()], 0);
 
     let asset_definition_id = "rose#wonderland".parse()?;
@@ -232,6 +238,49 @@ fn trigger_should_be_able_to_modify_its_own_repeats_count() -> Result<()> {
     // Checking results
     let new_asset_value = get_asset_value(&mut test_client, asset_id)?;
     assert_eq!(new_asset_value, prev_asset_value + 2);
+
+    Ok(())
+}
+
+#[test]
+fn unregister_trigger() -> Result<()> {
+    prepare_test_for_nextest!();
+    let (_rt, _peer, test_client) = <PeerBuilder>::new().start_with_runtime();
+    wait_for_genesis_committed(&vec![test_client.clone()], 0);
+
+    let account_id = AccountId::from_str("alice@wonderland")?;
+
+    // Registering trigger
+    let trigger_id = <Trigger<FilterBox> as Identifiable>::Id::from_str("empty_trigger")?;
+    let trigger_instructions = Vec::new();
+    let trigger = Trigger::new(
+        trigger_id.clone(),
+        Action::new(
+            Executable::from(trigger_instructions),
+            Repeats::Indefinitely,
+            account_id.clone(),
+            FilterBox::ExecuteTrigger(ExecuteTriggerEventFilter::new(
+                trigger_id.clone(),
+                account_id,
+            )),
+        ),
+    );
+    let register_trigger = RegisterBox::new(trigger.clone());
+    test_client.submit_blocking(register_trigger)?;
+
+    // Finding trigger
+    let find_trigger = FindTriggerById {
+        id: trigger_id.clone().into(),
+    };
+    let found_trigger = test_client.request(find_trigger.clone())?;
+    assert_eq!(found_trigger, trigger);
+
+    // Unregistering trigger
+    let unregister_trigger = UnregisterBox::new(trigger_id);
+    test_client.submit_blocking(unregister_trigger)?;
+
+    // Checking result
+    assert!(test_client.request(find_trigger).is_err());
 
     Ok(())
 }

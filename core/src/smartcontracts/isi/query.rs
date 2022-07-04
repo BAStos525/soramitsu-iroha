@@ -7,8 +7,8 @@ use iroha_schema::IntoSchema;
 use parity_scale_codec::{Decode, Encode};
 use thiserror::Error;
 
-use super::FindError;
-use crate::{prelude::ValidQuery, WorldStateView, WorldTrait};
+use super::{permissions::prelude::DenialReason, FindError};
+use crate::{prelude::ValidQuery, WorldStateView};
 
 /// Query Request statefully validated on the Iroha node side.
 #[derive(Debug, Decode, Encode)]
@@ -22,7 +22,7 @@ impl ValidQueryRequest {
     /// # Errors
     /// Forwards `self.query.execute` error.
     #[inline]
-    pub fn execute<W: WorldTrait>(&self, wsv: &WorldStateView<W>) -> Result<Value, Error> {
+    pub fn execute(&self, wsv: &WorldStateView) -> Result<Value, Error> {
         self.query.execute(wsv)
     }
 
@@ -33,39 +33,18 @@ impl ValidQueryRequest {
     }
 }
 
-/// Unsupported version error
-#[derive(Clone, Copy, Eq, PartialEq, Debug, Decode, Encode, IntoSchema, Error)]
-#[error(
-    "Unsupported version. Expected: {}, got: {version}",
-    Self::expected_version()
-)]
-pub struct UnsupportedVersionError {
-    /// Version that we got
-    pub version: u8,
-}
-
-impl UnsupportedVersionError {
-    /// Expected version
-    pub const fn expected_version() -> u8 {
-        1
-    }
-}
-
 /// Query errors.
-#[derive(Error, Debug, Clone, Decode, Encode, IntoSchema)]
+#[derive(Error, Debug, Decode, Encode, IntoSchema)]
 pub enum Error {
-    /// Query can not be decoded.
-    #[error("Query can not be decoded")]
+    /// Query cannot be decoded.
+    #[error("Query cannot be decoded")]
     Decode(#[from] Box<iroha_version::error::Error>),
-    /// Query has unsupported version.
-    #[error("Query has unsupported version")]
-    Version(#[from] UnsupportedVersionError),
     /// Query has wrong signature.
     #[error("Query has the wrong signature: {0}")]
     Signature(String),
     /// Query is not allowed.
     #[error("Query is not allowed: {0}")]
-    Permission(String),
+    Permission(DenialReason),
     /// Query has wrong expression.
     #[error("Query has a malformed expression: {0}")]
     Evaluate(String),
@@ -79,12 +58,12 @@ pub enum Error {
 
 impl From<FindError> for Error {
     fn from(err: FindError) -> Self {
-        Error::Find(Box::new(err))
+        Box::new(err).into()
     }
 }
 
-impl<W: WorldTrait> ValidQuery<W> for QueryBox {
-    fn execute(&self, wsv: &WorldStateView<W>) -> Result<Self::Output, Error> {
+impl ValidQuery for QueryBox {
+    fn execute(&self, wsv: &WorldStateView) -> Result<Self::Output, Error> {
         use QueryBox::*;
 
         match self {
@@ -118,6 +97,7 @@ impl<W: WorldTrait> ValidQuery<W> for QueryBox {
             FindAllActiveTriggerIds(query) => query.execute_into_value(wsv),
             FindTriggerById(query) => query.execute_into_value(wsv),
             FindTriggerKeyValueByIdAndKey(query) => query.execute_into_value(wsv),
+            FindTriggersByDomainId(query) => query.execute_into_value(wsv),
             FindAllRoles(query) => query.execute_into_value(wsv),
             FindAllRoleIds(query) => query.execute_into_value(wsv),
             FindRolesByAccountId(query) => query.execute_into_value(wsv),

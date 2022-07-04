@@ -18,7 +18,10 @@ use futures::{Stream, StreamExt, TryStreamExt};
 use iroha_actor::{broker::*, prelude::*};
 use iroha_crypto::{HashOf, MerkleTree};
 use iroha_logger::prelude::*;
-use iroha_version::scale::{DecodeVersioned, EncodeVersioned};
+use iroha_version::{
+    scale::{DecodeVersioned, EncodeVersioned},
+    try_decode_all_or_just_decode,
+};
 use pin_project::pin_project;
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -27,9 +30,7 @@ use tokio::{
 };
 use tokio_stream::wrappers::ReadDirStream;
 
-use crate::{
-    block::VersionedCommittedBlock, block_sync::ContinueSync, prelude::*, sumeragi, wsv::WorldTrait,
-};
+use crate::{block::VersionedCommittedBlock, block_sync::ContinueSync, prelude::*, sumeragi};
 
 /// Message for storing committed block
 #[derive(Clone, Debug, Message)]
@@ -46,22 +47,22 @@ pub struct GetBlockHash {
 /// High level data storage representation.
 /// Provides all necessary methods to read and write data, hides implementation details.
 #[derive(Debug)]
-pub struct KuraWithIO<W: WorldTrait, IO> {
+pub struct KuraWithIO<IO> {
     // TODO: Kura doesn't have different initialisation modes!!!
     #[allow(dead_code)]
     mode: Mode,
     block_store: BlockStore<IO>,
     merkle_tree: MerkleTree<VersionedCommittedBlock>,
-    wsv: Arc<WorldStateView<W>>,
+    wsv: Arc<WorldStateView>,
     broker: Broker,
-    mailbox: u32,
+    actor_channel_capacity: u32,
 }
 
 /// Production qualification of `KuraWithIO`
-pub type Kura<W> = KuraWithIO<W, DefaultIO>;
+pub type Kura = KuraWithIO<DefaultIO>;
 
 /// Generic implementation for tests - accepting IO mocks
-impl<W: WorldTrait, IO: DiskIO> KuraWithIO<W, IO> {
+impl<IO: DiskIO> KuraWithIO<IO> {
     /// ctor
     /// # Errors
     /// Will forward error from `BlockStore` construction
@@ -69,9 +70,9 @@ impl<W: WorldTrait, IO: DiskIO> KuraWithIO<W, IO> {
         mode: Mode,
         block_store_path: &Path,
         blocks_per_file: NonZeroU64,
-        wsv: Arc<WorldStateView<W>>,
+        wsv: Arc<WorldStateView>,
         broker: Broker,
-        mailbox: u32,
+        actor_channel_capacity: u32,
         io: IO,
     ) -> Result<Self> {
         Ok(Self {
@@ -80,7 +81,7 @@ impl<W: WorldTrait, IO: DiskIO> KuraWithIO<W, IO> {
             merkle_tree: MerkleTree::new(),
             wsv,
             broker,
-            mailbox,
+            actor_channel_capacity,
         })
     }
 }
@@ -93,9 +94,6 @@ pub trait KuraTrait:
     + ContextHandler<GetBlockHash, Result = Option<HashOf<VersionedCommittedBlock>>>
     + Debug
 {
-    /// World for applying blocks which have been stored on disk
-    type World: WorldTrait;
-
     /// Construct [`Kura`].
     /// Kura will not be ready to work with before `init()` method invocation.
     /// # Errors
@@ -104,9 +102,9 @@ pub trait KuraTrait:
         mode: Mode,
         block_store_path: &Path,
         blocks_per_file: NonZeroU64,
-        wsv: Arc<WorldStateView<Self::World>>,
+        wsv: Arc<WorldStateView>,
         broker: Broker,
-        mailbox: u32,
+        actor_channel_capacity: u32,
     ) -> Result<Self>;
 
     /// Loads kura from configuration
@@ -114,7 +112,7 @@ pub trait KuraTrait:
     /// Fails if call to new fails
     async fn from_configuration(
         configuration: &config::KuraConfiguration,
-        wsv: Arc<WorldStateView<Self::World>>,
+        wsv: Arc<WorldStateView>,
         broker: Broker,
     ) -> Result<Self> {
         Self::new(
@@ -123,21 +121,19 @@ pub trait KuraTrait:
             configuration.blocks_per_storage_file,
             wsv,
             broker,
-            configuration.mailbox,
+            configuration.actor_channel_capacity,
         )
         .await
     }
 }
 
 #[async_trait]
-impl<W: WorldTrait> KuraTrait for Kura<W> {
-    type World = W;
-
+impl KuraTrait for Kura {
     async fn new(
         mode: Mode,
         block_store_path: &Path,
         blocks_per_file: NonZeroU64,
-        wsv: Arc<WorldStateView<W>>,
+        wsv: Arc<WorldStateView>,
         broker: Broker,
         mailbox: u32,
     ) -> Result<Self> {
@@ -155,9 +151,9 @@ impl<W: WorldTrait> KuraTrait for Kura<W> {
 }
 
 #[async_trait::async_trait]
-impl<W: WorldTrait, IO: DiskIO> Actor for KuraWithIO<W, IO> {
-    fn mailbox_capacity(&self) -> u32 {
-        self.mailbox
+impl<IO: DiskIO> Actor for KuraWithIO<IO> {
+    fn actor_channel_capacity(&self) -> u32 {
+        self.actor_channel_capacity
     }
 
     async fn on_start(&mut self, ctx: &mut Context<Self>) {
@@ -178,7 +174,7 @@ impl<W: WorldTrait, IO: DiskIO> Actor for KuraWithIO<W, IO> {
                     .await;
             }
             Err(error) => {
-                error!(%error, "Initialization of kura failed");
+                error!(%error, "Kura initialization failed. Try removing the peer's `blocks` directory and restarting the peer. You can also try rebuilding the peer altogether.");
                 panic!("Kura initialization failed");
             }
         }
@@ -186,19 +182,19 @@ impl<W: WorldTrait, IO: DiskIO> Actor for KuraWithIO<W, IO> {
 }
 
 #[async_trait::async_trait]
-impl<W: WorldTrait, IO: DiskIO> Handler<GetBlockHash> for KuraWithIO<W, IO> {
+impl<IO: DiskIO> Handler<GetBlockHash> for KuraWithIO<IO> {
     type Result = Option<HashOf<VersionedCommittedBlock>>;
     async fn handle(&mut self, GetBlockHash { height }: GetBlockHash) -> Self::Result {
         if height == 0 {
             return None;
         }
         // Block height starts with 1
-        self.merkle_tree.get_leaf(height - 1)
+        self.merkle_tree.get_leaf_hash(height - 1)
     }
 }
 
 #[async_trait::async_trait]
-impl<W: WorldTrait, IO: DiskIO> Handler<StoreBlock> for KuraWithIO<W, IO> {
+impl<IO: DiskIO> Handler<StoreBlock> for KuraWithIO<IO> {
     type Result = ();
 
     async fn handle(&mut self, StoreBlock(block): StoreBlock) {
@@ -212,7 +208,7 @@ impl<W: WorldTrait, IO: DiskIO> Handler<StoreBlock> for KuraWithIO<W, IO> {
     }
 }
 
-impl<W: WorldTrait, IO: DiskIO> KuraWithIO<W, IO> {
+impl<IO: DiskIO> KuraWithIO<IO> {
     /// After constructing [`Kura`] it should be initialized to be ready to work with it.
     ///
     /// # Errors
@@ -242,7 +238,7 @@ impl<W: WorldTrait, IO: DiskIO> KuraWithIO<W, IO> {
     ) -> Result<HashOf<VersionedCommittedBlock>> {
         match self.block_store.write(&block).await {
             Ok(block_hash) => {
-                self.merkle_tree = self.merkle_tree.add(block_hash);
+                self.merkle_tree.add(block_hash);
                 self.broker.issue_send(ContinueSync).await;
                 Ok(block_hash)
             }
@@ -411,7 +407,9 @@ impl<IO: DiskIO> BlockStore<IO> {
         #[allow(clippy::cast_possible_truncation)]
         buffer.resize(len as usize, 0);
         let _len = file_stream.read_exact(&mut buffer).await?;
-        Ok(Some(VersionedCommittedBlock::decode_versioned(&buffer)?))
+
+        let block = try_decode_all_or_just_decode!(VersionedCommittedBlock, &buffer)?;
+        Ok(Some(block))
     }
 
     /// Converts raw file stream into stream of decoded blocks
@@ -539,7 +537,7 @@ pub mod config {
 
     const DEFAULT_BLOCKS_PER_STORAGE_FILE: u64 = 1000_u64;
     const DEFAULT_BLOCK_STORE_PATH: &str = "./blocks";
-    const DEFAULT_MAILBOX_SIZE: u32 = 100;
+    const DEFAULT_ACTOR_CHANNEL_CAPACITY: u32 = 100;
 
     /// Configuration of kura
     #[derive(Clone, Deserialize, Serialize, Debug, Configurable, PartialEq, Eq)]
@@ -555,9 +553,9 @@ pub mod config {
         /// Maximum number of blocks to write into single storage file
         #[serde(default = "default_blocks_per_storage_file")]
         pub blocks_per_storage_file: NonZeroU64,
-        /// Default mailbox size
-        #[serde(default = "default_mailbox_size")]
-        pub mailbox: u32,
+        /// Default buffer capacity of actor's MPSC channel
+        #[serde(default = "default_actor_channel_capacity")]
+        pub actor_channel_capacity: u32,
     }
 
     impl Default for KuraConfiguration {
@@ -566,7 +564,7 @@ pub mod config {
                 init_mode: Mode::default(),
                 block_store_path: default_block_store_path(),
                 blocks_per_storage_file: default_blocks_per_storage_file(),
-                mailbox: default_mailbox_size(),
+                actor_channel_capacity: default_actor_channel_capacity(),
             }
         }
     }
@@ -596,8 +594,8 @@ pub mod config {
         )
     }
 
-    const fn default_mailbox_size() -> u32 {
-        DEFAULT_MAILBOX_SIZE
+    const fn default_actor_channel_capacity() -> u32 {
+        DEFAULT_ACTOR_CHANNEL_CAPACITY
     }
 }
 
@@ -668,7 +666,7 @@ mod tests {
     #[tokio::test]
     async fn strict_init_kura() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir.");
-        assert!(Kura::<World>::new(
+        assert!(Kura::new(
             Mode::Strict,
             temp_dir.path(),
             NonZeroU64::new(TEST_STORAGE_FILE_SIZE).unwrap(),
@@ -683,7 +681,7 @@ mod tests {
         .is_ok());
     }
 
-    fn get_transaction_validator() -> TransactionValidator<World> {
+    fn get_transaction_validator() -> TransactionValidator {
         let tx_limits = TransactionLimits {
             max_instruction_number: 4096,
             max_wasm_size_bytes: 0,
@@ -775,7 +773,7 @@ mod tests {
             .expect("Failed to sign blocks.")
             .commit();
         let dir = tempfile::tempdir().unwrap();
-        let mut kura = Kura::<World>::new(
+        let mut kura = Kura::new(
             Mode::Strict,
             dir.path(),
             NonZeroU64::new(tests::TEST_STORAGE_FILE_SIZE).unwrap(),

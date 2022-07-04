@@ -16,14 +16,14 @@ pub mod isi {
 
     use super::*;
 
-    impl<W: WorldTrait> Execute<W> for Register<Account> {
+    impl Execute for Register<Account> {
         type Error = Error;
 
         #[metrics(+"register_account")]
         fn execute(
             self,
             _authority: <Account as Identifiable>::Id,
-            wsv: &WorldStateView<W>,
+            wsv: &WorldStateView,
         ) -> Result<(), Self::Error> {
             let account: Account = self.object.build();
             let account_id = account.id().clone();
@@ -47,20 +47,20 @@ pub mod isi {
         }
     }
 
-    impl<W: WorldTrait> Execute<W> for Unregister<Account> {
+    impl Execute for Unregister<Account> {
         type Error = Error;
 
         #[metrics(+"unregister_account")]
         fn execute(
             self,
             _authority: <Account as Identifiable>::Id,
-            wsv: &WorldStateView<W>,
+            wsv: &WorldStateView,
         ) -> Result<(), Self::Error> {
             let account_id = self.object_id;
 
             wsv.modify_domain(&account_id.domain_id.clone(), |domain| {
                 if domain.remove_account(&account_id).is_none() {
-                    return Err(Error::Find(Box::new(FindError::Account(account_id))));
+                    return Err(FindError::Account(account_id).into());
                 }
 
                 Ok(DomainEvent::Account(AccountEvent::Deleted(account_id)))
@@ -68,14 +68,14 @@ pub mod isi {
         }
     }
 
-    impl<W: WorldTrait> Execute<W> for Register<AssetDefinition> {
+    impl Execute for Register<AssetDefinition> {
         type Error = Error;
 
         #[metrics(+"register_asset_def")]
         fn execute(
             self,
             authority: <Account as Identifiable>::Id,
-            wsv: &WorldStateView<W>,
+            wsv: &WorldStateView,
         ) -> Result<(), Self::Error> {
             let asset_definition = self.object.build();
             asset_definition
@@ -101,14 +101,14 @@ pub mod isi {
         }
     }
 
-    impl<W: WorldTrait> Execute<W> for Unregister<AssetDefinition> {
+    impl Execute for Unregister<AssetDefinition> {
         type Error = Error;
 
         #[metrics(+"unregister_asset_def")]
         fn execute(
             self,
             _authority: <Account as Identifiable>::Id,
-            wsv: &WorldStateView<W>,
+            wsv: &WorldStateView,
         ) -> Result<(), Self::Error> {
             let asset_definition_id = self.object_id;
 
@@ -143,9 +143,7 @@ pub mod isi {
                     .remove_asset_definition(&asset_definition_id)
                     .is_none()
                 {
-                    return Err(Error::Find(Box::new(FindError::AssetDefinition(
-                        asset_definition_id,
-                    ))));
+                    return Err(FindError::AssetDefinition(asset_definition_id).into());
                 }
 
                 Ok(DomainEvent::AssetDefinition(AssetDefinitionEvent::Deleted(
@@ -157,14 +155,14 @@ pub mod isi {
         }
     }
 
-    impl<W: WorldTrait> Execute<W> for SetKeyValue<AssetDefinition, Name, Value> {
+    impl Execute for SetKeyValue<AssetDefinition, Name, Value> {
         type Error = Error;
 
         #[metrics(+"set_key_value_asset_def")]
         fn execute(
             self,
             _authority: <Account as Identifiable>::Id,
-            wsv: &WorldStateView<W>,
+            wsv: &WorldStateView,
         ) -> Result<(), Self::Error> {
             let asset_definition_id = self.object_id;
 
@@ -186,14 +184,14 @@ pub mod isi {
         }
     }
 
-    impl<W: WorldTrait> Execute<W> for RemoveKeyValue<AssetDefinition, Name> {
+    impl Execute for RemoveKeyValue<AssetDefinition, Name> {
         type Error = Error;
 
         #[metrics(+"remove_key_value_asset_def")]
         fn execute(
             self,
             _authority: <Account as Identifiable>::Id,
-            wsv: &WorldStateView<W>,
+            wsv: &WorldStateView,
         ) -> Result<(), Self::Error> {
             let asset_definition_id = self.object_id;
 
@@ -213,14 +211,14 @@ pub mod isi {
         }
     }
 
-    impl<W: WorldTrait> Execute<W> for SetKeyValue<Domain, Name, Value> {
+    impl Execute for SetKeyValue<Domain, Name, Value> {
         type Error = Error;
 
         #[metrics(+"set_key_value_domain")]
         fn execute(
             self,
             _authority: <Account as Identifiable>::Id,
-            wsv: &WorldStateView<W>,
+            wsv: &WorldStateView,
         ) -> Result<(), Self::Error> {
             let domain_id = self.object_id;
 
@@ -236,14 +234,14 @@ pub mod isi {
         }
     }
 
-    impl<W: WorldTrait> Execute<W> for RemoveKeyValue<Domain, Name> {
+    impl Execute for RemoveKeyValue<Domain, Name> {
         type Error = Error;
 
         #[metrics(+"remove_key_value_domain")]
         fn execute(
             self,
             _authority: <Account as Identifiable>::Id,
-            wsv: &WorldStateView<W>,
+            wsv: &WorldStateView,
         ) -> Result<(), Self::Error> {
             let domain_id = self.object_id;
 
@@ -266,9 +264,9 @@ pub mod query {
     use super::*;
     use crate::smartcontracts::query::Error;
 
-    impl<W: WorldTrait> ValidQuery<W> for FindAllDomains {
+    impl ValidQuery for FindAllDomains {
         #[metrics(+"find_all_domains")]
-        fn execute(&self, wsv: &WorldStateView<W>) -> Result<Self::Output, Error> {
+        fn execute(&self, wsv: &WorldStateView) -> Result<Self::Output, Error> {
             Ok(wsv
                 .domains()
                 .iter()
@@ -277,9 +275,9 @@ pub mod query {
         }
     }
 
-    impl<W: WorldTrait> ValidQuery<W> for FindDomainById {
+    impl ValidQuery for FindDomainById {
         #[metrics(+"find_domain_by_id")]
-        fn execute(&self, wsv: &WorldStateView<W>) -> Result<Self::Output, Error> {
+        fn execute(&self, wsv: &WorldStateView) -> Result<Self::Output, Error> {
             let id = self
                 .id
                 .evaluate(wsv, &Context::default())
@@ -290,9 +288,9 @@ pub mod query {
         }
     }
 
-    impl<W: WorldTrait> ValidQuery<W> for FindDomainKeyValueByIdAndKey {
+    impl ValidQuery for FindDomainKeyValueByIdAndKey {
         #[metrics(+"find_domain_key_value_by_id_and_key")]
-        fn execute(&self, wsv: &WorldStateView<W>) -> Result<Self::Output, Error> {
+        fn execute(&self, wsv: &WorldStateView) -> Result<Self::Output, Error> {
             let id = self
                 .id
                 .evaluate(wsv, &Context::default())
@@ -311,9 +309,9 @@ pub mod query {
         }
     }
 
-    impl<W: WorldTrait> ValidQuery<W> for FindAssetDefinitionKeyValueByIdAndKey {
+    impl ValidQuery for FindAssetDefinitionKeyValueByIdAndKey {
         #[metrics(+"find_asset_definition_key_value_by_id_and_key")]
-        fn execute(&self, wsv: &WorldStateView<W>) -> Result<Self::Output, Error> {
+        fn execute(&self, wsv: &WorldStateView) -> Result<Self::Output, Error> {
             let id = self
                 .id
                 .evaluate(wsv, &Context::default())

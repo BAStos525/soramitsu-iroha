@@ -3,39 +3,45 @@
 use super::*;
 
 /// Allow queries that only access the data of the domain of the signer.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Serialize)]
 pub struct OnlyAccountsDomain;
 
-impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsDomain {
+impl IsAllowed<QueryBox> for OnlyAccountsDomain {
     #[allow(clippy::too_many_lines, clippy::match_same_arms)]
     fn check(
         &self,
         authority: &AccountId,
         query: &QueryBox,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
     ) -> Result<(), DenialReason> {
         use QueryBox::*;
         let context = Context::new();
         match query {
             FindAssetsByAssetDefinitionId(_) | FindAssetsByName(_) | FindAllAssets(_) => {
-                Err("Only access to the assets of the same domain is permitted.".to_owned())
+                Err("Only access to the assets of the same domain is permitted."
+                    .to_owned()
+                    .into())
             }
-            FindAllAccounts(_) | FindAccountsByName(_) | FindAccountsWithAsset(_) => {
-                Err("Only access to the accounts of the same domain is permitted.".to_owned())
-            }
-            FindAllAssetsDefinitions(_) => Err(
-                "Only access to the asset definitions of the same domain is permitted.".to_owned(),
+            FindAllAccounts(_) | FindAccountsByName(_) | FindAccountsWithAsset(_) => Err(
+                "Only access to the accounts of the same domain is permitted."
+                    .to_owned()
+                    .into(),
             ),
-            FindAllDomains(_) => {
-                Err("Only access to the domain of the account is permitted.".to_owned())
-            }
-            FindAllRoles(_) => {
-                Err("Only access to roles of the same domain is permitted.".to_owned())
-            }
+            FindAllAssetsDefinitions(_) => Err(
+                "Only access to the asset definitions of the same domain is permitted."
+                    .to_owned()
+                    .into(),
+            ),
+            FindAllDomains(_) => Err("Only access to the domain of the account is permitted."
+                .to_owned()
+                .into()),
+            FindAllRoles(_) => Err("Only access to roles of the same domain is permitted."
+                .to_owned()
+                .into()),
             FindAllRoleIds(_) => Ok(()), // In case you need to debug the permissions.
-            FindRoleByRoleId(_) => {
-                Err("Only access to roles of the same domain is permitted.".to_owned())
-            }
+            FindRoleByRoleId(_) => Err("Only access to roles of the same domain is permitted."
+                .to_owned()
+                .into()),
             FindAllPeers(_) => Ok(()), // Can be obtained in other ways, so why hide it.
             FindAllActiveTriggerIds(_) => Ok(()),
             // Private blockchains should have debugging too, hence
@@ -45,14 +51,14 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsDomain {
                     .id
                     .evaluate(wsv, &context)
                     .map_err(|e| e.to_string())?;
-                wsv.world
-                    .triggers
+                wsv.triggers()
                     .inspect(&id, |action| {
                         if action.technical_account() == authority {
                             Ok(())
                         } else {
                             Err("Cannot access Trigger if you're not the technical account."
-                                .to_owned())
+                                .to_owned()
+                                .into())
                         }
                     })
                     .ok_or_else(|| {
@@ -67,15 +73,14 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsDomain {
                     .id
                     .evaluate(wsv, &context)
                     .map_err(|e| e.to_string())?;
-                wsv.world
-                    .triggers
+                wsv.triggers()
                     .inspect(&id, |action| {
                         if action.technical_account() == authority {
                             Ok(())
                         } else {
                             Err(
                         "Cannot access Trigger internal state if you're not the technical account."
-                            .to_owned(),
+                            .to_owned().into(),
                     )
                         }
                     })
@@ -85,6 +90,22 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsDomain {
                             id.clone()
                         )
                     })?
+            }
+            FindTriggersByDomainId(query) => {
+                let domain_id = query
+                    .domain_id
+                    .evaluate(wsv, &context)
+                    .map_err(|e| e.to_string())?;
+
+                if domain_id == authority.domain_id {
+                    return Ok(());
+                }
+
+                Err(format!(
+                    "Cannot access triggers with given domain {}, {} is permitted..",
+                    domain_id, authority.domain_id
+                )
+                .into())
             }
             FindAccountById(query) => {
                 let account_id = query
@@ -97,7 +118,8 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsDomain {
                     Err(format!(
                         "Cannot access account {} as it is in a different domain.",
                         account_id
-                    ))
+                    )
+                    .into())
                 }
             }
             FindAccountKeyValueByIdAndKey(query) => {
@@ -111,7 +133,8 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsDomain {
                     Err(format!(
                         "Cannot access account {} as it is in a different domain.",
                         account_id
-                    ))
+                    )
+                    .into())
                 }
             }
             FindAccountsByDomainId(query) => {
@@ -125,7 +148,8 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsDomain {
                     Err(format!(
                         "Cannot access accounts from a different domain with name {}.",
                         domain_id
-                    ))
+                    )
+                    .into())
                 }
             }
             FindAssetById(query) => {
@@ -139,7 +163,8 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsDomain {
                     Err(format!(
                         "Cannot access asset {} as it is in a different domain.",
                         asset_id
-                    ))
+                    )
+                    .into())
                 }
             }
             FindAssetsByAccountId(query) => {
@@ -153,7 +178,8 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsDomain {
                     Err(format!(
                         "Cannot access account {} as it is in a different domain.",
                         account_id
-                    ))
+                    )
+                    .into())
                 }
             }
             FindAssetsByDomainId(query) => {
@@ -167,7 +193,8 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsDomain {
                     Err(format!(
                         "Cannot access assets from a different domain with name {}.",
                         domain_id
-                    ))
+                    )
+                    .into())
                 }
             }
             FindAssetsByDomainIdAndAssetDefinitionId(query) => {
@@ -181,7 +208,8 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsDomain {
                     Err(format!(
                         "Cannot access assets from a different domain with name {}.",
                         domain_id
-                    ))
+                    )
+                    .into())
                 }
             }
             FindAssetDefinitionKeyValueByIdAndKey(query) => {
@@ -196,7 +224,7 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsDomain {
                         "Cannot access asset definition from a different domain. Asset definition domain: {}. Signer's account domain {}.",
                         asset_definition_id.domain_id,
                         authority.domain_id
-                    ))
+                    ).into())
                 }
             }
             FindAssetQuantityById(query) => {
@@ -210,7 +238,8 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsDomain {
                     Err(format!(
                         "Cannot access asset {} as it is in a different domain.",
                         asset_id
-                    ))
+                    )
+                    .into())
                 }
             }
             FindAssetKeyValueByIdAndKey(query) => {
@@ -224,7 +253,8 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsDomain {
                     Err(format!(
                         "Cannot access asset {} as it is in a different domain.",
                         asset_id
-                    ))
+                    )
+                    .into())
                 }
             }
             FindDomainById(query::FindDomainById { id })
@@ -233,13 +263,15 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsDomain {
                 if domain_id == authority.domain_id {
                     Ok(())
                 } else {
-                    Err(format!("Cannot access a different domain: {}.", domain_id))
+                    Err(format!("Cannot access a different domain: {}.", domain_id).into())
                 }
             }
-            FindAllBlocks(_) => Err("Access to all blocks not permitted".to_owned()),
-            FindAllTransactions(_) => {
-                Err("Only access to transactions in the same domain is permitted.".to_owned())
-            }
+            FindAllBlocks(_) => Err("Access to all blocks not permitted".to_owned().into()),
+            FindAllTransactions(_) => Err(
+                "Only access to transactions in the same domain is permitted."
+                    .to_owned()
+                    .into(),
+            ),
             FindTransactionsByAccountId(query) => {
                 let account_id = query
                     .account_id
@@ -251,7 +283,8 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsDomain {
                     Err(format!(
                         "Cannot access account {} as it is in a different domain.",
                         account_id
-                    ))
+                    )
+                    .into())
                 }
             }
             FindTransactionByHash(_query) => Ok(()),
@@ -266,7 +299,8 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsDomain {
                     Err(format!(
                         "Cannot access account {} as it is in a different domain.",
                         account_id
-                    ))
+                    )
+                    .into())
                 }
             }
             FindPermissionTokensByAccountId(query) => {
@@ -280,7 +314,8 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsDomain {
                     Err(format!(
                         "Cannot access account {} as it is in a different domain.",
                         account_id
-                    ))
+                    )
+                    .into())
                 }
             }
             FindAssetDefinitionById(query) => {
@@ -296,7 +331,7 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsDomain {
                         "Cannot access asset definition from a different domain. Asset definition domain: {}. Signer's account domain {}.",
                         asset_definition_id.domain_id,
                         authority.domain_id,
-                    ))
+                    ).into())
                 }
             }
         }
@@ -306,16 +341,16 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsDomain {
 impl_from_item_for_query_validator_box!(OnlyAccountsDomain);
 
 /// Allow queries that only access the signers account data.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Serialize)]
 pub struct OnlyAccountsData;
 
-impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsData {
+impl IsAllowed<QueryBox> for OnlyAccountsData {
     #[allow(clippy::too_many_lines, clippy::match_same_arms)]
     fn check(
         &self,
         authority: &AccountId,
         query: &QueryBox,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
     ) -> Result<(), DenialReason> {
         use QueryBox::*;
 
@@ -325,12 +360,12 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsData {
                 | FindAccountsByDomainId(_)
                 | FindAccountsWithAsset(_)
                 | FindAllAccounts(_) => {
-                    Err("Other accounts are private.".to_owned())
+                    Err("Other accounts are private.".to_owned().into())
                 }
                 | FindAllDomains(_)
                 | FindDomainById(_)
                 | FindDomainKeyValueByIdAndKey(_) => {
-                    Err("Only access to your account's data is permitted.".to_owned())
+                    Err("Only access to your account's data is permitted.".to_owned().into())
                 },
             FindAssetsByDomainIdAndAssetDefinitionId(_)
                 | FindAssetsByName(_) // TODO: I think this is a mistake.
@@ -340,16 +375,16 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsData {
                 | FindAssetDefinitionById(_)
                 | FindAssetDefinitionKeyValueByIdAndKey(_)
                 | FindAllAssets(_) => {
-                    Err("Only access to the assets of your account is permitted.".to_owned())
+                    Err("Only access to the assets of your account is permitted.".to_owned().into())
                 }
             FindAllRoles(_) | FindAllRoleIds(_) | FindRoleByRoleId(_) => {
-                Err("Only access to roles of the same account is permitted.".to_owned())
+                Err("Only access to roles of the same account is permitted.".to_owned().into())
             },
-            | FindAllActiveTriggerIds(_) => {
-                Err("Only access to the triggers of the same account is permitted.".to_owned())
+            FindAllActiveTriggerIds(_) | FindTriggersByDomainId(_) => {
+                Err("Only access to the triggers of the same account is permitted.".to_owned().into())
             }
             FindAllPeers(_) => {
-                Err("Only access to your account-local data is permitted.".to_owned())
+                Err("Only access to your account-local data is permitted.".to_owned().into())
             }
             FindTriggerById(query) => {
                 // TODO: should differentiate between global and domain-local triggers.
@@ -357,7 +392,7 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsData {
                     .id
                     .evaluate(wsv, &context)
                     .map_err(|e| e.to_string())?;
-                if wsv.world.triggers.inspect(&id, |action|
+                if wsv.triggers().inspect(&id, |action|
                     action.technical_account() == authority
                 ) == Some(true) {
                     return Ok(())
@@ -365,15 +400,15 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsData {
                 Err(format!(
                     "A trigger with the specified Id: {} is not accessible to you",
                     id
-                ))
+                ).into())
             }
             FindTriggerKeyValueByIdAndKey(query) => {
                 // TODO: should differentiate between global and domain-local triggers.
                 let id = query
                     .id
                     .evaluate(wsv, &context)
-                    .map_err(|e| e.to_string())?;
-                if wsv.world.triggers.inspect(&id, |action|
+                    .map_err(|err| err.to_string())?;
+                if wsv.triggers().inspect(&id, |action|
                     action.technical_account() == authority
                 ) == Some(true) {
                     return Ok(())
@@ -381,7 +416,7 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsData {
                 Err(format!(
                     "A trigger with the specified Id: {} is not accessible to you",
                     id
-                ))
+                ).into())
             }
             FindAccountById(query) => {
                 let account_id = query
@@ -395,7 +430,7 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsData {
                         "Cannot access account {} as only access to your own account, {} is permitted..",
                         account_id,
                         authority
-                    ))
+                    ).into())
                 }
             }
             FindAccountKeyValueByIdAndKey(query) => {
@@ -409,7 +444,7 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsData {
                     Err(format!(
                         "Cannot access account {} as only access to your own account is permitted..",
                         account_id
-                    ))
+                    ).into())
                 }
             }
             FindAssetById(query) => {
@@ -423,7 +458,7 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsData {
                     Err(format!(
                         "Cannot access asset {} as it is in a different account.",
                         asset_id
-                    ))
+                    ).into())
                 }
             }
             FindAssetsByAccountId(query) => {
@@ -437,7 +472,7 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsData {
                     Err(format!(
                         "Cannot access a different account: {}.",
                         account_id
-                    ))
+                    ).into())
                 }
             }
 
@@ -452,7 +487,7 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsData {
                     Err(format!(
                         "Cannot access asset {} as it is in a different account.",
                         asset_id
-                    ))
+                    ).into())
                 }
             }
             FindAssetKeyValueByIdAndKey(query) => {
@@ -466,14 +501,14 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsData {
                     Err(format!(
                         "Cannot access asset {} as it is in a different account.",
                         asset_id
-                    ))
+                    ).into())
                 }
             }
             FindAllBlocks(_) => {
-                Err("Access to all blocks not permitted".to_owned())
+                Err("Access to all blocks not permitted".to_owned().into())
             }
             FindAllTransactions(_) => {
-                Err("Only access to transactions of the same account is permitted.".to_owned())
+                Err("Only access to transactions of the same account is permitted.".to_owned().into())
             },
             FindTransactionsByAccountId(query) => {
                 let account_id = query
@@ -483,7 +518,7 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsData {
                 if &account_id == authority {
                     Ok(())
                 } else {
-                    Err(format!("Cannot access another account: {}.", account_id))
+                    Err(format!("Cannot access another account: {}.", account_id).into())
                 }
             }
             FindTransactionByHash(_query) => Ok(()),
@@ -495,7 +530,7 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsData {
                 if &account_id == authority {
                     Ok(())
                 } else {
-                    Err(format!("Cannot access another account: {}.", account_id))
+                    Err(format!("Cannot access another account: {}.", account_id).into())
                 }
             }
             FindPermissionTokensByAccountId(query) => {
@@ -506,7 +541,7 @@ impl<W: WorldTrait> IsAllowed<W, QueryBox> for OnlyAccountsData {
                 if &account_id == authority {
                     Ok(())
                 } else {
-                    Err(format!("Cannot access another account: {}.", account_id))
+                    Err(format!("Cannot access another account: {}.", account_id).into())
                 }
             }
         }

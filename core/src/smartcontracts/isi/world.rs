@@ -12,14 +12,14 @@ pub mod isi {
 
     use super::*;
 
-    impl<W: WorldTrait> Execute<W> for Register<Peer> {
+    impl Execute for Register<Peer> {
         type Error = Error;
 
         #[metrics(+"register_peer")]
         fn execute(
             self,
             _authority: <Account as Identifiable>::Id,
-            wsv: &WorldStateView<W>,
+            wsv: &WorldStateView,
         ) -> Result<(), Self::Error> {
             let peer_id = self.object.id;
 
@@ -36,14 +36,14 @@ pub mod isi {
         }
     }
 
-    impl<W: WorldTrait> Execute<W> for Unregister<Peer> {
+    impl Execute for Unregister<Peer> {
         type Error = Error;
 
         #[metrics(+"unregister_peer")]
         fn execute(
             self,
             _authority: <Account as Identifiable>::Id,
-            wsv: &WorldStateView<W>,
+            wsv: &WorldStateView,
         ) -> Result<(), Self::Error> {
             let peer_id = self.object_id;
             wsv.modify_world(|world| {
@@ -56,14 +56,14 @@ pub mod isi {
         }
     }
 
-    impl<W: WorldTrait> Execute<W> for Register<Domain> {
+    impl Execute for Register<Domain> {
         type Error = Error;
 
         #[metrics("register_domain")]
         fn execute(
             self,
             _authority: <Account as Identifiable>::Id,
-            wsv: &WorldStateView<W>,
+            wsv: &WorldStateView,
         ) -> Result<(), Self::Error> {
             let domain: Domain = self.object.build();
             let domain_id = domain.id().clone();
@@ -90,14 +90,14 @@ pub mod isi {
         }
     }
 
-    impl<W: WorldTrait> Execute<W> for Unregister<Domain> {
+    impl Execute for Unregister<Domain> {
         type Error = Error;
 
         #[metrics("unregister_domain")]
         fn execute(
             self,
             _authority: <Account as Identifiable>::Id,
-            wsv: &WorldStateView<W>,
+            wsv: &WorldStateView,
         ) -> Result<(), Self::Error> {
             let domain_id = self.object_id;
 
@@ -114,16 +114,16 @@ pub mod isi {
         }
     }
 
-    impl<W: WorldTrait> Execute<W> for Register<Role> {
+    impl Execute for Register<Role> {
         type Error = Error;
 
         #[metrics(+"register_role")]
         fn execute(
             self,
             _authority: <Account as Identifiable>::Id,
-            wsv: &WorldStateView<W>,
+            wsv: &WorldStateView,
         ) -> Result<(), Self::Error> {
-            let role = self.object;
+            let role = self.object.build();
 
             wsv.modify_world(|world| {
                 let role_id = role.id().clone();
@@ -141,14 +141,14 @@ pub mod isi {
         }
     }
 
-    impl<W: WorldTrait> Execute<W> for Unregister<Role> {
+    impl Execute for Unregister<Role> {
         type Error = Error;
 
         #[metrics("unregister_role")]
         fn execute(
             self,
             _authority: <Account as Identifiable>::Id,
-            wsv: &WorldStateView<W>,
+            wsv: &WorldStateView,
         ) -> Result<(), Self::Error> {
             let role_id = self.object_id;
 
@@ -171,22 +171,16 @@ pub mod isi {
                         error!(%role_id, "role not found - this is a bug");
                     }
 
-                    Ok(AccountEvent::PermissionRemoved(account_id))
+                    Ok(AccountEvent::RoleRevoked(account_id))
                 })?;
             }
 
             wsv.modify_world(|world| {
-                for mut domain in world.domains.iter_mut() {
-                    for account in domain.accounts_mut() {
-                        account.remove_role(&role_id);
-                    }
-                }
-
                 if world.roles.remove(&role_id).is_none() {
-                    return Ok(RoleEvent::Deleted(role_id).into());
+                    return Err(FindError::Role(role_id).into());
                 }
 
-                Err(Error::Find(Box::new(FindError::Role(role_id))))
+                Ok(RoleEvent::Deleted(role_id).into())
             })
         }
     }
@@ -200,9 +194,9 @@ pub mod query {
     use super::*;
     use crate::smartcontracts::query::Error;
 
-    impl<W: WorldTrait> ValidQuery<W> for FindAllRoles {
+    impl ValidQuery for FindAllRoles {
         #[metrics(+"find_all_roles")]
-        fn execute(&self, wsv: &WorldStateView<W>) -> Result<Self::Output, Error> {
+        fn execute(&self, wsv: &WorldStateView) -> Result<Self::Output, Error> {
             Ok(wsv
                 .world
                 .roles
@@ -212,9 +206,9 @@ pub mod query {
         }
     }
 
-    impl<W: WorldTrait> ValidQuery<W> for FindAllRoleIds {
+    impl ValidQuery for FindAllRoleIds {
         #[metrics(+"find_all_role_ids")]
-        fn execute(&self, wsv: &WorldStateView<W>) -> Result<Self::Output, Error> {
+        fn execute(&self, wsv: &WorldStateView) -> Result<Self::Output, Error> {
             Ok(wsv
                .world
                .roles
@@ -225,9 +219,9 @@ pub mod query {
         }
     }
 
-    impl<W: WorldTrait> ValidQuery<W> for FindRoleByRoleId {
+    impl ValidQuery for FindRoleByRoleId {
         #[metrics(+"find_role_by_role_id")]
-        fn execute(&self, wsv: &WorldStateView<W>) -> Result<Self::Output, Error> {
+        fn execute(&self, wsv: &WorldStateView) -> Result<Self::Output, Error> {
             let role_id = self
                 .id
                 .evaluate(wsv, &Context::new())
@@ -241,9 +235,9 @@ pub mod query {
         }
     }
 
-    impl<W: WorldTrait> ValidQuery<W> for FindAllPeers {
+    impl ValidQuery for FindAllPeers {
         #[metrics("find_all_peers")]
-        fn execute(&self, wsv: &WorldStateView<W>) -> Result<Self::Output, Error> {
+        fn execute(&self, wsv: &WorldStateView) -> Result<Self::Output, Error> {
             Ok(wsv.peers())
         }
     }

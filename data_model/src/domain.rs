@@ -7,11 +7,12 @@
 
 #[cfg(not(feature = "std"))]
 use alloc::{format, string::String, vec::Vec};
-use core::{cmp::Ordering, fmt, str::FromStr};
+use core::{cmp::Ordering, str::FromStr};
 
+use derive_more::{Display, FromStr};
 use getset::{Getters, MutGetters};
 use iroha_crypto::PublicKey;
-#[cfg(feature = "ffi")]
+#[cfg(feature = "ffi_api")]
 use iroha_ffi::ffi_bindgen;
 use iroha_schema::IntoSchema;
 use parity_scale_codec::{Decode, Encode, Input};
@@ -22,7 +23,7 @@ use crate::{
     asset::AssetDefinitionsMap,
     metadata::Metadata,
     prelude::{AssetDefinition, AssetDefinitionEntry},
-    Identifiable, Name, ParseError,
+    HasMetadata, Identifiable, Name, ParseError, Registered,
 };
 
 /// The domain name of the genesis domain.
@@ -69,8 +70,11 @@ impl From<GenesisDomain> for Domain {
 }
 
 /// Builder which can be submitted in a transaction to create a new [`Domain`]
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, Deserialize, Serialize, IntoSchema)]
+#[derive(
+    Debug, Display, Clone, PartialEq, Eq, Decode, Encode, Deserialize, Serialize, IntoSchema,
+)]
 #[allow(clippy::multiple_inherent_impl)]
+#[display(fmt = "[{id}]")]
 pub struct NewDomain {
     /// The identification associated to the domain builder.
     id: <Domain as Identifiable>::Id,
@@ -80,10 +84,17 @@ pub struct NewDomain {
     metadata: Metadata,
 }
 
+impl HasMetadata for NewDomain {
+    #[inline]
+    fn metadata(&self) -> &crate::metadata::Metadata {
+        &self.metadata
+    }
+}
+
 impl PartialOrd for NewDomain {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.id.cmp(&other.id))
+        Some(self.cmp(other))
     }
 }
 
@@ -119,7 +130,7 @@ impl NewDomain {
     }
 }
 
-#[cfg_attr(feature = "ffi", ffi_bindgen)]
+#[cfg_attr(feature = "ffi_api", ffi_bindgen)]
 impl NewDomain {
     /// Add [`logo`](IpfsPath) to the domain replacing previously defined value
     #[must_use]
@@ -136,9 +147,18 @@ impl NewDomain {
     }
 }
 
+impl Identifiable for NewDomain {
+    type Id = <Domain as Identifiable>::Id;
+
+    fn id(&self) -> &Self::Id {
+        &self.id
+    }
+}
+
 /// Named group of [`Account`] and [`Asset`](`crate::asset::Asset`) entities.
 #[derive(
     Debug,
+    Display,
     Clone,
     PartialEq,
     Eq,
@@ -150,49 +170,62 @@ impl NewDomain {
     Serialize,
     IntoSchema,
 )]
-#[getset(get = "pub")]
 #[allow(clippy::multiple_inherent_impl)]
-#[cfg_attr(feature = "ffi", ffi_bindgen)]
+#[cfg_attr(feature = "ffi_api", ffi_bindgen)]
+#[display(fmt = "[{id}]")]
 pub struct Domain {
     /// Identification of this [`Domain`].
     id: <Self as Identifiable>::Id,
     /// [`Account`]s of the domain.
-    #[getset(skip)]
     accounts: AccountsMap,
     /// [`Asset`](AssetDefinition)s defined of the `Domain`.
-    #[getset(skip)]
     asset_definitions: AssetDefinitionsMap,
     /// IPFS link to the `Domain` logo
+    #[getset(get = "pub")]
     logo: Option<IpfsPath>,
     /// [`Metadata`] of this `Domain` as a key-value store.
     #[cfg_attr(feature = "mutable_api", getset(get_mut = "pub"))]
     metadata: Metadata,
 }
 
+impl HasMetadata for Domain {
+    #[inline]
+    fn metadata(&self) -> &crate::metadata::Metadata {
+        &self.metadata
+    }
+}
+
 impl Identifiable for Domain {
     type Id = Id;
-    type RegisteredWith = NewDomain;
+
+    fn id(&self) -> &Self::Id {
+        &self.id
+    }
+}
+
+impl Registered for Domain {
+    type With = NewDomain;
 }
 
 impl PartialOrd for Domain {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.id().cmp(&other.id))
+        Some(self.cmp(other))
     }
 }
 
 impl Ord for Domain {
     #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
-        self.id().cmp(&other.id)
+        self.id().cmp(other.id())
     }
 }
 
-#[cfg_attr(feature = "ffi", ffi_bindgen)]
+#[cfg_attr(feature = "ffi_api", ffi_bindgen)]
 impl Domain {
     /// Construct builder for [`Domain`] identifiable by [`Id`].
-    pub fn new(id: <Self as Identifiable>::Id) -> <Self as Identifiable>::RegisteredWith {
-        <Self as Identifiable>::RegisteredWith::new(id)
+    pub fn new(id: <Self as Identifiable>::Id) -> <Self as Registered>::With {
+        <Self as Registered>::With::new(id)
     }
 
     /// Return a reference to the [`Account`] corresponding to the account id.
@@ -384,6 +417,7 @@ impl<'de> Deserialize<'de> for IpfsPath {
         Self::from_str(&name).map_err(D::Error::custom)
     }
 }
+
 impl Decode for IpfsPath {
     fn decode<I: Input>(input: &mut I) -> Result<Self, parity_scale_codec::Error> {
         let name = String::decode(input)?;
@@ -394,6 +428,8 @@ impl Decode for IpfsPath {
 /// Identification of a [`Domain`].
 #[derive(
     Debug,
+    Display,
+    FromStr,
     Clone,
     PartialEq,
     Eq,
@@ -406,6 +442,7 @@ impl Decode for IpfsPath {
     Serialize,
     IntoSchema,
 )]
+#[display(fmt = "{name}")]
 pub struct Id {
     /// [`Name`] unique to a [`Domain`] e.g. company name
     pub name: Name,
@@ -419,26 +456,6 @@ impl Id {
     #[inline]
     pub const fn new(name: Name) -> Self {
         Self { name }
-    }
-
-    pub(crate) const fn empty() -> Self {
-        Self {
-            name: Name::empty(),
-        }
-    }
-}
-
-impl FromStr for Id {
-    type Err = ParseError;
-
-    fn from_str(name: &str) -> Result<Self, Self::Err> {
-        Ok(Self::new(Name::from_str(name)?))
-    }
-}
-
-impl fmt::Display for Id {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.name)
     }
 }
 

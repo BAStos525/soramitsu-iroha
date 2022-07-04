@@ -8,6 +8,7 @@ pub mod derive {
 
     use std::{error::Error as StdError, fmt};
 
+    use derive_more::Display;
     /// Derive macro for implementing [`iroha_config::Configurable`](`crate::Configurable`) for config structures.
     ///
     /// Has several attributes:
@@ -59,7 +60,8 @@ pub mod derive {
     pub use iroha_config_derive::Configurable;
 
     /// Error related to deserializing specific field
-    #[derive(Debug)]
+    #[derive(Debug, Display)]
+    #[display(fmt = "Failed to deserialize the field {field}")]
     pub struct FieldError {
         /// Field name (known at compile time)
         pub field: &'static str,
@@ -70,12 +72,6 @@ pub mod derive {
     impl StdError for FieldError {
         fn source(&self) -> Option<&(dyn StdError + 'static)> {
             Some(&self.error)
-        }
-    }
-
-    impl fmt::Display for FieldError {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "Failed to deserialize field {}", self.field)
         }
     }
 
@@ -186,19 +182,21 @@ pub trait Configurable: Serialize + DeserializeOwned {
     ///
     /// # Errors
     /// Fails if field was unknown
-    fn get_doc_recursive<'tl>(
-        field: impl AsRef<[&'tl str]>,
-    ) -> Result<Option<&'static str>, Self::Error>;
+    fn get_doc_recursive<'tl>(field: impl AsRef<[&'tl str]>)
+        -> Result<Option<String>, Self::Error>;
 
     /// Gets docs of field
     /// # Errors
     /// Fails if field was unknown
-    fn get_doc(field: &str) -> Result<Option<&'static str>, Self::Error> {
+    fn get_doc(field: &str) -> Result<Option<String>, Self::Error> {
         Self::get_doc_recursive([field])
     }
 
     /// Returns documentation for all fields in form of json object
     fn get_docs() -> Value;
+
+    /// Gets inner docs for non-leaf fields
+    fn get_inner_docs() -> String;
 }
 
 /// Json config for getting configuration

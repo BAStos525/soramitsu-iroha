@@ -1,49 +1,49 @@
 //! Module with permissions for registering.
 
-use std::str::FromStr as _;
-
 use super::*;
 
-/// Can register domains permission token name.
-#[allow(clippy::expect_used)]
-pub static CAN_REGISTER_DOMAINS_TOKEN: Lazy<Name> =
-    Lazy::new(|| Name::from_str("can_register_domains").expect("this mustn't panic"));
+declare_token!(
+    /// Can register domains.
+    CanRegisterDomains {},
+    "can_register_domains"
+);
 
 /// Prohibits registering domains.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Serialize)]
 pub struct ProhibitRegisterDomains;
 
 impl_from_item_for_instruction_validator_box!(ProhibitRegisterDomains);
 
-impl<W: WorldTrait> IsAllowed<W, Instruction> for ProhibitRegisterDomains {
+impl IsAllowed<Instruction> for ProhibitRegisterDomains {
     fn check(
         &self,
         _authority: &AccountId,
         instruction: &Instruction,
-        _wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
     ) -> Result<(), DenialReason> {
-        let _register_box = if let Instruction::Register(register) = instruction {
-            register
-        } else {
-            return Ok(());
-        };
-        Err("Domain registration is prohibited.".to_owned())
+        if let Instruction::Register(register) = instruction {
+            if let Ok(RegistrableBox::Domain(_)) = register.object.evaluate(wsv, &Context::new()) {
+                return Err("Domain registration is prohibited.".to_owned().into());
+            }
+        }
+
+        Ok(())
     }
 }
 
 /// Validator that allows to register domains for accounts with the corresponding permission token.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Copy, Clone, Serialize)]
 pub struct GrantedAllowedRegisterDomains;
 
 impl_from_item_for_granted_token_validator_box!(GrantedAllowedRegisterDomains);
 
-impl<W: WorldTrait> HasToken<W> for GrantedAllowedRegisterDomains {
+impl HasToken for GrantedAllowedRegisterDomains {
     fn token(
         &self,
         _authority: &AccountId,
         _instruction: &Instruction,
-        _wsv: &WorldStateView<W>,
+        _wsv: &WorldStateView,
     ) -> Result<PermissionToken, String> {
-        Ok(PermissionToken::new(CAN_REGISTER_DOMAINS_TOKEN.clone()))
+        Ok(CanRegisterDomains::new().into())
     }
 }

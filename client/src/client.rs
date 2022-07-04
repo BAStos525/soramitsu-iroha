@@ -1,23 +1,20 @@
 //! Contains the end-point querying logic.  This is where you need to
 //! add any custom end-point related logic.
 use std::{
-    collections::HashMap,
-    fmt::{self, Debug, Formatter},
-    marker::PhantomData,
-    sync::mpsc,
-    thread,
-    time::Duration,
+    collections::HashMap, fmt::Debug, marker::PhantomData, sync::mpsc, thread, time::Duration,
 };
 
+use derive_more::{DebugCustom, Display};
 use eyre::{eyre, Result, WrapErr};
 use http_default::WebSocketStream;
 use iroha_config::{GetConfiguration, PostConfiguration};
 use iroha_core::smartcontracts::isi::query::Error as QueryError;
 use iroha_crypto::{HashOf, KeyPair};
-use iroha_data_model::{prelude::*, query::SignedQueryRequest};
+use iroha_data_model::{predicate::PredicateBox, prelude::*, query::SignedQueryRequest};
 use iroha_logger::prelude::*;
 use iroha_telemetry::metrics::Status;
 use iroha_version::prelude::*;
+use parity_scale_codec::DecodeAll;
 use rand::Rng;
 use serde::de::DeserializeOwned;
 use small::SmallStr;
@@ -66,15 +63,25 @@ where
             resp: &Response<Vec<u8>>,
         ) -> QueryHandlerResult<VersionedPaginatedQueryResult> {
             match resp.status() {
-                StatusCode::OK => VersionedPaginatedQueryResult::decode_versioned(resp.body())
-                    .wrap_err("Failed to decode response body as VersionedPaginatedQueryResult")
-                    .map_err(Into::into),
+                StatusCode::OK => {
+                    let res =
+                        try_decode_all_or_just_decode!(VersionedPaginatedQueryResult, resp.body());
+                    res.wrap_err(
+                        "Failed to decode the whole response body as `VersionedPaginatedQueryResult`",
+                    )
+                    .map_err(Into::into)
+                }
                 StatusCode::BAD_REQUEST
                 | StatusCode::UNAUTHORIZED
                 | StatusCode::FORBIDDEN
                 | StatusCode::NOT_FOUND => {
-                    let err = QueryError::decode(&mut resp.body().as_ref())
-                        .wrap_err("Failed to decode response body as QueryError")?;
+                    let mut res = QueryError::decode_all(resp.body().as_ref());
+                    if res.is_err() {
+                        warn!("Can't decode query error, not all bytes were consumed");
+                        res = QueryError::decode(&mut resp.body().as_ref());
+                    }
+                    let err =
+                        res.wrap_err("Failed to decode the whole response body as `QueryError`")?;
                     Err(ClientQueryError::QueryError(err))
                 }
                 _ => Err(ResponseReport::with_msg("Unexpected query response", resp).into()),
@@ -181,6 +188,8 @@ where
 {
     /// Query output
     pub output: R::Output,
+    /// The filter that was applied to the output.
+    pub filter: PredicateBox,
     /// See [`iroha_data_model::prelude::PaginatedQueryResult`]
     pub pagination: Pagination,
     /// See [`iroha_data_model::prelude::PaginatedQueryResult`]
@@ -210,6 +219,7 @@ where
             result,
             pagination,
             total,
+            filter,
         }: PaginatedQueryResult,
     ) -> Result<Self> {
         let QueryResult(result) = result;
@@ -221,12 +231,18 @@ where
             output,
             pagination,
             total,
+            filter,
         })
     }
 }
 
 /// Iroha client
-#[derive(Clone)]
+#[derive(Clone, DebugCustom, Display)]
+#[debug(
+    fmt = "Client {{ torii: {torii_url}, telemetry_url: {telemetry_url}, public_key: {} }}",
+    "key_pair.public_key()"
+)]
+#[display(fmt = "{}@{torii_url}", "key_pair.public_key()")]
 pub struct Client {
     /// Url for accessing iroha node
     torii_url: SmallStr,
@@ -255,6 +271,7 @@ impl Client {
     ///
     /// # Errors
     /// If configuration isn't valid (e.g public/private keys don't match)
+    #[inline]
     pub fn new(configuration: &Configuration) -> Result<Self> {
         Self::with_headers(configuration, HashMap::new())
     }
@@ -265,6 +282,7 @@ impl Client {
     ///
     /// # Errors
     /// If configuration isn't valid (e.g public/private keys don't match)
+    #[inline]
     pub fn with_headers(
         configuration: &Configuration,
         mut headers: HashMap<String, String>,
@@ -582,6 +600,7 @@ impl Client {
         &self,
         request: R,
         pagination: Pagination,
+        filter: PredicateBox,
     ) -> Result<(B, QueryResponseHandler<R>)>
     where
         R: Query + Into<QueryBox> + Debug,
@@ -589,7 +608,7 @@ impl Client {
         B: RequestBuilder,
     {
         let pagination: Vec<_> = pagination.into();
-        let request = QueryRequest::new(request.into(), self.account_id.clone());
+        let request = QueryRequest::new(request.into(), self.account_id.clone(), filter);
         let request: VersionedSignedQueryRequest = self.sign_query(request)?.into();
 
         Ok((
@@ -602,6 +621,27 @@ impl Client {
             .body(request.encode_versioned()),
             QueryResponseHandler::default(),
         ))
+    }
+
+    /// Create a request with pagination and add the filter.
+    ///
+    /// # Errors
+    /// Forwards from [`Self::prepare_query_request`].
+    pub fn request_with_pagination_and_filter<R>(
+        &self,
+        request: R,
+        pagination: Pagination,
+        filter: PredicateBox,
+    ) -> QueryHandlerResult<ClientQueryOutput<R>>
+    where
+        R: Query + Into<QueryBox> + Debug,
+        <R::Output as TryFrom<Value>>::Error: Into<eyre::Error>, // Seems redundant
+    {
+        iroha_logger::trace!(?request, %pagination, ?filter);
+        let (req, resp_handler) =
+            self.prepare_query_request::<R, DefaultRequestBuilder>(request, pagination, filter)?;
+        let response = req.build()?.send()?;
+        resp_handler.handle(response)
     }
 
     /// Query API entry point. Requests queries from `Iroha` peers with pagination.
@@ -620,11 +660,7 @@ impl Client {
         R: Query + Into<QueryBox> + Debug,
         <R::Output as TryFrom<Value>>::Error: Into<eyre::Error>,
     {
-        iroha_logger::trace!(?request, %pagination);
-        let (req, resp_handler) =
-            self.prepare_query_request::<R, DefaultRequestBuilder>(request, pagination)?;
-        let response = req.build()?.send()?;
-        resp_handler.handle(response)
+        self.request_with_pagination_and_filter(request, pagination, PredicateBox::default())
     }
 
     /// Query API entry point. Requests queries from `Iroha` peers.
@@ -691,7 +727,7 @@ impl Client {
 
             if response.status() == StatusCode::OK {
                 let pending_transactions =
-                    VersionedPendingTransactions::decode_versioned(response.body())?;
+                    try_decode_all_or_just_decode!(VersionedPendingTransactions, response.body())?;
                 let VersionedPendingTransactions::V1(pending_transactions) = pending_transactions;
                 let transaction = pending_transactions
                     .into_iter()
@@ -829,16 +865,6 @@ impl Client {
     }
 }
 
-impl Debug for Client {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Client")
-            .field("public_key", self.key_pair.public_key())
-            .field("torii_url", &self.torii_url)
-            .field("telemetry_url", &self.telemetry_url)
-            .finish()
-    }
-}
-
 /// Logic related to Events API client implementation.
 pub mod events_api {
     use super::*;
@@ -916,7 +942,8 @@ pub mod events_api {
                 Self::Next: FlowEvents,
             {
                 if let EventPublisherMessage::SubscriptionAccepted =
-                    VersionedEventPublisherMessage::decode_versioned(&message)?.into_v1()
+                    try_decode_all_or_just_decode!(VersionedEventPublisherMessage, &message)?
+                        .into_v1()
                 {
                     return Ok(Events);
                 }
@@ -933,9 +960,8 @@ pub mod events_api {
 
             fn message(&self, message: Vec<u8>) -> Result<EventData<Self::Event>> {
                 let event_socket_message =
-                    VersionedEventPublisherMessage::decode_versioned(&message)
-                        .map(iroha_data_model::events::VersionedEventPublisherMessage::into_v1)
-                        .map_err(Into::<eyre::Error>::into)?;
+                    try_decode_all_or_just_decode!(VersionedEventPublisherMessage, &message)?
+                        .into_v1();
                 let event = match event_socket_message {
                     EventPublisherMessage::Event(event) => event,
                     msg => return Err(eyre!("Expected Event but got {:?}", msg)),
@@ -1122,6 +1148,41 @@ pub mod transaction {
     }
 }
 
+pub mod trigger {
+    //! Module with queries for triggers
+    use super::*;
+
+    /// Get query to get triggers by domain id
+    pub fn by_domain_id(domain_id: impl Into<EvaluatesTo<DomainId>>) -> FindTriggersByDomainId {
+        FindTriggersByDomainId::new(domain_id)
+    }
+}
+
+pub mod role {
+    //! Module with queries for roles
+    use super::*;
+
+    /// Get query to retrieve all roles
+    pub const fn all() -> FindAllRoles {
+        FindAllRoles::new()
+    }
+
+    /// Get query to retrieve all role ids
+    pub const fn all_ids() -> FindAllRoleIds {
+        FindAllRoleIds::new()
+    }
+
+    /// Get query to retrieve a role by its id
+    pub fn by_id(role_id: impl Into<EvaluatesTo<RoleId>>) -> FindRoleByRoleId {
+        FindRoleByRoleId::new(role_id)
+    }
+
+    /// Get query to retrieve all roles for an account
+    pub fn by_account_id(account_id: impl Into<EvaluatesTo<AccountId>>) -> FindRolesByAccountId {
+        FindRolesByAccountId::new(account_id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::restriction)]
@@ -1185,7 +1246,7 @@ mod tests {
     #[cfg(test)]
     mod query_errors_handling {
         use http::Response;
-        use iroha_core::smartcontracts::isi::query::UnsupportedVersionError;
+        use iroha_core::smartcontracts::permissions::error::DenialReason;
 
         use super::*;
 
@@ -1194,16 +1255,12 @@ mod tests {
             let sut = QueryResponseHandler::<FindAllAssets>::default();
             let responses = vec![
                 (
-                    StatusCode::BAD_REQUEST,
-                    QueryError::Version(UnsupportedVersionError { version: 19 }),
-                ),
-                (
                     StatusCode::UNAUTHORIZED,
                     QueryError::Signature("whatever".to_owned()),
                 ),
                 (
                     StatusCode::FORBIDDEN,
-                    QueryError::Permission("whatever".to_owned()),
+                    QueryError::Permission(DenialReason::Custom("whatever".to_owned())),
                 ),
                 (
                     StatusCode::NOT_FOUND,
@@ -1213,9 +1270,7 @@ mod tests {
             ];
 
             for (status_code, err) in responses {
-                let resp = Response::builder()
-                    .status(status_code)
-                    .body(err.clone().encode())?;
+                let resp = Response::builder().status(status_code).body(err.encode())?;
 
                 match sut.handle(resp) {
                     Err(ClientQueryError::QueryError(actual)) => {

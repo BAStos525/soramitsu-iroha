@@ -13,13 +13,14 @@ use iroha_core::{
         BlockHeader, EmptyChainHash,
     },
     queue::Queue,
-    smartcontracts::{isi::error::FindError, permissions::DenyAll},
+    smartcontracts::{isi::error::FindError, permissions::combinators::DenyAll},
     sumeragi::view_change::ProofChain,
     tx::TransactionValidator,
     wsv::World,
 };
-use iroha_data_model::{account::GENESIS_ACCOUNT_NAME, prelude::*};
+use iroha_data_model::{account::GENESIS_ACCOUNT_NAME, predicate::PredicateBox, prelude::*};
 use iroha_version::prelude::*;
+use test_network::{prepare_test_for_nextest, unique_port};
 use tokio::time;
 use warp::test::WsClient;
 
@@ -29,7 +30,7 @@ use crate::{
     stream::{Sink, Stream},
 };
 
-async fn create_torii() -> (Torii<World>, KeyPair) {
+async fn create_torii() -> (Torii, KeyPair) {
     let mut config = crate::samples::get_config(crate::samples::get_trusted_peers(None), None);
     config.torii.p2p_addr = format!("127.0.0.1:{}", unique_port::get_unique_free_port().unwrap());
     config.torii.api_url = format!("127.0.0.1:{}", unique_port::get_unique_free_port().unwrap());
@@ -54,13 +55,13 @@ async fn create_torii() -> (Torii<World>, KeyPair) {
             .build()
         )
         .is_none());
-    wsv.world.domains.insert(domain_id, domain);
+    wsv.domains().insert(domain_id, domain);
     let queue = Arc::new(Queue::from_configuration(&config.queue, Arc::clone(&wsv)));
     let network = IrohaNetwork::new(
         Broker::new(),
         config.torii.p2p_addr.clone(),
         config.public_key.clone(),
-        config.network.mailbox,
+        config.network.actor_channel_capacity,
     )
     .await
     .expect("Failed to create network")
@@ -83,6 +84,7 @@ async fn create_torii() -> (Torii<World>, KeyPair) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_and_start_torii() {
+    prepare_test_for_nextest!();
     let (torii, _) = create_torii().await;
 
     let result = time::timeout(Duration::from_millis(50), torii.start()).await;
@@ -92,12 +94,14 @@ async fn create_and_start_torii() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn torii_pagination() {
+    prepare_test_for_nextest!();
     let (torii, keys) = create_torii().await;
 
     let get_domains = |start, limit| {
         let query: VerifiedQueryRequest = QueryRequest::new(
             QueryBox::FindAllDomains(Default::default()),
             AccountId::from_str("alice@wonderland").expect("Valid"),
+            PredicateBox::default(),
         )
         .sign(keys.clone())
         .expect("Failed to sign query with keys")
@@ -113,22 +117,30 @@ async fn torii_pagination() {
         )
         .map(|result| {
             let Scale(query_result) = result.unwrap();
-            let VersionedPaginatedQueryResult::V1(PaginatedQueryResult { result, .. }) =
+            let VersionedPaginatedQueryResult::V1(PaginatedQueryResult { result, total, .. }) =
                 query_result;
 
             if let QueryResult(Value::Vec(domains)) = result {
-                domains
+                (domains, total)
             } else {
                 unreachable!()
             }
         })
     };
 
-    assert_eq!(get_domains(None, None).await.len(), 26);
-    assert_eq!(get_domains(Some(0), None).await.len(), 26);
-    assert_eq!(get_domains(Some(15), Some(5)).await.len(), 5);
-    assert_eq!(get_domains(None, Some(10)).await.len(), 10);
-    assert_eq!(get_domains(Some(1), Some(15)).await.len(), 15);
+    for (start, limit, len) in [
+        (None, None, 26),
+        (Some(0), None, 26),
+        (Some(15), Some(5), 5),
+        (None, Some(10), 10),
+        (Some(1), Some(15), 15),
+        (Some(15), Some(15), 11),
+    ] {
+        let (domains, total) = get_domains(start, limit).await;
+        assert_eq!(domains.len(), len);
+        // `total` counts all values that match the filtering conditions
+        assert_eq!(total, 26);
+    }
 }
 
 #[derive(Default)]
@@ -176,11 +188,14 @@ impl QuerySet {
 
         let router = torii.create_api_router();
 
-        let request: VersionedSignedQueryRequest =
-            QueryRequest::new(query, self.account.unwrap_or(authority))
-                .sign(self.keys.unwrap_or(keys))
-                .expect("Failed to sign query with keys")
-                .into();
+        let request: VersionedSignedQueryRequest = QueryRequest::new(
+            query,
+            self.account.unwrap_or(authority),
+            PredicateBox::default(),
+        )
+        .sign(self.keys.unwrap_or(keys))
+        .expect("Failed to sign query with keys")
+        .into();
 
         let response = warp::test::request()
             .method("POST")
@@ -201,8 +216,8 @@ impl QuerySet {
 impl From<warp::http::Response<warp::hyper::body::Bytes>> for QueryResponseBody {
     fn from(src: warp::http::Response<warp::hyper::body::Bytes>) -> Self {
         if StatusCode::OK == src.status() {
-            let body = VersionedQueryResult::decode_versioned(src.body())
-                .expect("The response body failed to be decoded to VersionedQueryResult even though the status is Ok 200");
+            let body = VersionedPaginatedQueryResult::decode_versioned(src.body())
+                .expect("The response body failed to be decoded to VersionedPaginatedQueryResult even though the status is Ok 200");
             Self::Ok(Box::new(body))
         } else {
             let body = query::Error::decode(&mut src.body().as_ref())
@@ -221,7 +236,7 @@ struct QueryResponseTest {
 
 #[allow(variant_size_differences)]
 enum QueryResponseBody {
-    Ok(Box<VersionedQueryResult>),
+    Ok(Box<VersionedPaginatedQueryResult>),
     Err(query::Error),
 }
 
@@ -230,7 +245,10 @@ impl QueryResponseTest {
         self.status = Some(status);
         self
     }
-    fn body_matches_ok(mut self, predicate: impl Fn(&VersionedQueryResult) -> bool) -> Self {
+    fn body_matches_ok(
+        mut self,
+        predicate: impl Fn(&VersionedPaginatedQueryResult) -> bool,
+    ) -> Self {
         self.body_matches = if let QueryResponseBody::Ok(body) = &self.response_body {
             Some(predicate(body))
         } else {
@@ -272,23 +290,20 @@ fn register_account(name: &str) -> Instruction {
 }
 
 fn register_asset_definition(name: &str) -> Instruction {
-    RegisterBox::new(AssetDefinition::quantity(AssetDefinitionId::new(
-        name.parse().expect("Valid"),
-        DOMAIN.parse().expect("Valid"),
-    )))
-    .into()
+    RegisterBox::new(AssetDefinition::quantity(asset_definition_id(name))).into()
 }
 
 fn mint_asset(quantity: u32, asset: &str, account: &str) -> Instruction {
-    MintBox::new(Value::U32(quantity), asset_id_new(asset, DOMAIN, account)).into()
+    MintBox::new(Value::U32(quantity), asset_id(asset, account)).into()
 }
 
-fn asset_id_new(asset: &str, domain: &str, account: &str) -> AssetId {
+fn asset_definition_id(name: &str) -> AssetDefinitionId {
+    AssetDefinitionId::new(name.parse().expect("Valid"), DOMAIN.parse().expect("Valid"))
+}
+
+fn asset_id(name: &str, account: &str) -> AssetId {
     AssetId::new(
-        AssetDefinitionId::new(
-            asset.parse().expect("Valid"),
-            domain.parse().expect("Valid"),
-        ),
+        asset_definition_id(name),
         AccountId::new(
             account.parse().expect("Valid"),
             DOMAIN.parse().expect("Valid"),
@@ -296,24 +311,26 @@ fn asset_id_new(asset: &str, domain: &str, account: &str) -> AssetId {
     )
 }
 
-// TODO: All the following tests must be parameterised and collapsed
+// TODO: All the following tests must be parameterized and collapsed
 
 #[tokio::test]
 async fn find_asset() {
+    prepare_test_for_nextest!();
     QuerySet::new()
         .given(register_domain())
         .given(register_account("alice"))
         .given(register_asset_definition("rose"))
         .given(mint_asset(99, "rose", "alice"))
-        .query(QueryBox::FindAssetById(FindAssetById::new(asset_id_new(
-            "rose", DOMAIN, "alice",
+        .query(QueryBox::FindAssetById(FindAssetById::new(asset_id(
+            "rose", "alice",
         ))))
         .await
         .status(StatusCode::OK)
         .body_matches_ok(|body| {
-            if let VersionedQueryResult::V1(QueryResult(Value::Identifiable(
-                IdentifiableBox::Asset(asset),
-            ))) = body
+            if let VersionedPaginatedQueryResult::V1(PaginatedQueryResult {
+                result: QueryResult(Value::Identifiable(IdentifiableBox::Asset(asset))),
+                ..
+            }) = body
             {
                 *asset.value() == AssetValue::Quantity(99)
             } else {
@@ -325,13 +342,14 @@ async fn find_asset() {
 
 #[tokio::test]
 async fn find_asset_with_no_mint() {
+    prepare_test_for_nextest!();
     QuerySet::new()
         .given(register_domain())
         .given(register_account("alice"))
         .given(register_asset_definition("rose"))
     // .given(mint_asset(99, "rose", "alice"))
         .query(QueryBox::FindAssetById(FindAssetById::new(
-            asset_id_new("rose", DOMAIN, "alice"),
+            asset_id("rose", "alice"),
         )))
         .await
         .status(StatusCode::NOT_FOUND)
@@ -347,13 +365,14 @@ async fn find_asset_with_no_mint() {
 
 #[tokio::test]
 async fn find_asset_with_no_asset_definition() {
+    prepare_test_for_nextest!();
     QuerySet::new()
         .given(register_domain())
         .given(register_account("alice"))
     // .given(register_asset_definition("rose"))
     // .given(mint_asset(99, "rose", "alice"))
         .query(QueryBox::FindAssetById(FindAssetById::new(
-            asset_id_new("rose", DOMAIN, "alice"),
+            asset_id("rose", "alice"),
         )))
         .await
         .status(StatusCode::NOT_FOUND)
@@ -369,13 +388,14 @@ async fn find_asset_with_no_asset_definition() {
 
 #[tokio::test]
 async fn find_asset_with_no_account() {
+    prepare_test_for_nextest!();
     QuerySet::new()
         .given(register_domain())
     // .given(register_account("alice"))
         .given(register_asset_definition("rose"))
     // .given(mint_asset(99, "rose", "alice"))
         .query(QueryBox::FindAssetById(FindAssetById::new(
-            asset_id_new("rose", DOMAIN, "alice"),
+            asset_id("rose", "alice"),
         )))
         .await
         .status(StatusCode::NOT_FOUND)
@@ -391,13 +411,14 @@ async fn find_asset_with_no_account() {
 
 #[tokio::test]
 async fn find_asset_with_no_domain() {
+    prepare_test_for_nextest!();
     QuerySet::new()
     // .given(register_domain())
     // .given(register_account("alice"))
     // .given(register_asset_definition("rose"))
     // .given(mint_asset(99, "rose", "alice"))
         .query(QueryBox::FindAssetById(FindAssetById::new(
-            asset_id_new("rose", DOMAIN, "alice"),
+            asset_id("rose", "alice"),
         )))
         .await
         .status(StatusCode::NOT_FOUND)
@@ -413,23 +434,53 @@ async fn find_asset_with_no_domain() {
 
 #[tokio::test]
 async fn find_asset_definition() {
+    prepare_test_for_nextest!();
     QuerySet::new()
         .given(register_domain())
         .given(register_asset_definition("rose"))
-        .query(QueryBox::FindAllAssetsDefinitions(Default::default()))
+        .query(QueryBox::FindAssetDefinitionById(
+            FindAssetDefinitionById::new(asset_definition_id("rose")),
+        ))
         .await
         .status(StatusCode::OK)
-        .body_matches_ok(|body| {
-            if let VersionedQueryResult::V1(QueryResult(Value::Vec(vec))) = body {
-                vec.iter().any(|value| {
-                    if let Value::Identifiable(IdentifiableBox::AssetDefinition(asset_definition)) =
-                        value
-                    {
-                        asset_definition.id().name.as_ref() == "rose"
-                    } else {
-                        false
-                    }
-                })
+        .assert()
+}
+
+#[tokio::test]
+async fn find_asset_definition_with_no_asset_definition() {
+    prepare_test_for_nextest!();
+    QuerySet::new()
+        .given(register_domain())
+    // .given(register_asset_definition("rose"))
+        .query(QueryBox::FindAssetDefinitionById(
+            FindAssetDefinitionById::new(asset_definition_id("rose")),
+        ))
+        .await
+        .status(StatusCode::NOT_FOUND)
+        .body_matches_err(|body| {
+            if let query::Error::Find(err) = body {
+                matches!(**err, FindError::AssetDefinition(_))
+            } else {
+                false
+            }
+        })
+        .assert()
+}
+
+#[tokio::test]
+async fn find_asset_definition_with_no_domain() {
+    prepare_test_for_nextest!();
+    QuerySet::new()
+    // .given(register_domain())
+    // .given(register_asset_definition("rose"))
+        .query(QueryBox::FindAssetDefinitionById(
+            FindAssetDefinitionById::new(asset_definition_id("rose")),
+        ))
+        .await
+        .status(StatusCode::NOT_FOUND)
+        .body_matches_err(|body| {
+            if let query::Error::Find(err) = body {
+                matches!(**err, FindError::Domain(_))
             } else {
                 false
             }
@@ -439,6 +490,7 @@ async fn find_asset_definition() {
 
 #[tokio::test]
 async fn find_account() {
+    prepare_test_for_nextest!();
     QuerySet::new()
         .given(register_domain())
         .given(register_account("alice"))
@@ -455,6 +507,7 @@ async fn find_account() {
 
 #[tokio::test]
 async fn find_account_with_no_account() {
+    prepare_test_for_nextest!();
     QuerySet::new()
         .given(register_domain())
     // .given(register_account("alice"))
@@ -475,6 +528,7 @@ async fn find_account_with_no_account() {
 
 #[tokio::test]
 async fn find_account_with_no_domain() {
+    prepare_test_for_nextest!();
     QuerySet::new()
     // .given(register_domain())
     // .given(register_account("alice"))
@@ -495,6 +549,7 @@ async fn find_account_with_no_domain() {
 
 #[tokio::test]
 async fn find_domain() {
+    prepare_test_for_nextest!();
     QuerySet::new()
         .given(register_domain())
         .query(QueryBox::FindDomainById(FindDomainById::new(
@@ -507,6 +562,7 @@ async fn find_domain() {
 
 #[tokio::test]
 async fn find_domain_with_no_domain() {
+    prepare_test_for_nextest!();
     QuerySet::new()
     // .given(register_domain())
         .query(QueryBox::FindDomainById(FindDomainById::new(
@@ -533,6 +589,7 @@ fn query() -> QueryBox {
 
 #[tokio::test]
 async fn query_with_wrong_signatory() {
+    prepare_test_for_nextest!();
     QuerySet::new()
         .given(register_domain())
         .given(register_account("alice"))
@@ -561,6 +618,7 @@ async fn query_with_wrong_signature() {
 
 #[tokio::test]
 async fn query_with_wrong_signature_and_no_permission() {
+    prepare_test_for_nextest!();
     QuerySet::new()
         .given(register_domain())
         .given(register_account("alice"))
@@ -575,6 +633,7 @@ async fn query_with_wrong_signature_and_no_permission() {
 
 #[tokio::test]
 async fn query_with_no_permission() {
+    prepare_test_for_nextest!();
     QuerySet::new()
         .given(register_domain())
         .given(register_account("alice"))
@@ -589,6 +648,7 @@ async fn query_with_no_permission() {
 
 #[tokio::test]
 async fn query_with_no_permission_and_no_find() {
+    prepare_test_for_nextest!();
     QuerySet::new()
         .given(register_domain())
     // .given(register_account("alice"))
@@ -603,6 +663,7 @@ async fn query_with_no_permission_and_no_find() {
 
 #[tokio::test]
 async fn query_with_no_find() {
+    prepare_test_for_nextest!();
     QuerySet::new()
         .given(register_domain())
     // .given(register_account("alice"))
@@ -640,6 +701,7 @@ fn new_dummy() -> ValidBlock {
 
 #[tokio::test]
 async fn blocks_stream() {
+    prepare_test_for_nextest!();
     const BLOCK_COUNT: usize = 4;
 
     let (torii, _) = create_torii().await;
@@ -707,6 +769,7 @@ fn domains(
 
 #[test]
 fn hash_should_be_the_same() {
+    prepare_test_for_nextest!();
     let key_pair = KeyPair::generate().expect("Failed to generate key pair.");
     let mut config = get_config(
         get_trusted_peers(Some(key_pair.public_key())),
@@ -749,6 +812,7 @@ fn hash_should_be_the_same() {
 
 #[tokio::test]
 async fn test_subscription_websocket_clean_closing() {
+    prepare_test_for_nextest!();
     use iroha_data_model::events::{pipeline, FilterBox};
     use warp::filters::ws;
 

@@ -3,14 +3,11 @@
 
 #[cfg(not(feature = "std"))]
 use alloc::{collections::btree_map, format, string::String, vec::Vec};
-use core::{
-    cmp::Ordering,
-    fmt::{self, Display, Formatter},
-    str::FromStr,
-};
+use core::{cmp::Ordering, str::FromStr};
 #[cfg(feature = "std")]
 use std::collections::btree_map;
 
+use derive_more::Display;
 use getset::{Getters, MutGetters, Setters};
 use iroha_macro::FromVariant;
 use iroha_schema::IntoSchema;
@@ -19,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use strum::EnumString;
 
 use crate::{
-    account::prelude::*, domain::prelude::*, fixed, fixed::Fixed, metadata::Metadata, Identifiable,
-    Name, ParseError, TryAsMut, TryAsRef, Value,
+    account::prelude::*, domain::prelude::*, fixed, fixed::Fixed, metadata::Metadata, HasMetadata,
+    Identifiable, Name, ParseError, Registered, TryAsMut, TryAsRef, Value,
 };
 
 /// [`AssetsMap`] provides an API to work with collection of key ([`Id`]) - value
@@ -31,6 +28,20 @@ pub type AssetsMap = btree_map::BTreeMap<<Asset as Identifiable>::Id, Asset>;
 /// (`AssetDefinition`) pairs.
 pub type AssetDefinitionsMap =
     btree_map::BTreeMap<<AssetDefinition as Identifiable>::Id, AssetDefinitionEntry>;
+
+/// Mintability logic error
+#[derive(Debug, Display, Clone, Copy, PartialEq, Eq)]
+pub enum MintabilityError {
+    /// Tried to mint an Un-mintable asset.
+    #[display(fmt = "This asset cannot be minted more than once and it was already minted.")]
+    MintUnmintable,
+    /// Tried to forbid minting on assets that should be mintable.
+    #[display(fmt = "This asset was set as infinitely mintable. You cannot forbid its minting.")]
+    ForbidMintOnMintable,
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for MintabilityError {}
 
 /// An entry in [`AssetDefinitionsMap`].
 #[derive(
@@ -48,7 +59,7 @@ pub type AssetDefinitionsMap =
 )]
 #[getset(get = "pub")]
 #[allow(clippy::multiple_inherent_impl)]
-#[cfg_attr(feature = "ffi", iroha_ffi::ffi_bindgen)]
+#[cfg_attr(feature = "ffi_api", iroha_ffi::ffi_bindgen)]
 pub struct AssetDefinitionEntry {
     /// Asset definition.
     #[cfg_attr(feature = "mutable_api", getset(get_mut = "pub"))]
@@ -60,18 +71,18 @@ pub struct AssetDefinitionEntry {
 impl PartialOrd for AssetDefinitionEntry {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.definition.cmp(&other.definition))
+        Some(self.cmp(other))
     }
 }
 
 impl Ord for AssetDefinitionEntry {
     #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
-        self.definition.cmp(&other.definition)
+        self.definition().cmp(other.definition())
     }
 }
 
-#[cfg_attr(feature = "ffi", iroha_ffi::ffi_bindgen)]
+#[cfg_attr(feature = "ffi_api", iroha_ffi::ffi_bindgen)]
 impl AssetDefinitionEntry {
     /// Constructor.
     pub const fn new(
@@ -91,7 +102,7 @@ impl AssetDefinitionEntry {
     ///
     /// # Errors
     /// If the asset was declared as `Mintable::Infinitely`
-    pub fn forbid_minting(&mut self) -> Result<(), super::MintabilityError> {
+    pub fn forbid_minting(&mut self) -> Result<(), MintabilityError> {
         self.definition.forbid_minting()
     }
 }
@@ -99,6 +110,7 @@ impl AssetDefinitionEntry {
 /// Asset definition defines type of that asset.
 #[derive(
     Debug,
+    Display,
     Clone,
     PartialEq,
     Eq,
@@ -111,32 +123,40 @@ impl AssetDefinitionEntry {
     Serialize,
     IntoSchema,
 )]
-#[getset(get = "pub")]
 #[allow(clippy::multiple_inherent_impl)]
-#[cfg_attr(feature = "ffi", iroha_ffi::ffi_bindgen)]
+#[cfg_attr(feature = "ffi_api", iroha_ffi::ffi_bindgen)]
+#[display(fmt = "{id} {value_type}{mintable}")]
 pub struct AssetDefinition {
     /// An Identification of the [`AssetDefinition`].
     id: <Self as Identifiable>::Id,
     /// Type of [`AssetValue`]
+    #[getset(get = "pub")]
     value_type: AssetValueType,
     /// Is the asset mintable
+    #[getset(get = "pub")]
     mintable: Mintable,
     /// Metadata of this asset definition as a key-value store.
     #[cfg_attr(feature = "mutable_api", getset(get_mut = "pub"))]
     metadata: Metadata,
 }
 
+impl HasMetadata for AssetDefinition {
+    fn metadata(&self) -> &Metadata {
+        &self.metadata
+    }
+}
+
 impl PartialOrd for AssetDefinition {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.id.cmp(&other.id))
+        Some(self.cmp(other))
     }
 }
 
 impl Ord for AssetDefinition {
     #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
-        self.id.cmp(&other.id)
+        self.id().cmp(other.id())
     }
 }
 
@@ -145,6 +165,7 @@ impl Ord for AssetDefinition {
 /// outside of smartcontracts.
 #[derive(
     Debug,
+    Display,
     Clone,
     Copy,
     PartialEq,
@@ -159,10 +180,13 @@ impl Ord for AssetDefinition {
 )]
 pub enum Mintable {
     /// Regular asset with elastic supply. Can be minted and burned.
+    #[display(fmt = "+")]
     Infinitely,
     /// Non-mintable asset (token), with a fixed supply. Can be burned, and minted **once**.
+    #[display(fmt = "=")]
     Once,
     /// Non-mintable asset (token), with a fixed supply. Can be burned, but not minted.
+    #[display(fmt = "-")]
     Not,
     // TODO: Support more variants using bit-compacted tag, and `u32` mintability tokens.
 }
@@ -170,12 +194,24 @@ pub enum Mintable {
 /// Asset represents some sort of commodity or value.
 /// All possible variants of [`Asset`] entity's components.
 #[derive(
-    Debug, Clone, PartialEq, Eq, Getters, Decode, Encode, Deserialize, Serialize, IntoSchema,
+    Debug,
+    Display,
+    Clone,
+    PartialEq,
+    Eq,
+    Getters,
+    Decode,
+    Encode,
+    Deserialize,
+    Serialize,
+    IntoSchema,
 )]
 #[getset(get = "pub")]
-#[cfg_attr(feature = "ffi", iroha_ffi::ffi_bindgen)]
+#[cfg_attr(feature = "ffi_api", iroha_ffi::ffi_bindgen)]
+#[display(fmt = "{id}: {value}")]
 pub struct Asset {
     /// Component Identification.
+    #[getset(skip)]
     id: <Self as Identifiable>::Id,
     /// Asset's Quantity.
     value: AssetValue,
@@ -184,6 +220,7 @@ pub struct Asset {
 /// Asset's inner value type.
 #[derive(
     Debug,
+    Display,
     Clone,
     Copy,
     PartialEq,
@@ -199,25 +236,42 @@ pub struct Asset {
 )]
 pub enum AssetValueType {
     /// Asset's Quantity.
+    #[display(fmt = "q")]
     Quantity,
     /// Asset's Big Quantity.
+    #[display(fmt = "Q")]
     BigQuantity,
     /// Decimal quantity with fixed precision
+    #[display(fmt = "f")]
     Fixed,
     /// Asset's key-value structured data.
+    #[display(fmt = "s")]
     Store,
 }
 
 /// Asset's inner value.
 #[derive(
-    Debug, Clone, PartialEq, Eq, Decode, Encode, Deserialize, Serialize, FromVariant, IntoSchema,
+    Debug,
+    Display,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    Deserialize,
+    Serialize,
+    FromVariant,
+    IntoSchema,
 )]
 pub enum AssetValue {
     /// Asset's Quantity.
+    #[display(fmt = "{_0}q")]
     Quantity(u32),
-    /// Asset's Big Quantity.
+    /// Asset's Big Quantity
+    #[display(fmt = "{_0}Q")]
     BigQuantity(u128),
     /// Asset's Decimal Quantity.
+    #[display(fmt = "{_0}f")]
     Fixed(fixed::Fixed),
     /// Asset's key-value structured data.
     Store(Metadata),
@@ -247,14 +301,14 @@ impl AssetValue {
 impl PartialOrd for Asset {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.id.cmp(&other.id))
+        Some(self.cmp(other))
     }
 }
 
 impl Ord for Asset {
     #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
-        self.id.cmp(&other.id)
+        self.id().cmp(other.id())
     }
 }
 
@@ -305,6 +359,7 @@ impl_try_as_for_asset_value! {
 #[derive(
     Debug,
     Clone,
+    Display,
     PartialEq,
     Eq,
     PartialOrd,
@@ -316,6 +371,7 @@ impl_try_as_for_asset_value! {
     Serialize,
     IntoSchema,
 )]
+#[display(fmt = "{name}#{domain_id}")]
 pub struct DefinitionId {
     /// Asset's name.
     pub name: Name,
@@ -326,6 +382,7 @@ pub struct DefinitionId {
 /// Identification of an Asset's components include Entity Id ([`Asset::Id`]) and [`Account::Id`].
 #[derive(
     Debug,
+    Display,
     Clone,
     PartialEq,
     Eq,
@@ -338,6 +395,7 @@ pub struct DefinitionId {
     Serialize,
     IntoSchema,
 )]
+#[display(fmt = "{definition_id}@{account_id}")] // TODO: change this?
 pub struct Id {
     /// Entity Identification.
     pub definition_id: <AssetDefinition as Identifiable>::Id,
@@ -347,7 +405,10 @@ pub struct Id {
 
 /// Builder which can be submitted in a transaction to create a new [`AssetDefinition`]
 #[allow(clippy::multiple_inherent_impl)]
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, Deserialize, Serialize, IntoSchema)]
+#[derive(
+    Debug, Display, Clone, PartialEq, Eq, Decode, Encode, Deserialize, Serialize, IntoSchema,
+)]
+#[display(fmt = "{id} {mintable}{value_type}")]
 pub struct NewAssetDefinition {
     id: <AssetDefinition as Identifiable>::Id,
     value_type: AssetValueType,
@@ -355,10 +416,24 @@ pub struct NewAssetDefinition {
     metadata: Metadata,
 }
 
+impl Identifiable for NewAssetDefinition {
+    type Id = <AssetDefinition as Identifiable>::Id;
+
+    fn id(&self) -> &Self::Id {
+        &self.id
+    }
+}
+
+impl HasMetadata for NewAssetDefinition {
+    fn metadata(&self) -> &Metadata {
+        &self.metadata
+    }
+}
+
 impl PartialOrd for NewAssetDefinition {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.id.cmp(&other.id))
+        Some(self.cmp(other))
     }
 }
 
@@ -394,7 +469,7 @@ impl NewAssetDefinition {
     }
 }
 
-#[cfg_attr(feature = "ffi", iroha_ffi::ffi_bindgen)]
+#[cfg_attr(feature = "ffi_api", iroha_ffi::ffi_bindgen)]
 impl NewAssetDefinition {
     /// Set mintability to [`Mintable::Once`]
     #[inline]
@@ -413,34 +488,34 @@ impl NewAssetDefinition {
     }
 }
 
-#[cfg_attr(feature = "ffi", iroha_ffi::ffi_bindgen)]
+#[cfg_attr(feature = "ffi_api", iroha_ffi::ffi_bindgen)]
 impl AssetDefinition {
     /// Construct builder for [`AssetDefinition`] identifiable by [`Id`].
     #[must_use]
     #[inline]
-    pub fn quantity(id: <Self as Identifiable>::Id) -> <Self as Identifiable>::RegisteredWith {
-        <Self as Identifiable>::RegisteredWith::new(id, AssetValueType::Quantity)
+    pub fn quantity(id: <Self as Identifiable>::Id) -> <Self as Registered>::With {
+        <Self as Registered>::With::new(id, AssetValueType::Quantity)
     }
 
     /// Construct builder for [`AssetDefinition`] identifiable by [`Id`].
     #[must_use]
     #[inline]
-    pub fn big_quantity(id: <Self as Identifiable>::Id) -> <Self as Identifiable>::RegisteredWith {
-        <Self as Identifiable>::RegisteredWith::new(id, AssetValueType::BigQuantity)
+    pub fn big_quantity(id: <Self as Identifiable>::Id) -> <Self as Registered>::With {
+        <Self as Registered>::With::new(id, AssetValueType::BigQuantity)
     }
 
     /// Construct builder for [`AssetDefinition`] identifiable by [`Id`].
     #[must_use]
     #[inline]
-    pub fn fixed(id: <Self as Identifiable>::Id) -> <Self as Identifiable>::RegisteredWith {
-        <Self as Identifiable>::RegisteredWith::new(id, AssetValueType::Fixed)
+    pub fn fixed(id: <Self as Identifiable>::Id) -> <Self as Registered>::With {
+        <Self as Registered>::With::new(id, AssetValueType::Fixed)
     }
 
     /// Construct builder for [`AssetDefinition`] identifiable by [`Id`].
     #[must_use]
     #[inline]
-    pub fn store(id: <Self as Identifiable>::Id) -> <Self as Identifiable>::RegisteredWith {
-        <Self as Identifiable>::RegisteredWith::new(id, AssetValueType::Store)
+    pub fn store(id: <Self as Identifiable>::Id) -> <Self as Registered>::With {
+        <Self as Registered>::With::new(id, AssetValueType::Store)
     }
 }
 
@@ -451,23 +526,23 @@ impl AssetDefinition {
     /// # Errors
     /// If the [`AssetDefinition`] is not `Mintable::Once`.
     #[inline]
-    pub fn forbid_minting(&mut self) -> Result<(), super::MintabilityError> {
+    pub fn forbid_minting(&mut self) -> Result<(), MintabilityError> {
         if self.mintable == Mintable::Once {
             self.mintable = Mintable::Not;
             Ok(())
         } else {
-            Err(super::MintabilityError::ForbidMintOnMintable)
+            Err(MintabilityError::ForbidMintOnMintable)
         }
     }
 }
 
-#[cfg_attr(feature = "ffi", iroha_ffi::ffi_bindgen)]
+#[cfg_attr(feature = "ffi_api", iroha_ffi::ffi_bindgen)]
 impl Asset {
     /// Constructor
     pub fn new(
         id: <Asset as Identifiable>::Id,
         value: impl Into<AssetValue>,
-    ) -> <Self as Identifiable>::RegisteredWith {
+    ) -> <Self as Registered>::With {
         Self {
             id,
             value: value.into(),
@@ -508,13 +583,6 @@ impl DefinitionId {
     pub const fn new(name: Name, domain_id: <Domain as Identifiable>::Id) -> Self {
         Self { name, domain_id }
     }
-
-    pub(crate) const fn empty() -> Self {
-        Self {
-            name: Name::empty(),
-            domain_id: DomainId::empty(),
-        }
-    }
 }
 
 impl Id {
@@ -533,12 +601,26 @@ impl Id {
 
 impl Identifiable for Asset {
     type Id = Id;
-    type RegisteredWith = Self;
+
+    fn id(&self) -> &Self::Id {
+        &self.id
+    }
+}
+
+impl Registered for Asset {
+    type With = Self;
 }
 
 impl Identifiable for AssetDefinition {
     type Id = DefinitionId;
-    type RegisteredWith = NewAssetDefinition;
+
+    fn id(&self) -> &Self::Id {
+        &self.id
+    }
+}
+
+impl Registered for AssetDefinition {
+    type With = NewAssetDefinition;
 }
 
 impl FromIterator<Asset> for Value {
@@ -565,7 +647,9 @@ impl FromStr for DefinitionId {
 
     fn from_str(string: &str) -> Result<Self, Self::Err> {
         if string.is_empty() {
-            return Ok(Self::empty());
+            return Err(ParseError {
+                reason: "`DefinitionId` cannot be empty",
+            });
         }
 
         let vector: Vec<&str> = string.split('#').collect();
@@ -581,22 +665,10 @@ impl FromStr for DefinitionId {
     }
 }
 
-impl Display for DefinitionId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}#{}", self.name, self.domain_id)
-    }
-}
-
-impl Display for Id {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}@{}", self.definition_id, self.account_id)
-    }
-}
-
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
 pub mod prelude {
     pub use super::{
         Asset, AssetDefinition, AssetDefinitionEntry, AssetValue, AssetValueType,
-        DefinitionId as AssetDefinitionId, Id as AssetId, Mintable,
+        DefinitionId as AssetDefinitionId, Id as AssetId, MintabilityError, Mintable,
     };
 }

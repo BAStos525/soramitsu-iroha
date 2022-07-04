@@ -7,19 +7,17 @@ use iroha_core::{
     smartcontracts::{
         permissions::{
             prelude::*, HasToken, IsAllowed, IsInstructionAllowedBoxed, IsQueryAllowedBoxed,
-            ValidatorApplyOr, ValidatorBuilder,
         },
         Evaluate,
     },
-    wsv::WorldTrait,
 };
 use iroha_data_model::{isi::*, prelude::*};
 use iroha_macro::error::ErrorTryFromEnum;
-use once_cell::sync::Lazy;
+use serde::Serialize;
 
 macro_rules! impl_from_item_for_instruction_validator_box {
     ( $ty:ty ) => {
-        impl<W: WorldTrait> From<$ty> for IsInstructionAllowedBoxed<W> {
+        impl From<$ty> for IsInstructionAllowedBoxed {
             fn from(validator: $ty) -> Self {
                 Box::new(validator)
             }
@@ -29,7 +27,7 @@ macro_rules! impl_from_item_for_instruction_validator_box {
 
 macro_rules! impl_from_item_for_query_validator_box {
     ( $ty:ty ) => {
-        impl<W: WorldTrait> From<$ty> for IsQueryAllowedBoxed<W> {
+        impl From<$ty> for IsQueryAllowedBoxed {
             fn from(validator: $ty) -> Self {
                 Box::new(validator)
             }
@@ -39,15 +37,15 @@ macro_rules! impl_from_item_for_query_validator_box {
 
 macro_rules! impl_from_item_for_granted_token_validator_box {
     ( $ty:ty ) => {
-        impl<W: WorldTrait> From<$ty> for HasTokenBoxed<W> {
+        impl From<$ty> for HasTokenBoxed {
             fn from(validator: $ty) -> Self {
                 Box::new(validator)
             }
         }
 
-        impl<W: WorldTrait> From<$ty> for IsInstructionAllowedBoxed<W> {
+        impl From<$ty> for IsInstructionAllowedBoxed {
             fn from(validator: $ty) -> Self {
-                let validator: HasTokenBoxed<W> = validator.into();
+                let validator: HasTokenBoxed = validator.into();
                 Box::new(validator)
             }
         }
@@ -56,15 +54,15 @@ macro_rules! impl_from_item_for_granted_token_validator_box {
 
 macro_rules! impl_from_item_for_grant_instruction_validator_box {
     ( $ty:ty ) => {
-        impl<W: WorldTrait> From<$ty> for IsGrantAllowedBoxed<W> {
+        impl From<$ty> for IsGrantAllowedBoxed {
             fn from(validator: $ty) -> Self {
                 Box::new(validator)
             }
         }
 
-        impl<W: WorldTrait> From<$ty> for IsInstructionAllowedBoxed<W> {
+        impl From<$ty> for IsInstructionAllowedBoxed {
             fn from(validator: $ty) -> Self {
-                let validator: IsGrantAllowedBoxed<W> = validator.into();
+                let validator: IsGrantAllowedBoxed = validator.into();
                 Box::new(validator)
             }
         }
@@ -73,15 +71,15 @@ macro_rules! impl_from_item_for_grant_instruction_validator_box {
 
 macro_rules! impl_from_item_for_revoke_instruction_validator_box {
     ( $ty:ty ) => {
-        impl<W: WorldTrait> From<$ty> for IsRevokeAllowedBoxed<W> {
+        impl From<$ty> for IsRevokeAllowedBoxed {
             fn from(validator: $ty) -> Self {
                 Box::new(validator)
             }
         }
 
-        impl<W: WorldTrait> From<$ty> for IsInstructionAllowedBoxed<W> {
+        impl From<$ty> for IsInstructionAllowedBoxed {
             fn from(validator: $ty) -> Self {
-                let validator: IsRevokeAllowedBoxed<W> = validator.into();
+                let validator: IsRevokeAllowedBoxed = validator.into();
                 Box::new(validator)
             }
         }
@@ -110,6 +108,8 @@ macro_rules! declare_token {
         $string:tt // Token name
     ) => {
 
+        // For tokens with no parameters
+        #[allow(missing_copy_implementations)]
         $(#[$outer_meta])*
         ///
         /// A wrapper around [PermissionToken](iroha_data_model::permissions::PermissionToken).
@@ -154,6 +154,7 @@ macro_rules! declare_token {
 
             /// Constructor
             #[inline]
+            #[allow(clippy::new_without_default)] // For tokens with no parameters
             pub fn new($($param_name: $param_typ),*) -> Self {
                 Self {
                     $($param_name,)*
@@ -162,6 +163,7 @@ macro_rules! declare_token {
         }
 
         impl From<$ident> for iroha_data_model::permissions::PermissionToken {
+            #[allow(unused)] // `value` can be unused if token has no params
             fn from(value: $ident) -> Self {
                 iroha_data_model::permissions::PermissionToken::new($ident::name().clone())
                     .with_params([
@@ -173,9 +175,10 @@ macro_rules! declare_token {
         impl TryFrom<iroha_data_model::permissions::PermissionToken> for $ident {
             type Error = PredefinedTokenConversionError;
 
+            #[allow(unused)] // `params` can be unused if token has none
             fn try_from(
                 token: iroha_data_model::permissions::PermissionToken
-            ) -> Result<Self, Self::Error> {
+            ) -> std::result::Result<Self, Self::Error> {
                 if token.name() != Self::name() {
                     return Err(Self::Error::Name(token.name().clone()))
                 }

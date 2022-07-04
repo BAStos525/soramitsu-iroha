@@ -4,6 +4,7 @@
 use alloc::{format, string::String, vec::Vec};
 use core::cmp::Ordering;
 
+use derive_more::Display;
 use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_schema::IntoSchema;
 use parity_scale_codec::{Decode, Encode};
@@ -15,7 +16,10 @@ use crate::{
 };
 
 /// Block header
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, Deserialize, Serialize, IntoSchema)]
+#[derive(
+    Debug, Clone, Display, PartialEq, Eq, Decode, Encode, Deserialize, Serialize, IntoSchema,
+)]
+#[display(fmt = "Block №{height} (hash: {transactions_hash});")]
 pub struct BlockHeaderValue {
     /// Unix time (in milliseconds) of block forming by a peer.
     pub timestamp: u128,
@@ -30,6 +34,8 @@ pub struct BlockHeaderValue {
     pub rejected_transactions_hash: HashOf<MerkleTree<VersionedTransaction>>,
     /// Hashes of the blocks that were rejected by consensus.
     pub invalidated_blocks_hashes: Vec<Hash>,
+    /// Hash of the most recent block
+    pub current_block_hash: Hash,
 }
 
 impl PartialOrd for BlockHeaderValue {
@@ -45,7 +51,10 @@ impl Ord for BlockHeaderValue {
 }
 
 /// Representation of block on blockchain
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, Serialize, Deserialize, IntoSchema)]
+#[derive(
+    Debug, Display, Clone, PartialEq, Eq, Decode, Encode, Serialize, Deserialize, IntoSchema,
+)]
+#[display(fmt = "({})", header)]
 pub struct BlockValue {
     /// Header
     pub header: BlockHeaderValue,
@@ -55,16 +64,6 @@ pub struct BlockValue {
     pub rejected_transactions: Vec<VersionedRejectedTransaction>,
     /// Event recommendations
     pub event_recommendations: Vec<Event>,
-}
-
-impl BlockValue {
-    /// ...
-    pub fn nested_len(&self) -> usize {
-        self.event_recommendations.len()
-            + self.transactions.len()
-            + self.rejected_transactions.len()
-            + self.header.invalidated_blocks_hashes.len()
-    }
 }
 
 impl PartialOrd for BlockValue {

@@ -16,8 +16,6 @@ concurrency:
   group: ${{ github.head_ref }}
   cancel-in-progress: true
 
-# gjgjg
-
 env:
   CARGO_TERM_COLOR: always
 

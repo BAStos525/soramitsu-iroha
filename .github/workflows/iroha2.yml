@@ -1,5 +1,7 @@
 name: I2::Release::Deploy
 
+# stop previous
+
 on:
   push:
     branches: [feature/DOPS-1786/gh-actions-concurrency]

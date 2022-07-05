@@ -6,7 +6,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow-iroha2-dev }}-${{ github.ref }}
-  cancel-in-progress: true    
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always

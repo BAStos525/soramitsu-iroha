@@ -15,8 +15,6 @@ env:
 # no point in burning our AWS self-hosted runners' time. Hence
 # `ubuntu-latest` and not `[self-hosted, Linux]`.
 
-## stop me!!!
-
 jobs:
   deploy:
     runs-on: ubuntu-latest

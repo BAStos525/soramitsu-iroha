@@ -2,7 +2,11 @@ name: I2::Dev::Deploy
 
 on:
   push:
-    branches: [iroha2-dev]
+    branches: [feature/DOPS-1786/gh-actions-concurrency]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true    
 
 env:
   CARGO_TERM_COLOR: always

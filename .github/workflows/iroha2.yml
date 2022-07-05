@@ -1,6 +1,6 @@
 name: I2::Release::Deploy
 
-# stop previous
+# stop previous!
 
 on:
   push:

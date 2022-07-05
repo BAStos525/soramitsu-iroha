@@ -2,10 +2,10 @@ name: I2::Release::Deploy
 
 on:
   push:
-    branches: [iroha2]
+    branches: [feature/DOPS-1786/gh-actions-concurrency]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow-iroha2 }}-${{ github.ref }}
   cancel-in-progress: true    
 
 env:

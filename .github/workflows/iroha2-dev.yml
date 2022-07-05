@@ -5,7 +5,7 @@ on:
     branches: [feature/DOPS-1786/gh-actions-concurrency]
 
 concurrency:
-  group: ${{ github.workflow-dev }}-${{ github.ref }}
+  group: ${{ github.workflow-iroha2-dev }}-${{ github.ref }}
   cancel-in-progress: true    
 
 env:

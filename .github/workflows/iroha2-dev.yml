@@ -48,29 +48,29 @@ jobs:
           context: .
           file: Dockerfile.build
 
-      - name: build iroha2:dev docker image
-        run: |
-          docker build -f Dockerfile -t hyperledger/iroha2:dev .
-      - name: Login to DockerHub
-        uses: docker/login-action@v1
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: push iroha2:dev docker image
-        run: |
-          docker push hyperledger/iroha2:dev
+      # - name: build iroha2:dev docker image
+      #   run: |
+      #     docker build -f Dockerfile -t hyperledger/iroha2:dev .
+      # - name: Login to DockerHub
+      #   uses: docker/login-action@v1
+      #   with:
+      #     username: ${{ secrets.DOCKERHUB_USERNAME }}
+      #     password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # - name: push iroha2:dev docker image
+      #   run: |
+      #     docker push hyperledger/iroha2:dev
 
-      - name: Build and push docker image (load-rs:dev)
-        run: |
-          sleep 10s
-          echo "wait to other workflow"
-      - uses: convictional/trigger-workflow-and-wait@v1.6.2
-        with:
-          owner: soramitsu
-          repo: iroha2-longevity-load-rs
-          github_token: ${{ secrets.G_ACCESS_TOKEN }}
-          workflow_file_name: load-rs-push-from-dev.yaml
-          ref: dev
+      # - name: Build and push docker image (load-rs:dev)
+      #   run: |
+      #     sleep 10s
+      #     echo "wait to other workflow"
+      # - uses: convictional/trigger-workflow-and-wait@v1.6.2
+      #   with:
+      #     owner: soramitsu
+      #     repo: iroha2-longevity-load-rs
+      #     github_token: ${{ secrets.G_ACCESS_TOKEN }}
+      #     workflow_file_name: load-rs-push-from-dev.yaml
+      #     ref: dev
 
 
   archive-and-publish-schema:

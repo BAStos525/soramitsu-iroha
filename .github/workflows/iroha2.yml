@@ -4,7 +4,7 @@ name: I2::Release::Deploy
 
 on:
   push:
-    branches: [feature/DOPS-1786/gh-actions-concurrency]
+    branches: [iroha2]
 
 concurrency:
   group: I2::Release::Deploy-${{ github.workflow }}-${{ github.ref }}

@@ -47,7 +47,7 @@ jobs:
     # sometimes, works other times it doesn't. In the interest of not
     # burning CI hours, we will instead run these tests locally, and
     # push the docker image from main only after QA passes.
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
     if: ${{ false }}
     container:
       image: 7272721/i2-ci:latest

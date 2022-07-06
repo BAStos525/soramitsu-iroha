@@ -13,7 +13,7 @@ env:
 
 jobs:
   cli-test:
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
     container:
       image: 7272721/i2-ci:latest
     steps:

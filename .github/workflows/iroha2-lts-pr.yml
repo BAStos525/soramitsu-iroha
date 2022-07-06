@@ -4,12 +4,16 @@ on:
   pull_request:
     branches: [iroha2-lts]
 
+concurrency: 
+  group: ${{ github.head_ref }}
+  cancel-in-progress: true    
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   cli-test:
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
     container:
       image: 7272721/i2-ci:latest
     steps:

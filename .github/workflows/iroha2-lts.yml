@@ -4,12 +4,16 @@ on:
   push:
     branches: [iroha2-lts]
 
+concurrency:
+  group: I2::Release::Deploy-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true    
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   deploy:
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     container:
       image: 7272721/i2-ci:latest
     steps:

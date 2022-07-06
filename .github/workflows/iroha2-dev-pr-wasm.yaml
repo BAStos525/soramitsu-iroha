@@ -4,9 +4,13 @@ defaults:
   run:
     working-directory: wasm
 
+concurrency: 
+  group: ${{ github.head_ref }}
+  cancel-in-progress: true
+
 on:
   pull_request:
-    branches: [iroha2-dev]
+    branches: [feature/DOPS-1786/gh-actions-concurrency]
     paths:
       - "wasm/**.rs"
       - "wasm/**.json"
@@ -20,7 +24,7 @@ env:
 
 jobs:
   wasm32:
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     container:
       image: 7272721/i2-ci:latest
     steps:

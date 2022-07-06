@@ -1,8 +1,8 @@
 name: I2::Dev::Tests
-############
+
 on:
   pull_request_target:
-    branches: [feature/DOPS-1789]
+    branches: [iroha2-dev]
     paths:
       - "**.rs"
       - "**.json"

@@ -6,7 +6,7 @@ concurrency:
 
 on:
   pull_request:
-    branches: [feature/DOPS-1786/gh-actions-concurrency]
+    branches: [iroha2-dev]
     paths:
       - "**.rs"
       - "**.json"

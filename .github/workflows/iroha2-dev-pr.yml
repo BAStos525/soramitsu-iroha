@@ -76,11 +76,11 @@ jobs:
           toolchain: stable
           override: true
           components: llvm-tools-preview
-      - uses: taiki-e/install-action@cargo-llvm-cov      
+      - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: Swatinem/rust-cache@v1
       - name: Run tests and generate lcov report
       #  if: steps.check_files.outputs.files_exists == 'false'
-        run: mold --run cargo llvm-cov --all-features --workspace --lcov --output-path lcov.xml        
+        run: mold --run cargo llvm-cov --all-features --workspace --lcov --output-path lcov.xml
       # - name: Upload coverage to Codecov
       #   uses: codecov/codecov-action@v3
       #   with:
@@ -94,7 +94,10 @@ jobs:
       #     source: 'lcov.xml'
       #     dest: 's3://infra-prod-docs/hyperledger/iroha2/codecov/lcov-${{ steps.hash.outputs.hash }}.xml'
 
-      - uses: actions/upload-artifact@v2
+      - name: Debug 1
+        run: run ls -la .
+
+      - uses: actions/upload-artifact@v3
         with:
           name: iroha2-coverage
           path: lcov.xml
@@ -104,11 +107,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
       - name: Download artifacts
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
+      - name: Debug 2
+        run: run ls -la .
       - name: Upload to Codecov
-        uses: codecov/codecov-action@v1          
+        uses: codecov/codecov-action@v3
+        with:
+          file: lcov.xml
+          fail_ci_if_error: true     
 
 
   # integration_tests:

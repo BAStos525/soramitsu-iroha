@@ -95,7 +95,7 @@ jobs:
       #     dest: 's3://infra-prod-docs/hyperledger/iroha2/codecov/lcov-${{ steps.hash.outputs.hash }}.xml'
 
       - name: Debug 1
-        run: run ls -la .
+        run:  ls -la .
 
       - uses: actions/upload-artifact@v3
         with:
@@ -111,7 +111,7 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v3
       - name: Debug 2
-        run: run ls -la .
+        run:  ls -la .
       - name: Upload to Codecov
         uses: codecov/codecov-action@v3
         with:

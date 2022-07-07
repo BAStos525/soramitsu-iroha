@@ -77,7 +77,7 @@ jobs:
         uses: theowenyoung/folder-hash@v2.0.1
         with:
           path: |
-           .
+            .
 
       - name: Download artifacts
         with:

@@ -103,8 +103,14 @@ jobs:
           toolchain: stable
           override: true
           components: llvm-tools-preview
+        if: steps.check_files.outputs.files_exists == 'false'
+
       - uses: taiki-e/install-action@cargo-llvm-cov
+        if: steps.check_files.outputs.files_exists == 'false'
+        
       - uses: Swatinem/rust-cache@v1
+        if: steps.check_files.outputs.files_exists == 'false'
+
       - name: Run tests and generate lcov coverage report
         if: steps.check_files.outputs.files_exists == 'false'
         run: mold --run cargo llvm-cov --all-features --workspace --lcov --output-path coverage.xml

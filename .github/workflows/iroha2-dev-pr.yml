@@ -71,6 +71,28 @@ jobs:
       #   with:
       #     files: "lcov.xml"
       #   # TODO Remove these steps #2165 ??
+
+      - name: Find hash
+        id: hash
+        uses: theowenyoung/folder-hash@v2.0.1
+        with:
+          path: |
+           .
+
+      - name: Download artifacts
+        with:
+          name: coverage-${{ steps.hash.outputs.hash }}.xml
+        continue-on-error: true
+
+      - name: Debug 1
+        run:  ls -la .
+
+      - name: Check coverage file existence
+        id: check_files
+        uses: andstor/file-existence-action@v1
+        with:
+          files: "coverage-${{ steps.hash.outputs.hash }}.xml"          
+
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
@@ -79,8 +101,8 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: Swatinem/rust-cache@v1
       - name: Run tests and generate lcov report
-      #  if: steps.check_files.outputs.files_exists == 'false'
-        run: mold --run cargo llvm-cov --all-features --workspace --lcov --output-path lcov.xml
+        if: steps.check_files.outputs.files_exists == 'false'
+        run: mold --run cargo llvm-cov --all-features --workspace --lcov --output-path coverage.xml
       # - name: Upload coverage to Codecov
       #   uses: codecov/codecov-action@v3
       #   with:
@@ -94,29 +116,37 @@ jobs:
       #     source: 'lcov.xml'
       #     dest: 's3://infra-prod-docs/hyperledger/iroha2/codecov/lcov-${{ steps.hash.outputs.hash }}.xml'
 
-      - name: Debug 1
-        run:  ls -la .
 
-      - uses: actions/upload-artifact@v3
-        with:
-          name: iroha2-coverage.xml
-          path: lcov.xml
-
-  upload-to-codecov:
-    needs: [tests_with_coverage]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-      - name: Download artifacts
-        uses: actions/download-artifact@v3
       - name: Debug 2
         run:  ls -la .
       - name: Upload to Codecov
         uses: codecov/codecov-action@v3
         with:
-          file: iroha2-coverage.xml
-          fail_ci_if_error: true     
+          file: lcov.xml
+          fail_ci_if_error: true   
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: coverage-${{ steps.hash.outputs.hash }}.xml
+          path: coverage.xml
+
+  # upload-to-codecov:
+  #   needs: [tests_with_coverage]
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v3
+  #     # - name: Download artifacts
+  #     #   with:
+  #     #     name: iroha2-coverage.xml
+  #     #   uses: actions/download-artifact@v3
+  #     - name: Debug 2
+  #       run:  ls -la .
+  #     - name: Upload to Codecov
+  #       uses: codecov/codecov-action@v3
+  #       with:
+  #         file: lcov.xml
+  #         fail_ci_if_error: true     
 
 
   # integration_tests:

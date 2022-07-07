@@ -1,7 +1,7 @@
 name: I2::Dev::Tests
 
 on:
-  pull_request_target:
+  pull_request:
     branches: [iroha2-dev]
     paths:
       - "**.rs"
@@ -20,28 +20,28 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  checks:
-    runs-on: ubuntu-latest
-    container:
-      image: 7272721/i2-ci:latest
-    steps:
-      - uses: actions/checkout@v2
-      - uses: Swatinem/rust-cache@v1
-      - name: Documentation check
-        if: always()
-        run: |
-          cargo doc --no-deps --quiet
-          ./scripts/check.sh docs
-      - name: Check genesis
-        if: always()
-        run: |
-          ./scripts/check.sh genesis
-      - name: Wasm build check
-        if: always()
-        env:
-          RUSTC_BOOTSTRAP: 1
-        working-directory: wasm
-        run: mold --run cargo build --target wasm32-unknown-unknown --quiet
+  # checks:
+  #   runs-on: ubuntu-latest
+  #   container:
+  #     image: 7272721/i2-ci:latest
+  #   steps:
+  #     - uses: actions/checkout@v2
+  #     - uses: Swatinem/rust-cache@v1
+  #     - name: Documentation check
+  #       if: always()
+  #       run: |
+  #         cargo doc --no-deps --quiet
+  #         ./scripts/check.sh docs
+  #     - name: Check genesis
+  #       if: always()
+  #       run: |
+  #         ./scripts/check.sh genesis
+  #     - name: Wasm build check
+  #       if: always()
+  #       env:
+  #         RUSTC_BOOTSTRAP: 1
+  #       working-directory: wasm
+  #       run: mold --run cargo build --target wasm32-unknown-unknown --quiet
 
   tests_with_coverage:
     runs-on: ubuntu-latest
@@ -50,62 +50,78 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-      - name: Find hash
-        id: hash
-        uses: theowenyoung/folder-hash@v2.0.1
-        with:
-          path: |
-            .
-      - name: Copy a file from s3
-        id: copy
-        uses: prewk/s3-cp-action@v2
-        continue-on-error: true
-        with:
-          aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          source: 's3://infra-prod-docs/hyperledger/iroha2/codecov/lcov-${{ steps.hash.outputs.hash }}.xml'
-          dest: 'lcov.xml'
-      - name: Check coverage file existence
-        id: check_files
-        uses: andstor/file-existence-action@v1
-        with:
-          files: "lcov.xml"
-        # TODO Remove these steps #2165 ??
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-          components: llvm-tools-preview
-      - uses: taiki-e/install-action@cargo-llvm-cov      
-      - uses: Swatinem/rust-cache@v1
+      # - name: Find hash
+      #   id: hash
+      #   uses: theowenyoung/folder-hash@v2.0.1
+      #   with:
+      #     path: |
+      #       .
+      # - name: Copy a file from s3
+      #   id: copy
+      #   uses: prewk/s3-cp-action@v2
+      #   continue-on-error: true
+      #   with:
+      #     aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      #     aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      #     source: 's3://infra-prod-docs/hyperledger/iroha2/codecov/lcov-${{ steps.hash.outputs.hash }}.xml'
+      #     dest: 'lcov.xml'
+      # - name: Check coverage file existence
+      #   id: check_files
+      #   uses: andstor/file-existence-action@v1
+      #   with:
+      #     files: "lcov.xml"
+      #   # TODO Remove these steps #2165 ??
+      # - uses: actions-rs/toolchain@v1
+      #   with:
+      #     toolchain: stable
+      #     override: true
+      #     components: llvm-tools-preview
+      # - uses: taiki-e/install-action@cargo-llvm-cov      
+      # - uses: Swatinem/rust-cache@v1
       - name: Run tests and generate lcov report
-        if: steps.check_files.outputs.files_exists == 'false'
+      #  if: steps.check_files.outputs.files_exists == 'false'
         run: mold --run cargo llvm-cov --all-features --workspace --lcov --output-path lcov.xml        
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
-        with:
-          file: lcov.xml
-          fail_ci_if_error: true
-      - name: Copy a file to s3
-        uses: prewk/s3-cp-action@v2
-        with:
-          aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          source: 'lcov.xml'
-          dest: 's3://infra-prod-docs/hyperledger/iroha2/codecov/lcov-${{ steps.hash.outputs.hash }}.xml'
+      # - name: Upload coverage to Codecov
+      #   uses: codecov/codecov-action@v3
+      #   with:
+      #     file: lcov.xml
+      #     fail_ci_if_error: true
+      # - name: Copy a file to s3
+      #   uses: prewk/s3-cp-action@v2
+      #   with:
+      #     aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      #     aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      #     source: 'lcov.xml'
+      #     dest: 's3://infra-prod-docs/hyperledger/iroha2/codecov/lcov-${{ steps.hash.outputs.hash }}.xml'
 
+      - uses: actions/upload-artifact@v2
+        with:
+          name: iroha2-coverage
+          path: lcov.xml
 
-  integration_tests:
+  upload-to-codecov:
+    needs: [tests_with_coverage]
     runs-on: ubuntu-latest
-    container:
-      image: 7272721/i2-ci:latest
-    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v2
-      - uses: Swatinem/rust-cache@v1
-      - name: Run tests
-        if: always()
-        run: |
-          mold --run cargo test --test '*' --all-features -- \
-          integration:: \
-          --skip unstable_network
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Download artifacts
+        uses: actions/download-artifact@v2
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v1          
+
+
+  # integration_tests:
+  #   runs-on: ubuntu-latest
+  #   container:
+  #     image: 7272721/i2-ci:latest
+  #   timeout-minutes: 60
+  #   steps:
+  #     - uses: actions/checkout@v2
+  #     - uses: Swatinem/rust-cache@v1
+  #     - name: Run tests
+  #       if: always()
+  #       run: |
+  #         mold --run cargo test --test '*' --all-features -- \
+  #         integration:: \
+  #         --skip unstable_network

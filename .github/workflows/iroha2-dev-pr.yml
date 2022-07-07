@@ -81,6 +81,7 @@ jobs:
 
       - name: Download artifacts
         with:
+          uses: actions/download-artifact@v3
           name: coverage-${{ steps.hash.outputs.hash }}.xml
         continue-on-error: true
 
@@ -122,7 +123,7 @@ jobs:
       - name: Upload to Codecov
         uses: codecov/codecov-action@v3
         with:
-          file: lcov.xml
+          file: coverage.xml
           fail_ci_if_error: true   
 
       - uses: actions/upload-artifact@v3

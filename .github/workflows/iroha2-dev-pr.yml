@@ -43,7 +43,7 @@ jobs:
   #       working-directory: wasm
   #       run: mold --run cargo build --target wasm32-unknown-unknown --quiet
 
-  check_coverage_artifacts:
+  tests_with_coverage:
     runs-on: ubuntu-latest
     container:
       image: 7272721/i2-ci:latest

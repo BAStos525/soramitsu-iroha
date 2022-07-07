@@ -86,7 +86,7 @@ jobs:
     #       workflow_conclusion: success
     #      name: coverage-${{ steps.hash.outputs.hash }}.xml
     #     pr: ${{github.event.pull_request.number}}
-    #      check_artifacts:  true
+          check_artifacts:  true
         continue-on-error: true
 
       - name: Debug 1
@@ -124,7 +124,7 @@ jobs:
 
       - name: Debug 2
         run:  ls -la .
-      - name: Upload to Codecov
+      - name: Upload to codecov
         uses: codecov/codecov-action@v3
         with:
           file: coverage.xml

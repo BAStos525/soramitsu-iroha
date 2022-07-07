@@ -43,7 +43,7 @@ jobs:
   #       working-directory: wasm
   #       run: mold --run cargo build --target wasm32-unknown-unknown --quiet
 
-  tests_with_coverage:
+  check_coverage_artifacts:
     runs-on: ubuntu-latest
     container:
       image: 7272721/i2-ci:latest
@@ -98,21 +98,31 @@ jobs:
         with:
           files: "coverage-${{ steps.hash.outputs.hash }}.xml"          
 
+  tests_with_coverage:
+    needs: [check_coverage_artifacts]
+    if: steps.check_files.outputs.files_exists == 'false'
+    runs-on: ubuntu-latest
+    container:
+      image: 7272721/i2-ci:latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2  
+
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
           components: llvm-tools-preview
-        if: steps.check_files.outputs.files_exists == 'false'
+      #  if: steps.check_files.outputs.files_exists == 'false'
 
       - uses: taiki-e/install-action@cargo-llvm-cov
-        if: steps.check_files.outputs.files_exists == 'false'
+      #  if: steps.check_files.outputs.files_exists == 'false'
         
       - uses: Swatinem/rust-cache@v1
-        if: steps.check_files.outputs.files_exists == 'false'
+      #  if: steps.check_files.outputs.files_exists == 'false'
 
       - name: Run tests and generate lcov coverage report
-        if: steps.check_files.outputs.files_exists == 'false'
+      #  if: steps.check_files.outputs.files_exists == 'false'
         run: mold --run cargo llvm-cov --all-features --workspace --lcov --output-path coverage.xml
       # - name: Upload coverage to Codecov
       #   uses: codecov/codecov-action@v3

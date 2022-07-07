@@ -99,7 +99,7 @@ jobs:
 
       - uses: actions/upload-artifact@v3
         with:
-          name: lcov.xml
+          name: iroha2-coverage.xml
           path: lcov.xml
 
   upload-to-codecov:
@@ -115,7 +115,7 @@ jobs:
       - name: Upload to Codecov
         uses: codecov/codecov-action@v3
         with:
-          file: lcov.xml
+          file: iroha2-coverage.xml
           fail_ci_if_error: true     
 
 

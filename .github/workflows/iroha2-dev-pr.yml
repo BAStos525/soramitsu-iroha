@@ -82,7 +82,7 @@ jobs:
       - name: Download artifact
         uses: dawidd6/action-download-artifact@v2
         with:
-          workflow: ${{ github.event.workflow_run.workflow_id }}
+          workflow: "iroha2-dev-pr.yml"
           workflow_conclusion: success
           name: coverage-${{ steps.hash.outputs.hash }}.xml
           pr: ${{github.event.pull_request.number}}

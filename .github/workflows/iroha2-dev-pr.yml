@@ -80,8 +80,8 @@ jobs:
             .
 
       - name: Download artifacts
+        uses: actions/download-artifact@v3
         with:
-          uses: actions/download-artifact@v3
           name: coverage-${{ steps.hash.outputs.hash }}.xml
         continue-on-error: true
 

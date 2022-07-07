@@ -99,7 +99,7 @@ jobs:
 
       - uses: actions/upload-artifact@v3
         with:
-          name: iroha2-coverage
+          name: lcov.xml
           path: lcov.xml
 
   upload-to-codecov:

@@ -1,5 +1,5 @@
 name: I2::Dev::Static Analysis
-
+##
 on:
   pull_request:
     branches: [iroha2-dev]

@@ -1,11 +1,11 @@
 name: I2::Dev::Wasm
-#
+
 defaults:
   run:
     working-directory: wasm
 
 concurrency: 
-  group: I2::Dev::Wasm-${{ github.head_ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 on:

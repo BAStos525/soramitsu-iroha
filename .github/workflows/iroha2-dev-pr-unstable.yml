@@ -1,7 +1,7 @@
 name: I2::Dev::Tests-Unstable
-#
+
 concurrency: 
-  group: I2::Dev::Tests-Unstable-${{ github.head_ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 on:

@@ -5,7 +5,7 @@ on:
     branches: [iroha2-lts]
 
 concurrency:
-  group: I2::Release::Deploy-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true    
 
 env:

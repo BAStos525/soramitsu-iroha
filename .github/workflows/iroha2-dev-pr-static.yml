@@ -1,7 +1,7 @@
 name: I2::Dev::Static Analysis
-#№
+##
 concurrency: 
-  group: I2::Dev::Static Analysis-${{ github.workflow }}-${{ github.ref }}
+  group: I2::Dev::Static Analysis-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
 on:

@@ -13,7 +13,7 @@ on:
       - "!wasm/**"
 
 concurrency: 
-  group: I2::Dev::Tests-${{ github.head_ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -48,8 +48,7 @@ jobs:
     container:
       image: 7272721/i2-ci:latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v2
+      - uses: actions/checkout@v2
       - name: Find hash
         id: hash
         uses: theowenyoung/folder-hash@v2.0.1
@@ -60,6 +59,7 @@ jobs:
         uses: dawidd6/action-download-artifact@v2.21.1
         with:
           workflow: iroha2-dev-pr.yml
+       #   name: coverage-${{ steps.hash.outputs.hash }}.xml
           check_artifacts:  true
         continue-on-error: true
       - name: Check if coverage file exists
@@ -72,17 +72,17 @@ jobs:
           toolchain: stable
           override: true
           components: llvm-tools-preview
-        if: steps.check_files.outputs.files_exists == 'false'
+        if: '!steps.check_files.outputs.files_exists'
       - uses: taiki-e/install-action@cargo-llvm-cov
-        if: steps.check_files.outputs.files_exists == 'false'        
+        if: '!steps.check_files.outputs.files_exists'
       - uses: Swatinem/rust-cache@v1
-        if: steps.check_files.outputs.files_exists == 'false'
+        if: '!steps.check_files.outputs.files_exists'
       - name: Run tests and generate lcov coverage report
-        if: steps.check_files.outputs.files_exists == 'false'
+        if: '!steps.check_files.outputs.files_exists'
         run: mold --run cargo llvm-cov --all-features --workspace --lcov --output-path coverage.xml
       - name: Upload to codecov
         uses: codecov/codecov-action@v3
-        if: steps.check_files.outputs.files_exists == 'false'        
+        if: '!steps.check_files.outputs.files_exists'
         with:
           file: coverage.xml
           fail_ci_if_error: true

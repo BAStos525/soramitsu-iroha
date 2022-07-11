@@ -86,7 +86,8 @@ jobs:
         uses: dawidd6/action-download-artifact@v2.21.1
         with:
           workflow: iroha2-dev-pr.yml
-          check_artifacts:  false
+          check_artifacts:  true
+          search_artifacts: true
         continue-on-error: true
       - name: Check if coverage file exists
         id: check_files

@@ -2,7 +2,7 @@ name: I2::Dev::Deploy
 
 on:
   push:
-    branches: [iroha2-dev]
+    branches: [test/clonded-branch]
 
 env:
   CARGO_TERM_COLOR: always

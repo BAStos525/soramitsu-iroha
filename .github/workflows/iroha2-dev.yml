@@ -2,7 +2,7 @@ name: I2::Dev::Deploy
 
 on:
   push:
-    branches: [test/clonded-branch]
+    branches: [test/cloned-branch]
 
 env:
   CARGO_TERM_COLOR: always

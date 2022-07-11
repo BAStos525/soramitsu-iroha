@@ -87,7 +87,6 @@ jobs:
         with:
           workflow: iroha2-dev-pr.yml
           check_artifacts:  true
-          search_artifacts: true
         continue-on-error: true
       - name: Check if coverage file exists
         id: check_files

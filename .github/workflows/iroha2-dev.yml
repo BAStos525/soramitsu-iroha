@@ -86,10 +86,12 @@ jobs:
         with:
           workflow: iroha2-dev-pr.yml
           check_artifacts: false
+      - name: rename me
+        run: mv lcov-${{ steps.hash.outputs.hash }}.info lcov.info
       - name: Upload to codecov
         uses: codecov/codecov-action@v3
         with:
-          file: lcov-${{ steps.hash.outputs.hash }}.info
+          file: lcov.info
 
   archive-and-publish-schema:
     runs-on: ubuntu-latest

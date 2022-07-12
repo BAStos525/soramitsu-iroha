@@ -87,13 +87,13 @@ jobs:
           workflow: iroha2-dev-pr.yml
           check_artifacts: false
       # codecov/codecov-action@v3 can't upload report with file name == "lcov-${{ steps.hash.outputs.hash }}.info"
-      # - name: Rename lcov report file
-      #   run: mv lcov-${{ steps.hash.outputs.hash }}.info lcov.info
+      - name: Rename lcov report file
+        run: mv lcov-${{ steps.hash.outputs.hash }}.info lcov.info
       - name: Upload to codecov
         uses: codecov/codecov-action@v3
         with:
-          file: lcov-${{ steps.hash.outputs.hash }}.info
-          name: lcov.info
+          file: lcov.info
+   #       name: lcov.info
 
   archive-and-publish-schema:
     runs-on: ubuntu-latest

@@ -60,7 +60,7 @@ jobs:
         uses: dawidd6/action-download-artifact@v2.21.1
         with:
           workflow: iroha2-dev-pr.yml
-          check_artifacts:  true
+          check_artifacts: true
         continue-on-error: true
 
       - name: Debug 0

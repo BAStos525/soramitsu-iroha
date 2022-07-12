@@ -2,7 +2,7 @@ name: I2::Dev::Deploy
 
 on:
   push:
-    branches: [test/cloned-branch, iroha2-dev]
+    branches: [iroha2-dev]
 
 env:
   CARGO_TERM_COLOR: always
@@ -87,12 +87,13 @@ jobs:
           workflow: iroha2-dev-pr.yml
           check_artifacts: false
       # codecov/codecov-action@v3 can't upload report with file name == "lcov-${{ steps.hash.outputs.hash }}.info"
-      - name: Rename lcov report file
-        run: mv lcov-${{ steps.hash.outputs.hash }}.info lcov.info
+      # - name: Rename lcov report file
+      #   run: mv lcov-${{ steps.hash.outputs.hash }}.info lcov.info
       - name: Upload to codecov
         uses: codecov/codecov-action@v3
         with:
-          file: lcov.info
+          name: lcov-${{ steps.hash.outputs.hash }}.info
+          path: lcov.info   
 
   archive-and-publish-schema:
     runs-on: ubuntu-latest

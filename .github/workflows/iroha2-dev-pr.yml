@@ -62,10 +62,6 @@ jobs:
           workflow: iroha2-dev-pr.yml
           check_artifacts: true
         continue-on-error: true
-
-      - name: Debug 0
-        run: ls -la
-
       - name: Check if coverage file exists
         id: check_files
         uses: andstor/file-existence-action@v1
@@ -84,10 +80,6 @@ jobs:
       - name: Run tests and generate lcov coverage report
         if: steps.check_files.outputs.files_exists == 'false'
         run: mold --run cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
-
-      - name: Debug 1
-        run: ls -la
-
       - name: Upload to codecov
         uses: codecov/codecov-action@v3
         if: steps.check_files.outputs.files_exists == 'false'
@@ -98,10 +90,7 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: lcov-${{ steps.hash.outputs.hash }}.info
-          path: lcov.info
-
-      - name: Debug 2
-        run: ls -la          
+          path: lcov.info         
 
   integration_tests:
     runs-on: ubuntu-latest

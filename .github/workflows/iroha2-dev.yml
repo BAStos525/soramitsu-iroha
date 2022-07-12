@@ -69,7 +69,7 @@ jobs:
           workflow_file_name: load-rs-push-from-dev.yaml
           ref: dev
 
-  upload_codecov_coverage:
+  upload_coverage:
     runs-on: ubuntu-latest
     container:
       image: 7272721/i2-ci:latest
@@ -85,14 +85,8 @@ jobs:
         uses: dawidd6/action-download-artifact@v2.21.1
         with:
           workflow: iroha2-dev-pr.yml
-          check_artifacts:  false  
-      - name: Check if coverage file exists
-        id: check_files
-        uses: andstor/file-existence-action@v1
-        with:
-          files: "lcov-${{ steps.hash.outputs.hash }}.info"
+          check_artifacts: false
       - name: Upload to codecov
-        if: steps.check_files.outputs.files_exists == 'false'
         uses: codecov/codecov-action@v3
         with:
           file: lcov-${{ steps.hash.outputs.hash }}.info

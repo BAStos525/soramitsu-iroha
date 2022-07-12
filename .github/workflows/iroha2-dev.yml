@@ -75,13 +75,19 @@ jobs:
       image: 7272721/i2-ci:latest
     steps:
       - uses: actions/checkout@v2
+      - name: Download codecov report artifact
+        uses: dawidd6/action-download-artifact@v2.21.1
+        with:
+          workflow: iroha2-dev-pr.yml
+          check_artifacts:  true
+        continue-on-error: true    
       - name: Debug
         run: ls -la
       - name: Upload to codecov
         uses: codecov/codecov-action@v3
         with:
-          file: lcov.info
-        continue-on-error: true      
+          file: lcov-${{ steps.hash.outputs.hash }}.info
+   #     continue-on-error: true      
 
   archive-and-publish-schema:
     runs-on: ubuntu-latest

@@ -85,15 +85,16 @@ jobs:
         uses: dawidd6/action-download-artifact@v2.21.1
         with:
           workflow: iroha2-dev-pr.yml
-          check_artifacts:  false
-   #     continue-on-error: true    
-      - name: Debug
-        run: ls -la
+      - name: Check if coverage file exists
+        id: check_files
+        uses: andstor/file-existence-action@v1
+        with:
+          files: "lcov-${{ steps.hash.outputs.hash }}.info"
       - name: Upload to codecov
+        if: steps.check_files.outputs.files_exists == 'false'
         uses: codecov/codecov-action@v3
         with:
           file: lcov-${{ steps.hash.outputs.hash }}.info
-   #     continue-on-error: true      
 
   archive-and-publish-schema:
     runs-on: ubuntu-latest

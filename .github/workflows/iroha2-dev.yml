@@ -92,8 +92,8 @@ jobs:
       - name: Upload to codecov
         uses: codecov/codecov-action@v3
         with:
-          name: lcov-${{ steps.hash.outputs.hash }}.info
-          path: lcov.info   
+          file: lcov-${{ steps.hash.outputs.hash }}.info
+          name: lcov.info
 
   archive-and-publish-schema:
     runs-on: ubuntu-latest

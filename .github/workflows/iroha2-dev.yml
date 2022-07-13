@@ -35,7 +35,7 @@ jobs:
           load: true
           tags: iroha2:base
           context: .
-          file: Dockerfile.ci        
+          file: Dockerfile.base
 
       - name: Build iroha2:build docker image
         uses: docker/build-push-action@v3
@@ -45,7 +45,7 @@ jobs:
           context: .
           file: Dockerfile.build
 
-      - name: build iroha2:dev docker image
+      - name: Build iroha2:dev docker image
         run: |
           docker build -f Dockerfile -t hyperledger/iroha2:dev .
       - name: Login to DockerHub
@@ -53,7 +53,7 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: push iroha2:dev docker image
+      - name: Push iroha2:dev docker image
         run: |
           docker push hyperledger/iroha2:dev
 
@@ -85,6 +85,7 @@ jobs:
         uses: dawidd6/action-download-artifact@v2.21.1
         with:
           workflow: iroha2-dev-pr.yml
+          name: lcov-${{ steps.hash.outputs.hash }}.info
           check_artifacts: false
       # codecov/codecov-action@v3 can't upload report with file name == "lcov-${{ steps.hash.outputs.hash }}.info"
       - name: Rename lcov report file
@@ -93,7 +94,6 @@ jobs:
         uses: codecov/codecov-action@v3
         with:
           file: lcov.info
-   #       name: lcov.info
 
   archive-and-publish-schema:
     runs-on: ubuntu-latest

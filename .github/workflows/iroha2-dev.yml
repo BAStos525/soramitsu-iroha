@@ -86,7 +86,7 @@ jobs:
         with:
           workflow: iroha2-dev-pr.yml
           name: lcov-${{ steps.hash.outputs.hash }}.info
-        #  check_artifacts: false
+          check_artifacts: false
       
       - name: debug
         run: ls -la

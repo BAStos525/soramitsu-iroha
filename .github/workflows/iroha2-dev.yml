@@ -79,7 +79,7 @@ jobs:
         with:
           workflow: iroha2-dev-pr.yml
           name: lcov-${{ github.event.pull_request.head.sha }}.info
-          check_artifacts: false
+          check_artifacts: true
       # codecov/codecov-action@v3 can't upload report with file name == "lcov-${{ steps.hash.outputs.hash }}.info"
       # - name: Rename lcov report file
       #   run: mv lcov-${{ github.event.pull_request.head.sha }}.info lcov.info

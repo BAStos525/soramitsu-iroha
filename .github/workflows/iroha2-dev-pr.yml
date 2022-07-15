@@ -20,28 +20,28 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  checks:
-    runs-on: ubuntu-latest
-    container:
-      image: 7272721/i2-ci:latest
-    steps:
-      - uses: actions/checkout@v2
-      - uses: Swatinem/rust-cache@v1
-      - name: Documentation check
-        if: always()
-        run: |
-          cargo doc --no-deps --quiet
-          ./scripts/check.sh docs
-      - name: Check genesis
-        if: always()
-        run: |
-          ./scripts/check.sh genesis
-      - name: Wasm build check
-        if: always()
-        env:
-          RUSTC_BOOTSTRAP: 1
-        working-directory: wasm
-        run: mold --run cargo build --target wasm32-unknown-unknown --quiet
+  # checks:
+  #   runs-on: ubuntu-latest
+  #   container:
+  #     image: 7272721/i2-ci:latest
+  #   steps:
+  #     - uses: actions/checkout@v2
+  #     - uses: Swatinem/rust-cache@v1
+  #     - name: Documentation check
+  #       if: always()
+  #       run: |
+  #         cargo doc --no-deps --quiet
+  #         ./scripts/check.sh docs
+  #     - name: Check genesis
+  #       if: always()
+  #       run: |
+  #         ./scripts/check.sh genesis
+  #     - name: Wasm build check
+  #       if: always()
+  #       env:
+  #         RUSTC_BOOTSTRAP: 1
+  #       working-directory: wasm
+  #       run: mold --run cargo build --target wasm32-unknown-unknown --quiet
 
   tests_with_coverage:
     runs-on: ubuntu-latest
@@ -63,25 +63,25 @@ jobs:
       - name: Upload to codecov
         uses: codecov/codecov-action@v3
         with:
-          file: lcov.info
+          file: lcov-${{ github.event.pull_request.head.sha }}.info
           fail_ci_if_error: true
       - name: Upload codecov report artifact
         uses: actions/upload-artifact@v3
         with:
           name: lcov-${{ github.sha }}.info
-          path: lcov.info
+          path: lcov-${{ github.event.pull_request.head.sha }}.info
 
-  integration_tests:
-    runs-on: ubuntu-latest
-    container:
-      image: 7272721/i2-ci:latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v2
-      - uses: Swatinem/rust-cache@v1
-      - name: Run tests
-        if: always()
-        run: |
-          mold --run cargo test --test '*' --all-features -- \
-          integration:: \
-          --skip unstable_network
+  # integration_tests:
+  #   runs-on: ubuntu-latest
+  #   container:
+  #     image: 7272721/i2-ci:latest
+  #   timeout-minutes: 60
+  #   steps:
+  #     - uses: actions/checkout@v2
+  #     - uses: Swatinem/rust-cache@v1
+  #     - name: Run tests
+  #       if: always()
+  #       run: |
+  #         mold --run cargo test --test '*' --all-features -- \
+  #         integration:: \
+  #         --skip unstable_network

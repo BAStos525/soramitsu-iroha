@@ -68,7 +68,7 @@ jobs:
       - name: Upload codecov report artifact
         uses: actions/upload-artifact@v3
         with:
-          name: lcov-${{ github.event.pull_request.head.sha }}.info
+          name: lcov.info
           path: lcov-${{ github.event.pull_request.head.sha }}.info
 
   # integration_tests:

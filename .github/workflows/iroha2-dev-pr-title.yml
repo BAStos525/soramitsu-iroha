@@ -14,7 +14,7 @@ jobs:
         uses: actions-ecosystem/action-regex-match@v2
         id: feature-match
         with:
-          text: ${{ github.event.pull_request.title }} && ${{ github.event.head_commit.message }}
+          text: ${{ github.event.pull_request.title }}
           regex: '^\[feature\] #\d+(, #\d+)*: .+$'
       # - name: Add feature label
       #   uses: actions-ecosystem/action-add-labels@v1
@@ -30,7 +30,7 @@ jobs:
         id: refactor-match
         if: ${{ steps.feature-match.outputs.match == '' }}
         with:
-          text: ${{ github.event.pull_request.title }} && ${{ github.event.head_commit.message }}
+          text: ${{ github.event.pull_request.title }}
           regex: '^\[refactor\]( #\d+(, #\d+)*)?: .+$'
       # - name: Add Refactor label
       #   uses: actions-ecosystem/action-add-labels@v1
@@ -46,7 +46,7 @@ jobs:
         id: fix-match
         if: ${{ steps.refactor-match.outputs.match == '' }}
         with:
-          text: ${{ github.event.pull_request.title }} && ${{ github.event.head_commit.message }}
+          text: ${{ github.event.pull_request.title }}
           regex: '\[fix\] #\d+(, #\d+)*: .+$'
       # - name: Add fix label
       #   uses: actions-ecosystem/action-add-labels@v1
@@ -62,7 +62,7 @@ jobs:
         id: docs-match
         if: ${{ steps.feature-match.outputs.match == '' }}
         with:
-          text: ${{ github.event.pull_request.title }} && ${{ github.event.head_commit.message }}
+          text: ${{ github.event.pull_request.title }}
           regex: '^\[documentation\]( #\d+(, #\d+)*)?: .+$'
       # - name: Add Documentation label
       #   uses: actions-ecosystem/action-add-labels@v1
@@ -78,7 +78,7 @@ jobs:
         id: ci-match
         if: ${{ steps.feature-match.outputs.match == '' }}
         with:
-          text: ${{ github.event.pull_request.title }} && ${{ github.event.head_commit.message }}
+          text: ${{ github.event.pull_request.title }}
           regex: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
       # - name: Add CI label
       #   uses: actions-ecosystem/action-add-labels@v1

@@ -15,8 +15,8 @@ jobs:
         id: feature-match
         with:
           text: ${{ github.event.pull_request.title }}
-          regex: '^\[feature\]( #\d+(, #\d+)*)?: .+$'
-        #  regex: '^\[feature\] #\d+(, #\d+)*: .+$'
+        #  regex: '^\[feature\]( #\d+(, #\d+)*)?: .+$'
+          regex: '^\[feature\] #\d+(, #\d+)*: .+$'
       # - name: Add feature label
       #   uses: actions-ecosystem/action-add-labels@v1
       #   if: ${{ steps.feature-match.outputs.match != '' }}

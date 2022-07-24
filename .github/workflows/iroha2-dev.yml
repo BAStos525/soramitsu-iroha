@@ -80,8 +80,8 @@ jobs:
           workflow: iroha2-dev-pr.yml
           name: lcov-${{ github.event.pull_request.head.sha }}.info
           search_artifacts: true
-      # - name: Rename coverage report
-      #   run: mv 
+      - name: Rename lcov report file
+        run: mv lcov-${{ github.event.pull_request.head.sha }}.info lcov.info
       - name: Upload to codecov
         uses: codecov/codecov-action@v3
         with:

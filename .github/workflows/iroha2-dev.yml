@@ -83,15 +83,15 @@ jobs:
       - name: debug
         run: ls -la
       - name: Rename lcov report file 1
-        run: mv lcov-${{ github.event.pull_request.head.sha }}.info lcov.info
+        run: mv lcov-${{ github.event.pull_request.head.sha }}.info lcov-debug.info
         continue-on-error: true
       - name: Rename lcov report file 2
-        run: lcov.info lcov.info
+        run: mv lcov.info lcov-debug.info
         continue-on-error: true
       - name: Upload to codecov
         uses: codecov/codecov-action@v3
         with:
-          file: lcov.info
+          files: lcov-debug.info
 
   # archive-and-publish-schema:
   #   if: github.event.pull_request.merged

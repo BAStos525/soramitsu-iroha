@@ -1,8 +1,8 @@
 name: I2::Dev::Deploy
 
 on:
-  push:
-    branches: [test/cloned-branch]
+  pull_request:
+    branches: [iroha2-dev]
 
 env:
   CARGO_TERM_COLOR: always
@@ -13,7 +13,7 @@ env:
 
 jobs:
   deploy:
- #   if: github.event.pull_request.merged
+    if: github.event.pull_request.merged
     runs-on: ubuntu-latest
     container:
       image: 7272721/i2-ci:latest
@@ -68,31 +68,27 @@ jobs:
       #     workflow_file_name: load-rs-push-from-dev.yaml
       #     ref: dev
 
-  # upload_coverage:
-  #   if: github.event.pull_request.merged
-  #   runs-on: ubuntu-latest
-  #   container:
-  #     image: 7272721/i2-ci:latest
-  #   steps:
-  #     - uses: actions/checkout@v2
-  #     - name: Download codecov report artifact
-  #       uses: dawidd6/action-download-artifact@v2.21.1
-  #       with:
-  #         workflow: iroha2-dev-pr.yml
-  #         name: lcov-${{ github.event.pull_request.head.sha }}.info
-  #         search_artifacts: true
-  #     - name: debug
-  #       run: ls -la
-  #     - name: Rename lcov report file 1
-  #       run: mv lcov-${{ github.event.pull_request.head.sha }}.info lcov-debug.info
-  #       continue-on-error: true
-  #     - name: Rename lcov report file 2
-  #       run: mv lcov.info lcov-debug.info
-  #       continue-on-error: true
-  #     - name: Upload to codecov
-  #       uses: codecov/codecov-action@v3
-  #       with:
-  #         files: lcov-debug.info
+  upload_coverage:
+    if: github.event.pull_request.merged
+    runs-on: ubuntu-latest
+    container:
+      image: 7272721/i2-ci:latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Download codecov report artifact
+        uses: dawidd6/action-download-artifact@v2.21.1
+        with:
+          workflow: iroha2-dev-pr.yml
+          name: lcov-${{ github.event.pull_request.head.sha }}.info
+          search_artifacts: true
+      # - name: debug
+      #   run: ls -la
+      # - name: Rename lcov report file
+      #   run: mv lcov-${{ github.event.pull_request.head.sha }}.info lcov-debug.info
+      - name: Upload to codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: lcov-${{ github.event.pull_request.head.sha }}.info
 
   archive-and-publish-schema:
     if: github.event.pull_request.merged

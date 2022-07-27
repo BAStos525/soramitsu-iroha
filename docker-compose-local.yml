@@ -1,7 +1,7 @@
 version: "3.8"
 services:
   iroha0:
-    build: .
+#    build: .
     image: iroha2:dev
     environment:
       KURA_BLOCK_STORE_PATH: /chain
@@ -15,7 +15,7 @@ services:
       - "1337:1337"
       - "8080:8080"
       - "8180:8180"
-    init: true
+ #   init: true
     command: iroha --submit-genesis
     volumes:
       - ./configs/peer:/config
@@ -38,7 +38,7 @@ services:
       - "1338:1338"
       - "8081:8081"
       - "8181:8181"
-    init: true
+  #  init: true
     volumes:
       - ./configs/peer:/config
       - ./:/root/soramitsu/iroha
@@ -60,7 +60,7 @@ services:
       - "1339:1339"
       - "8082:8082"
       - "8182:8182"
-    init: true
+ #   init: true
     volumes:
       - './configs/peer:/config'
       - './:/root/soramitsu/iroha'
@@ -82,7 +82,7 @@ services:
       - "1340:1340"
       - "8083:8083"
       - "8183:8183"
-    init: true
+ #   init: true
     volumes:
       - ./configs/peer:/config
       - ./:/root/soramitsu/iroha

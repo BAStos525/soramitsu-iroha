@@ -1,9 +1,13 @@
 name: I2::Dev::Deploy
 
+# on:
+#   pull_request:
+#     branches: [iroha2-dev]
+#     types: [closed]
+
 on:
-  pull_request:
-    branches: [iroha2-dev]
-    types: [closed]
+  push:
+    branches: [fix/iroha2-ci/dockerhub-login-coverage]
 
 env:
   CARGO_TERM_COLOR: always
@@ -47,7 +51,7 @@ jobs:
         run: |
           docker build -f Dockerfile -t hyperledger/iroha2:dev .
       - name: Login to DockerHub
-        uses: docker/login-action@v1
+        uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}

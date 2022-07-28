@@ -2,7 +2,7 @@ name: I2::Dev::Tests
 
 on:
   pull_request:
-    branches: [iroha2-dev]
+    branches: [fix/iroha2-ci/dockerhub-login-coverage]
     paths:
       - "**.rs"
       - "**.json"

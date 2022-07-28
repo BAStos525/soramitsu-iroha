@@ -1,11 +1,9 @@
 name: I2::Dev::Deploy
 
-### vasya
-
 on:
-  # pull_request:
-  #   branches: [fix/iroha2-ci/dockerhub-login-coverage]
-  #   types: [closed]
+  pull_request:
+    branches: [fix/iroha2-ci/dockerhub-login-coverage]
+    types: [closed]
   push:
     branches: [fix/iroha2-ci/dockerhub-login-coverage]
 
@@ -17,7 +15,7 @@ env:
 # `ubuntu-latest` and not `[self-hosted, Linux]`.
 jobs:
   deploy:
- #   if: github.event.pull_request.merged
+    #  if: github.event.pull_request.merged
     runs-on: ubuntu-latest
     container:
       image: 7272721/i2-ci:latest
@@ -58,7 +56,6 @@ jobs:
       - name: Push iroha2:dev docker image
         run: |
           docker push hyperledger/iroha2:dev
-
       # - name: Build and push docker image (load-rs:dev)
       #   run: |
       #     sleep 10s
@@ -72,7 +69,7 @@ jobs:
       #     ref: dev
 
   upload_coverage:
-#    if: github.event.pull_request.merged == "true"
+    if: github.event.pull_request.merged
     runs-on: ubuntu-latest
     container:
       image: 7272721/i2-ci:latest
@@ -89,40 +86,40 @@ jobs:
         with:
           files: lcov.info
 
-  # archive-and-publish-schema:
-  #   if: github.event.pull_request.merged
-  #   runs-on: ubuntu-latest
-  #   container:
-  #     image: 7272721/i2-ci:latest
-  #   steps:
-  #     - uses: actions/checkout@v2
-  #     - uses: Swatinem/rust-cache@v1
-  #     - name: Build
-  #       run: mold --run cargo build --release --verbose
-  #     - name: Archive build
-  #       uses: actions/upload-artifact@v2
-  #       with:
-  #         name: cargo-build-release
-  #         path: target/release/iroha
-  #     - name: Archive Client CLI build
-  #       uses: actions/upload-artifact@v2
-  #       with:
-  #         name: cargo-client-cli-build-release
-  #         path: target/release/iroha_client_cli
-  #     - name: Archive Crypto CLI build
-  #       uses: actions/upload-artifact@v2
-  #       with:
-  #         name: cargo-crypto-cli-build-release
-  #         path: target/release/kagami
-  #     - name: Run schema generation
-  #       run: |
-  #         mkdir -p target/schema
-  #         cargo run --bin kagami -- schema >target/schema/schema.json
-  #     - name: Upload schema
-  #       uses: actions/upload-artifact@v2
-  #       with:
-  #         name: schema
-  #         path: target/schema
+  archive-and-publish-schema:
+  #  if: github.event.pull_request.merged
+    runs-on: ubuntu-latest
+    container:
+      image: 7272721/i2-ci:latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: Swatinem/rust-cache@v1
+      - name: Build
+        run: mold --run cargo build --release --verbose
+      - name: Archive build
+        uses: actions/upload-artifact@v2
+        with:
+          name: cargo-build-release
+          path: target/release/iroha
+      - name: Archive Client CLI build
+        uses: actions/upload-artifact@v2
+        with:
+          name: cargo-client-cli-build-release
+          path: target/release/iroha_client_cli
+      - name: Archive Crypto CLI build
+        uses: actions/upload-artifact@v2
+        with:
+          name: cargo-crypto-cli-build-release
+          path: target/release/kagami
+      - name: Run schema generation
+        run: |
+          mkdir -p target/schema
+          cargo run --bin kagami -- schema >target/schema/schema.json
+      - name: Upload schema
+        uses: actions/upload-artifact@v2
+        with:
+          name: schema
+          path: target/schema
 
   # print-telemetry:
   #   if: github.event.pull_request.merged
@@ -175,4 +172,3 @@ jobs:
   #       with:
   #         name: telemetry
   #         path: target/telemetry
-

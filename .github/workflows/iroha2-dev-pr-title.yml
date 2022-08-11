@@ -128,11 +128,11 @@ jobs:
           error: 'Your first line has to contain a commit type like "[documentation]".'
           checkAllCommitMessages: 'true'
           accessToken: ${{ secrets.GITHUB_TOKEN }}
-      - name: CI Commit Type
-        uses: gsactions/commit-message-checker@v1
-        with:
-          pattern: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
-  #        flags: 'gm'
-          error: 'Your first line has to contain a commit type like "[ci]".'
-          checkAllCommitMessages: 'true'
-          accessToken: ${{ secrets.GITHUB_TOKEN }
+  #     - name: CI Commit Type
+  #       uses: gsactions/commit-message-checker@v1
+  #       with:
+  #         pattern: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
+  # #        flags: 'gm'
+  #         error: 'Your first line has to contain a commit type like "[ci]".'
+  #         checkAllCommitMessages: 'true'
+  #         accessToken: ${{ secrets.GITHUB_TOKEN }

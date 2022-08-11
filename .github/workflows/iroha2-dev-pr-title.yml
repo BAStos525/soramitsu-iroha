@@ -92,3 +92,48 @@ jobs:
       - name: None of the above
         if: ${{ steps.fix-match.outputs.match == '' && steps.refactor-match.outputs.match == '' && steps.feature-match.outputs.match == '' && steps.docs-match.outputs.match == '' && steps.ci-match.outputs.match == '' }}
         run: exit 1
+
+  check-commit-message:
+    name: Feature Commit Message
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Commit Type
+        uses: gsactions/commit-message-checker@v1
+        with:
+          pattern: '^\[feature\]( #\d+(, #\d+)*)?: .+$'
+  #        flags: 'gm'
+          error: 'Your first line has to contain a commit type like "[feature]".'
+          checkAllCommitMessages: 'true'
+          accessToken: ${{ secrets.GITHUB_TOKEN }}
+      - name: Refactor Commit Type
+        uses: gsactions/commit-message-checker@v1
+        with:
+          pattern: '^\[refactor\]( #\d+(, #\d+)*)?: .+$'
+    #      flags: 'gm'
+          error: 'Your first line has to contain a commit type like "[refactor]".'
+          checkAllCommitMessages: 'true'
+          accessToken: ${{ secrets.GITHUB_TOKEN }}
+      - name: Fix Commit Type
+        uses: gsactions/commit-message-checker@v1
+        with:
+          pattern: '\[fix\] #\d+(, #\d+)*: .+$'
+  #        flags: 'gm'
+          error: 'Your first line has to contain a commit type like "[fix]".'
+          checkAllCommitMessages: 'true'
+          accessToken: ${{ secrets.GITHUB_TOKEN }}
+      - name: Documentation Commit Type
+        uses: gsactions/commit-message-checker@v1
+        with:
+          pattern: '^\[documentation\]( #\d+(, #\d+)*)?: .+$'
+  #        flags: 'gm'
+          error: 'Your first line has to contain a commit type like "[documentation]".'
+          checkAllCommitMessages: 'true'
+          accessToken: ${{ secrets.GITHUB_TOKEN }}
+      - name: CI Commit Type
+        uses: gsactions/commit-message-checker@v1
+        with:
+          pattern: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
+  #        flags: 'gm'
+          error: 'Your first line has to contain a commit type like "[ci]".'
+          checkAllCommitMessages: 'true'
+          accessToken: ${{ secrets.GITHUB_TOKEN }

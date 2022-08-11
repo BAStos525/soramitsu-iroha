@@ -98,50 +98,50 @@ jobs:
     steps:
       - name: Feature Commit Message
         uses: gsactions/commit-message-checker@v1
-        id: feature-match
+      #  id: feature-match
         with:
           pattern: '^\[feature\]( #\d+(, #\d+)*)?: .+$'
   #        flags: 'gm'
           error: 'Your first line has to contain a commit type like "[feature]".'
-   #       checkAllCommitMessages: 'true'
+          checkAllCommitMessages: 'false'
           accessToken: ${{ secrets.GITHUB_TOKEN }}
       - name: Refactor Commit Type
         uses: gsactions/commit-message-checker@v1
-        id: refactor-match
-        if: ${{ steps.feature-match.outputs.match == '' }}
+ #       id: refactor-match
+ #       if: ${{ steps.feature-match.outputs.match == '' }}
         with:
           pattern: '^\[refactor\]( #\d+(, #\d+)*)?: .+$'
     #      flags: 'gm'
           error: 'Your first line has to contain a commit type like "[refactor]".'
-   #       checkAllCommitMessages: 'true'
+          checkAllCommitMessages: 'false'
           accessToken: ${{ secrets.GITHUB_TOKEN }}
       - name: Fix Commit Type
         uses: gsactions/commit-message-checker@v1
-        id: fix-match
-        if: ${{ steps.refactor-match.outputs.match == '' }}        
+ #       id: fix-match
+  #      if: ${{ steps.refactor-match.outputs.match == '' }}        
         with:
           pattern: '\[fix\] #\d+(, #\d+)*: .+$'
   #        flags: 'gm'
           error: 'Your first line has to contain a commit type like "[fix]".'
-    #      checkAllCommitMessages: 'true'
+          checkAllCommitMessages: 'false'
           accessToken: ${{ secrets.GITHUB_TOKEN }}
       - name: Documentation Commit Type
         uses: gsactions/commit-message-checker@v1
-        id: docs-match
-        if: ${{ steps.feature-match.outputs.match == '' }}        
+ #       id: docs-match
+  ##      if: ${{ steps.feature-match.outputs.match == '' }}        
         with:
           pattern: '^\[documentation\]( #\d+(, #\d+)*)?: .+$'
   #        flags: 'gm'
           error: 'Your first line has to contain a commit type like "[documentation]".'
-#          checkAllCommitMessages: 'true'
+          checkAllCommitMessages: 'false'
           accessToken: ${{ secrets.GITHUB_TOKEN }}
       - name: CI Commit Type
         uses: gsactions/commit-message-checker@v1
-        id: ci-match
-        if: ${{ steps.feature-match.outputs.match == '' }}        
+    #    id: ci-match
+   #     if: ${{ steps.feature-match.outputs.match == '' }}        
         with:
           pattern: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
   #        flags: 'gm'
           error: 'Your first line has to contain a commit type like "[ci]".'
- #         checkAllCommitMessages: 'true'
+          checkAllCommitMessages: 'false'
           accessToken: ${{ secrets.GITHUB_TOKEN }}

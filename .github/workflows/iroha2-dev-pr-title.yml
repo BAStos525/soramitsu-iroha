@@ -8,7 +8,7 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
-    # TODO: Add labels when https://github.com/actions/first-interaction/issues/10 is fixed.
+    # TODO: Add labels when https://github.com/actions/first-interaction/issues/10 is fixed!ddd
     steps:
       - name: Feature
         uses: actions-ecosystem/action-regex-match@v2

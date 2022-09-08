@@ -1,4 +1,5 @@
 //! Crate with a proc macro for torii endpoint generation
+#![allow(clippy::arithmetic)] // We should remove `clippy::restriction`.
 
 use proc_macro::TokenStream;
 use proc_macro2::Span;
@@ -34,11 +35,12 @@ use syn::{
 /// 2) When any of the argument count literals are not unique.
 /// 3) When the colon-separated form has spaces in the provided name.
 ///
-/// # Examples:
+/// # Examples
+///
 /// ```rust
 /// use warp::{Rejection, Filter};
 /// use std::{convert::Infallible, marker::PhantomData};
-/// //use iroha_cli::torii::utils::WarpResult;
+/// // use iroha_cli::torii::utils::WarpResult;
 /// pub struct WarpResult<O, E>(Result<O, E>);
 /// use iroha_cli_derive::generate_endpoints;
 ///

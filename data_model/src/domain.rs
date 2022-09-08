@@ -4,6 +4,7 @@
 //! Note that the Genesis domain and account have a temporary
 //! privileged position, and permission validation is turned off for
 //! the Genesis block.
+#![allow(clippy::std_instead_of_alloc)]
 
 #[cfg(not(feature = "std"))]
 use alloc::{alloc::alloc, boxed::Box, format, string::String, vec::Vec};
@@ -89,7 +90,6 @@ ffi_item! {
         IntoSchema,
     )]
     #[id(type = "<Domain as Identifiable>::Id")]
-    #[allow(clippy::multiple_inherent_impl)]
     #[display(fmt = "[{id}]")]
     pub struct NewDomain {
         /// The identification associated with the domain builder.
@@ -125,6 +125,11 @@ impl HasMetadata for NewDomain {
     }
 }
 
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    iroha_ffi::ffi_export
+)]
+#[cfg_attr(feature = "ffi_import", iroha_ffi::ffi_import)]
 impl NewDomain {
     /// Create a [`NewDomain`], reserved for internal use.
     #[must_use]
@@ -140,14 +145,7 @@ impl NewDomain {
     pub(crate) fn id(&self) -> &<Domain as Identifiable>::Id {
         &self.id
     }
-}
 
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    iroha_ffi::ffi_export
-)]
-#[cfg_attr(feature = "ffi_import", iroha_ffi::ffi_import)]
-impl NewDomain {
     /// Add [`logo`](IpfsPath) to the domain replacing previously defined value
     #[must_use]
     pub fn with_logo(mut self, logo: IpfsPath) -> Self {

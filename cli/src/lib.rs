@@ -4,6 +4,11 @@
 //!
 //! `Iroha` is the main instance of the peer program. `Arguments`
 //! should be constructed externally: (see `main.rs`).
+#![allow(
+    clippy::arithmetic,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc
+)]
 use std::{panic, path::PathBuf, sync::Arc};
 
 use color_eyre::eyre::{eyre, Result, WrapErr};
@@ -12,6 +17,7 @@ use iroha_config::iroha::Configuration;
 use iroha_core::{
     block_sync::{BlockSynchronizer, BlockSynchronizerTrait},
     genesis::{GenesisNetwork, GenesisNetworkTrait, RawGenesisBlock},
+    handler::ThreadHandler,
     kura::Kura,
     prelude::{World, WorldStateView},
     queue::Queue,
@@ -78,6 +84,20 @@ where
     pub block_sync: AlwaysAddr<B>,
     /// Torii web server
     pub torii: Option<Torii>,
+    /// Thread handlers
+    thread_handlers: Vec<ThreadHandler>,
+}
+
+impl<G, S, B> Drop for Iroha<G, S, B>
+where
+    G: GenesisNetworkTrait,
+    S: SumeragiTrait<GenesisNetwork = G>,
+    B: BlockSynchronizerTrait<Sumeragi = S>,
+{
+    fn drop(&mut self) {
+        // Drop thread handles first
+        let _thread_handles = core::mem::take(&mut self.thread_handlers);
+    }
 }
 
 impl<G, S, B> Iroha<G, S, B>
@@ -118,7 +138,7 @@ where
             G::from_configuration(
                 args.submit_genesis,
                 RawGenesisBlock::from_path(genesis_path)?,
-                &Some(config.genesis.clone()),
+                Some(&config.genesis),
                 &config.sumeragi.transaction_limits,
             )
             .wrap_err("Failed to initialize genesis.")?
@@ -141,6 +161,24 @@ where
         let hook = panic::take_hook();
         panic::set_hook(Box::new(move |info| {
             hook(info);
+
+            // What clippy suggests is much less readable in this case
+            #[allow(clippy::option_if_let_else)]
+            let panic_message = if let Some(message) = info.payload().downcast_ref::<&str>() {
+                message
+            } else if let Some(message) = info.payload().downcast_ref::<String>() {
+                message
+            } else {
+                "unspecified"
+            };
+
+            let location = match info.location() {
+                Some(location) => format!("{}:{}", location.file(), location.line()),
+                None => "unspecified".to_owned(),
+            };
+
+            iroha_logger::error!(%panic_message, %location, "A panic occured, shutting down");
+
             notify_shutdown.notify_one();
         }));
     }
@@ -200,7 +238,7 @@ where
         // Validate every transaction in genesis block
         if let Some(ref genesis) = genesis {
             transaction_validator
-                .validate_every(&***genesis)
+                .validate_every(genesis)
                 .wrap_err("Transaction validation failed in genesis block")?;
         }
 
@@ -209,6 +247,8 @@ where
         let queue = Arc::new(Queue::from_configuration(&config.queue, Arc::clone(&wsv)));
         let telemetry_started = Self::start_telemetry(telemetry, &config).await?;
         let kura = Kura::from_configuration(&config.kura, Arc::clone(&wsv), broker.clone())?;
+
+        let kura_thread_handler = Kura::start(Arc::clone(&kura));
 
         let sumeragi: AlwaysAddr<_> = S::from_configuration(
             &config.sumeragi,
@@ -251,9 +291,7 @@ where
 
         Self::start_listening_signal(Arc::clone(&notify_shutdown))?;
 
-        if config.shutdown_on_panic {
-            Self::prepare_panic_hook(notify_shutdown);
-        }
+        Self::prepare_panic_hook(notify_shutdown);
 
         let torii = Some(torii);
         Ok(Self {
@@ -263,6 +301,7 @@ where
             kura,
             block_sync,
             torii,
+            thread_handlers: vec![kura_thread_handler],
         })
     }
 
@@ -333,6 +372,8 @@ where
         Ok(false)
     }
 
+    // Which raises the question: does it make sense to enable `nursery` lints?
+    #[allow(clippy::redundant_pub_crate)]
     fn start_listening_signal(notify_shutdown: Arc<Notify>) -> Result<task::JoinHandle<()>> {
         let (mut sigint, mut sigterm) = signal::unix::signal(signal::unix::SignalKind::interrupt())
             .and_then(|sigint| {

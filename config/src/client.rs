@@ -1,9 +1,10 @@
 //! Module for client-related configuration and structs
+#![allow(clippy::std_instead_of_core, clippy::std_instead_of_alloc)]
 use std::{fmt, fs::File, io::BufReader, path::Path, str::FromStr};
 
 use derive_more::Display;
 use eyre::{eyre, Result, WrapErr};
-use iroha_config_base::derive::Configurable;
+use iroha_config_base::derive::{Documented, LoadFromEnv, Proxy};
 use iroha_crypto::prelude::*;
 use iroha_data_model::{prelude::*, transaction};
 use iroha_primitives::small::SmallStr;
@@ -53,7 +54,7 @@ impl<'de> Deserialize<'de> for WebLogin {
 }
 
 /// Basic Authentication credentials
-#[derive(Clone, Deserialize, Serialize, Debug, Configurable)]
+#[derive(Clone, Deserialize, Serialize, Debug, Documented)]
 pub struct BasicAuth {
     /// Login for Basic Authentication
     pub web_login: WebLogin,
@@ -62,7 +63,7 @@ pub struct BasicAuth {
 }
 
 /// `Configuration` provides an ability to define client parameters such as `TORII_URL`.
-#[derive(Debug, Clone, Deserialize, Serialize, Configurable)]
+#[derive(Debug, Clone, Deserialize, Serialize, Proxy, LoadFromEnv, Documented)]
 #[serde(rename_all = "UPPERCASE")]
 #[serde(default)]
 #[config(env_prefix = "IROHA_")]
@@ -137,6 +138,7 @@ impl Configuration {
         AccountId::from_str("alice@wonderland").expect("Account ID not valid")
     }
 
+    // TODO: Delete this after `LoadFromDisk` is implemented
     /// This method will build `Configuration` from a json *pretty* formatted file (without `:` in
     /// key names).
     ///

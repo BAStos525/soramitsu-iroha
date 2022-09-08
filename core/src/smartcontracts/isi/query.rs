@@ -1,6 +1,10 @@
 //! Query functionality. The common error type is also defined here,
 //! alongside functions for converting them into HTTP responses.
-
+#![allow(
+    clippy::arithmetic,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc
+)]
 use eyre::Result;
 use iroha_data_model::prelude::*;
 use iroha_schema::IntoSchema;
@@ -98,6 +102,7 @@ impl ValidQuery for QueryBox {
             FindTransactionsByAccountId(query) => query.execute_into_value(wsv),
             FindTransactionByHash(query) => query.execute_into_value(wsv),
             FindPermissionTokensByAccountId(query) => query.execute_into_value(wsv),
+            FindAllPermissionTokenDefinitions(query) => query.execute_into_value(wsv),
             FindAssetDefinitionKeyValueByIdAndKey(query) => query.execute_into_value(wsv),
             FindAllActiveTriggerIds(query) => query.execute_into_value(wsv),
             FindTriggerById(query) => query.execute_into_value(wsv),

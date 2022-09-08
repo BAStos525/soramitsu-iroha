@@ -1,10 +1,11 @@
 //! Module containing logic related to spawning a logger from the
 //! configuration, as well as run-time reloading of the log-level.
-use std::fmt::Debug;
+#![allow(clippy::std_instead_of_core)]
+use core::fmt::Debug;
 
 use derive_more::{Deref, DerefMut};
 use iroha_config_base::{
-    derive::Configurable,
+    derive::{Documented, LoadFromEnv, Proxy},
     runtime_upgrades::{handle, ReloadError, ReloadMut},
 };
 use serde::{Deserialize, Serialize};
@@ -77,7 +78,7 @@ impl From<Level> for SyncLevel {
 }
 
 /// 'Logger' configuration.
-#[derive(Clone, Deserialize, Serialize, Debug, Configurable)]
+#[derive(Clone, Deserialize, Serialize, Debug, Proxy, LoadFromEnv, Documented)]
 #[serde(rename_all = "UPPERCASE")]
 #[serde(default)]
 pub struct Configuration {

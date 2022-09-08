@@ -1,7 +1,13 @@
 //! Iroha Data Model contains structures for Domains, Peers, Accounts and Assets with simple,
 //! non-specific functions like serialization.
 
-#![allow(clippy::module_name_repetitions, clippy::unwrap_in_result)]
+#![allow(
+    clippy::module_name_repetitions,
+    clippy::unwrap_in_result,
+    clippy::std_instead_of_alloc,
+    clippy::arithmetic,
+    clippy::trait_duplication_in_bounds
+)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
 #[cfg(not(feature = "std"))]
@@ -57,10 +63,12 @@ pub mod permissions;
 pub mod predicate;
 pub mod query;
 pub mod role;
+pub mod sorting;
 pub mod transaction;
 pub mod trigger;
 
 pub mod utils {
+    #![allow(clippy::doc_link_with_quotes)]
     //! Module with useful utilities shared between crates
 
     use core::fmt::*;
@@ -103,9 +111,9 @@ pub mod utils {
     pub trait BackQuoted<T: Display>: Iterator<Item = T> + Sized {
         /// Function to construct new iterator with back quotes around items.
         ///
-        /// # Example
+        /// # Examples
         ///
-        /// ```
+        /// ```rust
         /// use iroha_data_model::utils::{
         ///     format_comma_separated,
         ///     BackQuoted as _,
@@ -141,9 +149,9 @@ pub mod utils {
     /// # Errors
     /// If cannot write to the `f`
     ///
-    /// # Example
+    /// # Examples
     ///
-    /// ```
+    /// ```rust
     /// use iroha_data_model::utils::format_comma_separated;
     ///
     /// struct Array([u8; 3]);
@@ -312,6 +320,8 @@ pub enum IdBox {
     TriggerId(<trigger::Trigger<FilterBox> as Identifiable>::Id),
     /// [`RoleId`](`role::Id`) variant.
     RoleId(<role::Role as Identifiable>::Id),
+    /// [`PermissionTokenId`](`permissions::Id`) variant.
+    PermissionTokenDefinitionId(<permissions::PermissionTokenDefinition as Identifiable>::Id),
 }
 
 /// Sized container for constructors of all [`Identifiable`]s that can be registered via transaction
@@ -333,6 +343,8 @@ pub enum RegistrableBox {
     Trigger(Box<<trigger::Trigger<FilterBox> as Registered>::With>),
     /// [`Role`](`role::Role`) variant.
     Role(Box<<role::Role as Registered>::With>),
+    /// [`PermissionTokenId`](`permissions::Id`) variant.
+    PermissionTokenDefinition(Box<<permissions::PermissionTokenDefinition as Registered>::With>),
 }
 
 /// Sized container for all possible entities.
@@ -374,6 +386,8 @@ pub enum IdentifiableBox {
     Trigger(Box<trigger::Trigger<FilterBox>>),
     /// [`Role`](`role::Role`) variant.
     Role(Box<role::Role>),
+    /// [`PermissionTokenDefinition`](`permissions::PermissionTokenDefinition`) variant.
+    PermissionTokenDefinition(Box<permissions::PermissionTokenDefinition>),
 }
 
 // TODO: think of a way to `impl Identifiable for IdentifiableBox`.
@@ -393,8 +407,37 @@ impl IdentifiableBox {
             IdentifiableBox::Asset(a) => a.id().clone().into(),
             IdentifiableBox::Trigger(a) => a.id().clone().into(),
             IdentifiableBox::Role(a) => a.id().clone().into(),
+            IdentifiableBox::PermissionTokenDefinition(a) => a.id().clone().into(),
         }
     }
+}
+
+impl<'idbox> TryFrom<&'idbox IdentifiableBox> for &'idbox dyn HasMetadata {
+    type Error = ();
+
+    fn try_from(
+        v: &'idbox IdentifiableBox,
+    ) -> Result<&'idbox (dyn HasMetadata + 'idbox), Self::Error> {
+        match v {
+            IdentifiableBox::NewDomain(v) => Ok(v.as_ref()),
+            IdentifiableBox::NewAccount(v) => Ok(v.as_ref()),
+            IdentifiableBox::NewAssetDefinition(v) => Ok(v.as_ref()),
+            IdentifiableBox::Domain(v) => Ok(v.as_ref()),
+            IdentifiableBox::Account(v) => Ok(v.as_ref()),
+            IdentifiableBox::AssetDefinition(v) => Ok(v.as_ref()),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Create a [`Vec`] containing the arguments, which should satisfy `Into<Value>` bound.
+///
+/// Syntax is the same as in [`vec`](macro@vec)
+#[macro_export]
+macro_rules! val_vec {
+    () => { Vec::new() };
+    ($elem:expr; $n:expr) => { vec![iroha_data_model::Value::from($elem); $n] };
+    ($($x:expr),+ $(,)?) => { vec![$(iroha_data_model::Value::from($x),)+] };
 }
 
 /// Boxed [`Value`].
@@ -708,6 +751,7 @@ from_and_try_from_value_identifiablebox!(
     Asset(Box<asset::Asset>),
     Trigger(Box<trigger::Trigger<FilterBox>>),
     Role(Box<role::Role>),
+    PermissionTokenDefinition(Box<permissions::PermissionTokenDefinition>),
 );
 
 from_and_try_from_value_identifiable!(
@@ -720,6 +764,7 @@ from_and_try_from_value_identifiable!(
     AssetDefinition(Box<asset::AssetDefinition>),
     Asset(Box<asset::Asset>),
     Trigger(Box<trigger::Trigger<FilterBox>>),
+    PermissionTokenDefinition(Box<permissions::PermissionTokenDefinition>),
 );
 
 from_and_try_from_value_identifiable!(Role(Box<role::Role>),);
@@ -755,7 +800,12 @@ impl TryFrom<IdentifiableBox> for RegistrableBox {
             Peer(peer) => Ok(RegistrableBox::Peer(peer)),
             NewDomain(domain) => Ok(RegistrableBox::Domain(domain)),
             NewAccount(account) => Ok(RegistrableBox::Account(account)),
-            NewAssetDefinition(asset) => Ok(RegistrableBox::AssetDefinition(asset)),
+            NewAssetDefinition(asset_definition) => {
+                Ok(RegistrableBox::AssetDefinition(asset_definition))
+            }
+            PermissionTokenDefinition(token_definition) => {
+                Ok(RegistrableBox::PermissionTokenDefinition(token_definition))
+            }
             NewRole(role) => Ok(RegistrableBox::Role(role)),
             Asset(asset) => Ok(RegistrableBox::Asset(asset)),
             Trigger(trigger) => Ok(RegistrableBox::Trigger(trigger)),
@@ -772,10 +822,15 @@ impl From<RegistrableBox> for IdentifiableBox {
             Peer(peer) => IdentifiableBox::Peer(peer),
             Domain(domain) => IdentifiableBox::NewDomain(domain),
             Account(account) => IdentifiableBox::NewAccount(account),
-            AssetDefinition(asset) => IdentifiableBox::NewAssetDefinition(asset),
+            AssetDefinition(asset_definition) => {
+                IdentifiableBox::NewAssetDefinition(asset_definition)
+            }
             Role(role) => IdentifiableBox::NewRole(role),
             Asset(asset) => IdentifiableBox::Asset(asset),
             Trigger(trigger) => IdentifiableBox::Trigger(trigger),
+            PermissionTokenDefinition(token_definition) => {
+                IdentifiableBox::PermissionTokenDefinition(token_definition)
+            }
         }
     }
 }
@@ -996,17 +1051,11 @@ pub mod prelude {
     #[cfg(feature = "mutable_api")]
     pub use super::Registrable;
     pub use super::{
-        account::prelude::*,
-        asset::prelude::*,
-        block_value::prelude::*,
-        domain::prelude::*,
-        name::prelude::*,
-        pagination::{prelude::*, Pagination},
-        peer::prelude::*,
-        role::prelude::*,
-        trigger::prelude::*,
-        EnumTryAsError, HasMetadata, IdBox, Identifiable, IdentifiableBox, Parameter,
-        PredicateTrait, RegistrableBox, TryAsMut, TryAsRef, ValidationError, Value,
+        account::prelude::*, asset::prelude::*, block_value::prelude::*, domain::prelude::*,
+        name::prelude::*, pagination::prelude::*, peer::prelude::*, role::prelude::*,
+        sorting::prelude::*, trigger::prelude::*, EnumTryAsError, HasMetadata, IdBox, Identifiable,
+        IdentifiableBox, Parameter, PredicateTrait, RegistrableBox, TryAsMut, TryAsRef,
+        ValidationError, Value,
     };
     pub use crate::{
         events::prelude::*, expression::prelude::*, isi::prelude::*, metadata::prelude::*,

@@ -1,6 +1,5 @@
 //! Module with permission for transfering
-
-use std::time::Duration;
+use core::time::Duration;
 
 use super::*;
 
@@ -165,7 +164,9 @@ fn retrieve_permission_params(
     wsv.map_account(authority, |account| {
         wsv.account_permission_tokens(account)
             .iter()
-            .filter(|token| token.name() == CanTransferOnlyFixedNumberOfTimesPerPeriod::name())
+            .filter(|token| {
+                token.definition_id() == CanTransferOnlyFixedNumberOfTimesPerPeriod::definition_id()
+            })
             .flat_map(PermissionToken::params)
             .map(|(name, value)| (name.clone(), value.clone()))
             .collect()

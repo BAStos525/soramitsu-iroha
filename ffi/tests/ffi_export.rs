@@ -53,8 +53,9 @@ impl FfiStruct {
     }
 
     /// With params
+    // Note: `-> FfiStruct` used instead of `-> Self` to showcase that such signature supported by `#[ffi_export]`
     #[must_use]
-    pub fn with_params(mut self, params: impl IntoIterator<Item = (Name, Value)>) -> Self {
+    pub fn with_params(mut self, params: impl IntoIterator<Item = (Name, Value)>) -> FfiStruct {
         self.params = params.into_iter().collect();
         self
     }
@@ -89,6 +90,27 @@ impl FfiStruct {
     }
 }
 
+#[ffi_export]
+/// Return byte
+pub fn simple(byte: u8) -> u8 {
+    byte
+}
+
+pub trait Target {
+    type Target;
+
+    fn target(self) -> Self::Target;
+}
+
+#[ffi_export]
+impl Target for FfiStruct {
+    type Target = Option<Name>;
+
+    fn target(self) -> <Self as Target>::Target {
+        self.name
+    }
+}
+
 fn get_new_struct() -> FfiStruct {
     let name = Name(String::from("X"));
 
@@ -108,15 +130,21 @@ fn get_new_struct() -> FfiStruct {
 
 #[allow(trivial_casts)]
 fn get_new_struct_with_params() -> FfiStruct {
-    let mut ffi_struct = get_new_struct();
+    let ffi_struct = get_new_struct();
     let params = get_default_params();
+
+    let mut output = MaybeUninit::new(core::ptr::null_mut());
 
     let params_ffi = params.into_ffi();
     assert_eq!(FfiReturn::Ok, unsafe {
-        FfiStruct__with_params(IntoFfi::into_ffi(&mut ffi_struct), params_ffi.as_ref())
+        FfiStruct__with_params(
+            IntoFfi::into_ffi(ffi_struct),
+            params_ffi.as_ref(),
+            output.as_mut_ptr(),
+        )
     });
 
-    ffi_struct
+    unsafe { TryFromReprC::try_from_repr_c(output.assume_init(), &mut ()).expect("valid") }
 }
 
 #[test]
@@ -175,11 +203,19 @@ fn into_iter_item_impl_into() {
     let mut ffi_struct = get_new_struct();
     let tokens_ffi = tokens.clone().into_ffi();
 
+    let mut output = MaybeUninit::new(core::ptr::null_mut());
+
     unsafe {
         assert_eq!(
             FfiReturn::Ok,
-            FfiStruct__with_tokens(IntoFfi::into_ffi(&mut ffi_struct), tokens_ffi.as_ref())
+            FfiStruct__with_tokens(
+                IntoFfi::into_ffi(ffi_struct),
+                tokens_ffi.as_ref(),
+                output.as_mut_ptr()
+            )
         );
+
+        ffi_struct = TryFromReprC::try_from_repr_c(output.assume_init(), &mut ()).expect("valid");
 
         assert_eq!(2, ffi_struct.tokens.len());
         assert_eq!(ffi_struct.tokens, tokens);
@@ -193,6 +229,8 @@ fn into_iter_item_impl_into() {
 
 #[test]
 fn return_option() {
+    #![allow(clippy::let_unit_value)]
+
     let ffi_struct = get_new_struct_with_params();
 
     let mut param1 = MaybeUninit::new(core::ptr::null());
@@ -286,13 +324,42 @@ fn return_result() {
     unsafe {
         assert_eq!(
             FfiReturn::ExecutionFail,
-            FfiStruct__fallible_int_output(u8::from(false), output.as_mut_ptr())
+            FfiStruct__fallible_int_output(From::from(false), output.as_mut_ptr())
         );
         assert_eq!(0, output.assume_init());
         assert_eq!(
             FfiReturn::Ok,
-            FfiStruct__fallible_int_output(u8::from(true), output.as_mut_ptr())
+            FfiStruct__fallible_int_output(From::from(true), output.as_mut_ptr())
         );
         assert_eq!(42, output.assume_init());
+    }
+}
+
+#[cfg(feature = "wasm")]
+#[test]
+fn conversion_failed() {
+    let byte: u32 = u32::MAX;
+    let mut output = MaybeUninit::new(0);
+
+    unsafe {
+        assert_eq!(
+            FfiReturn::ConversionFailed,
+            __simple(byte, output.as_mut_ptr())
+        )
+    }
+}
+
+#[test]
+fn invoke_trait_method() {
+    let ffi_struct = get_new_struct_with_params();
+    let mut output = MaybeUninit::<*mut Name>::new(core::ptr::null_mut());
+
+    unsafe {
+        assert_eq!(
+            FfiReturn::Ok,
+            FfiStruct__Target__target(IntoFfi::into_ffi(ffi_struct), output.as_mut_ptr())
+        );
+        let name = TryFromReprC::try_from_repr_c(output.assume_init(), &mut ()).unwrap();
+        assert_eq!(Name(String::from("X")), name);
     }
 }

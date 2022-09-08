@@ -1,7 +1,11 @@
 //! CLI for generating iroha sample configuration, genesis and
 //! cryptographic key pairs. To be used with all compliant Iroha
 //! installations.
-
+#![allow(
+    clippy::arithmetic,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc
+)]
 use std::io::{stdout, BufWriter, Write};
 
 use clap::{ArgGroup, StructOpt};
@@ -64,7 +68,7 @@ impl<T: Write> RunArgs<T> for Args {
 }
 
 mod crypto {
-    use color_eyre::eyre::WrapErr as _;
+    use color_eyre::eyre::{eyre, WrapErr as _};
     use iroha_crypto::{Algorithm, KeyGenConfiguration, KeyPair, PrivateKey};
 
     use super::*;
@@ -130,10 +134,13 @@ mod crypto {
                     )
                 },
                 |seed| -> color_eyre::Result<_> {
+                    let seed: Vec<u8> = seed.as_bytes().into();
+                    // `ursa` crashes if provided seed for `secp256k1` shorter than 32 bytes
+                    if seed.len() < 32 && self.algorithm == Algorithm::Secp256k1 {
+                        return Err(eyre!("secp256k1 seed for must be at least 32 bytes long"));
+                    }
                     KeyPair::generate_with_configuration(
-                        key_gen_configuration
-                            .clone()
-                            .use_seed(seed.as_bytes().into()),
+                        key_gen_configuration.clone().use_seed(seed),
                     )
                     .wrap_err("Failed to generate key pair")
                 },
@@ -161,8 +168,9 @@ mod schema {
 mod genesis {
     use iroha_core::{
         genesis::{RawGenesisBlock, RawGenesisBlockBuilder},
-        tx::{AssetValueType, MintBox},
+        tx::{AssetValueType, MintBox, RegisterBox},
     };
+    use iroha_permissions_validators::public_blockchain;
 
     use super::*;
 
@@ -194,6 +202,12 @@ mod genesis {
                 "alice@wonderland".parse()?,
             )),
         );
+
+        result.transactions[0].isi.extend(
+            public_blockchain::default_permission_token_definitions()
+                .into_iter()
+                .map(|token_definition| RegisterBox::new(token_definition.clone()).into()),
+        );
         result.transactions[0].isi.push(mint.into());
         Ok(result)
     }
@@ -201,15 +215,20 @@ mod genesis {
 
 mod docs {
     #![allow(clippy::panic_in_result_fn, clippy::expect_used)]
+    #![allow(
+        clippy::arithmetic,
+        clippy::std_instead_of_core,
+        clippy::std_instead_of_alloc
+    )]
     use std::{fmt::Debug, io::Write};
 
     use color_eyre::eyre::WrapErr as _;
-    use iroha_config::base::Configurable;
+    use iroha_config::base::proxy::Documented;
     use serde_json::Value;
 
     use super::*;
 
-    impl<E: Debug, C: Configurable<Error = E> + Send + Sync + Default> PrintDocs for C {}
+    impl<E: Debug, C: Documented<Error = E> + Send + Sync + Default> PrintDocs for C {}
 
     #[derive(StructOpt, Debug, Clone, Copy)]
     pub struct Args;
@@ -220,7 +239,7 @@ mod docs {
         }
     }
 
-    pub trait PrintDocs: Configurable + Send + Sync + Default
+    pub trait PrintDocs: Documented + Send + Sync + Default
     where
         Self::Error: Debug,
     {

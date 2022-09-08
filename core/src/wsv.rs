@@ -1,5 +1,11 @@
 //! This module provides the [`WorldStateView`] - in-memory representations of the current blockchain
 //! state.
+#![allow(
+    clippy::new_without_default,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc,
+    clippy::arithmetic
+)]
 
 use std::{convert::Infallible, fmt::Debug, sync::Arc, time::Duration};
 
@@ -46,6 +52,10 @@ pub struct World {
     pub(crate) domains: DomainsMap,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: crate::RolesMap,
+    /// Permission tokens of an account.
+    pub(crate) account_permission_tokens: crate::PermissionTokensMap,
+    /// Registered permission token ids.
+    pub(crate) permission_token_definitions: crate::PermissionTokenDefinitionsMap,
     /// Triggers
     pub(crate) triggers: TriggerSet,
 }
@@ -135,18 +145,80 @@ impl WorldStateView {
         self.map_account(id, |account| account.assets().cloned().collect())
     }
 
-    /// Returns a set of permission tokens granted to this account as part of roles and separately.
+    /// Return a set of all permission tokens granted to this account.
     #[allow(clippy::unused_self)]
     pub fn account_permission_tokens(&self, account: &Account) -> Vec<PermissionToken> {
         #[allow(unused_mut)]
-        let mut tokens: Vec<PermissionToken> = account.permissions().cloned().collect();
-
+        let mut tokens: Vec<PermissionToken> =
+            self.account_inherent_permission_tokens(account).collect();
         for role_id in account.roles() {
             if let Some(role) = self.world.roles.get(role_id) {
                 tokens.append(&mut role.permissions().cloned().collect());
             }
         }
         tokens
+    }
+
+    /// Return a set of permission tokens granted to this account not as part of any role.
+    pub fn account_inherent_permission_tokens(
+        &self,
+        account: &Account,
+    ) -> impl ExactSizeIterator<Item = PermissionToken> {
+        self.world
+            .account_permission_tokens
+            .get(account.id())
+            .map_or_else(Default::default, |permissions_ref| {
+                permissions_ref.value().clone()
+            })
+            .into_iter()
+    }
+
+    /// Return `true` if [`Account`] contains a permission token not associated with any role.
+    #[inline]
+    pub fn account_contains_inherent_permission(
+        &self,
+        account: &<Account as Identifiable>::Id,
+        token: &PermissionToken,
+    ) -> bool {
+        self.world
+            .account_permission_tokens
+            .get_mut(account)
+            .map_or(false, |permissions| permissions.contains(token))
+    }
+
+    /// Add [`permission`](PermissionToken) to the [`Account`] if the account does not have this permission yet.
+    ///
+    /// Return a Boolean value indicating whether or not the  [`Account`] already had this permission.
+    pub fn add_account_permission(
+        &self,
+        account: &<Account as Identifiable>::Id,
+        token: PermissionToken,
+    ) -> bool {
+        // `match` here instead of `map_or_else` to avoid cloning token into each closure
+        match self.world.account_permission_tokens.get_mut(account) {
+            None => {
+                let mut permissions = Permissions::new();
+                permissions.insert(token);
+                self.world
+                    .account_permission_tokens
+                    .insert(account.clone(), permissions);
+                true
+            }
+            Some(mut permissions) => permissions.insert(token),
+        }
+    }
+
+    /// Remove a [`permission`](PermissionToken) from the [`Account`] if the account has this permission.
+    /// Return a Boolean value indicating whether the [`Account`] had this permission.
+    pub fn remove_account_permission(
+        &self,
+        account: &<Account as Identifiable>::Id,
+        token: &PermissionToken,
+    ) -> bool {
+        self.world
+            .account_permission_tokens
+            .get_mut(account)
+            .map_or(false, |mut permissions| permissions.remove(token))
     }
 
     fn process_trigger(&self, action: &dyn ActionTrait, event: Event) -> Result<()> {
@@ -515,6 +587,12 @@ impl WorldStateView {
         &self.world.roles
     }
 
+    /// Get all permission token ids
+    #[inline]
+    pub fn permission_token_definitions(&self) -> &crate::PermissionTokenDefinitionsMap {
+        &self.world.permission_token_definitions
+    }
+
     /// Construct [`WorldStateView`] with specific [`Configuration`].
     #[inline]
     pub fn from_configuration(
@@ -654,7 +732,7 @@ impl WorldStateView {
             .world
             .trusted_peers_ids
             .iter()
-            .map(|peer| Peer::new((&*peer).clone()))
+            .map(|peer| Peer::new((*peer).clone()))
             .collect::<Vec<Peer>>();
         vec.sort();
         vec

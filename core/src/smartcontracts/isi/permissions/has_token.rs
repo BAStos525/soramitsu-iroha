@@ -1,5 +1,9 @@
 //! Contains [`HasToken`] trait and box container for it
-
+#![allow(
+    clippy::arithmetic,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc
+)]
 use super::*;
 
 /// Trait that checks whether a permission token is needed for a certain action.
@@ -43,7 +47,7 @@ pub trait HasToken {
 #[derive(Debug, Display)]
 #[display(
     fmt = "Allow if the signer has the corresponding `{}` permission token",
-    "H::Token::name()"
+    "H::Token::definition_id()"
 )]
 pub struct HasTokenAsValidator<H: HasToken> {
     has_token: H,

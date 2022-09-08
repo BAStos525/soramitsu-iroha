@@ -1,5 +1,10 @@
 //! Contains the end-point querying logic.  This is where you need to
 //! add any custom end-point related logic.
+#![allow(
+    clippy::arithmetic,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc
+)]
 use std::{
     collections::HashMap, fmt::Debug, marker::PhantomData, sync::mpsc, thread, time::Duration,
 };
@@ -74,7 +79,7 @@ where
                 | StatusCode::UNAUTHORIZED
                 | StatusCode::FORBIDDEN
                 | StatusCode::NOT_FOUND => {
-                    let mut res = QueryError::decode_all(resp.body().as_ref());
+                    let mut res = QueryError::decode_all(&mut resp.body().as_ref());
                     if res.is_err() {
                         warn!("Can't decode query error, not all bytes were consumed");
                         res = QueryError::decode(&mut resp.body().as_ref());
@@ -569,25 +574,39 @@ impl Client {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```ignore
     /// use eyre::Result;
     /// use iroha_client::{
     ///     client::{Client, ResponseHandler},
-    ///     http::{RequestBuilder, Response},
+    ///     http::{RequestBuilder, Response, Method},
     /// };
-    /// use iroha_data_model::prelude::{Account, FindAllAccounts, Pagination};
+    /// use iroha_data_model::{predicate::PredicateBox, prelude::{Account, FindAllAccounts, Pagination}};
     ///
     /// struct YourAsyncRequest;
     ///
     /// impl YourAsyncRequest {
     ///     async fn send(self) -> Response<Vec<u8>> {
-    ///         // do the stuff
+    ///         todo!()
     ///     }
     /// }
     ///
     /// // Implement builder for this request
     /// impl RequestBuilder for YourAsyncRequest {
-    ///     // ...
+    ///     fn new(_: Method, url: impl AsRef<str>) -> Self {
+    ///          todo!()
+    ///     }
+    ///
+    ///     fn param<K: AsRef<str>, V: ToString>(self, _: K, _: V) -> Self  {
+    ///          todo!()
+    ///     }
+    ///
+    ///     fn header<N: AsRef<str>, V: ToString>(self, _: N, _: V) -> Self {
+    ///          todo!()
+    ///     }
+    ///
+    ///     fn body(self, data: Vec<u8>) -> Self {
+    ///          todo!()
+    ///     }
     /// }
     ///
     /// async fn fetch_accounts(client: &Client) -> Result<Vec<Account>> {
@@ -596,6 +615,7 @@ impl Client {
     ///     let (req, resp_handler) = client.prepare_query_request::<_, YourAsyncRequest>(
     ///         FindAllAccounts::new(),
     ///         Pagination::default(),
+    ///         PredicateBox::default(),
     ///     )?;
     ///
     ///     // Do what you need to send the request and to get the response
@@ -611,6 +631,7 @@ impl Client {
         &self,
         request: R,
         pagination: Pagination,
+        sorting: Sorting,
         filter: PredicateBox,
     ) -> Result<(B, QueryResponseHandler<R>)>
     where
@@ -619,6 +640,7 @@ impl Client {
         B: RequestBuilder,
     {
         let pagination: Vec<_> = pagination.into();
+        let sorting: Vec<_> = sorting.into();
         let request = QueryRequest::new(request.into(), self.account_id.clone(), filter);
         let request: VersionedSignedQueryRequest = self.sign_query(request)?.into();
 
@@ -628,16 +650,62 @@ impl Client {
                 format!("{}/{}", &self.torii_url, uri::QUERY),
             )
             .params(pagination)
+            .params(sorting)
             .headers(self.headers.clone())
             .body(request.encode_versioned()),
             QueryResponseHandler::default(),
         ))
     }
 
-    /// Create a request with pagination and add the filter.
+    /// Create a request with pagination, sorting and add the filter.
     ///
     /// # Errors
-    /// Forwards from [`Self::prepare_query_request`].
+    /// Fails if sending request fails
+    pub fn request_with_pagination_and_filter_and_sorting<R>(
+        &self,
+        request: R,
+        pagination: Pagination,
+        sorting: Sorting,
+        filter: PredicateBox,
+    ) -> QueryHandlerResult<ClientQueryOutput<R>>
+    where
+        R: Query + Into<QueryBox> + Debug,
+        <R::Output as TryFrom<Value>>::Error: Into<eyre::Error>, // Seems redundant
+    {
+        iroha_logger::trace!(?request, %pagination, ?sorting, ?filter);
+        let (req, resp_handler) = self.prepare_query_request::<R, DefaultRequestBuilder>(
+            request, pagination, sorting, filter,
+        )?;
+        let response = req.build()?.send()?;
+        resp_handler.handle(response)
+    }
+
+    /// Create a request with pagination and sorting.
+    ///
+    /// # Errors
+    /// Fails if sending request fails
+    pub fn request_with_pagination_and_sorting<R>(
+        &self,
+        request: R,
+        pagination: Pagination,
+        sorting: Sorting,
+    ) -> QueryHandlerResult<ClientQueryOutput<R>>
+    where
+        R: Query + Into<QueryBox> + Debug,
+        <R::Output as TryFrom<Value>>::Error: Into<eyre::Error>,
+    {
+        self.request_with_pagination_and_filter_and_sorting(
+            request,
+            pagination,
+            sorting,
+            PredicateBox::default(),
+        )
+    }
+
+    /// Create a request with pagination, sorting, and the given filter.
+    ///
+    /// # Errors
+    /// Fails if sending request fails
     pub fn request_with_pagination_and_filter<R>(
         &self,
         request: R,
@@ -648,11 +716,12 @@ impl Client {
         R: Query + Into<QueryBox> + Debug,
         <R::Output as TryFrom<Value>>::Error: Into<eyre::Error>, // Seems redundant
     {
-        iroha_logger::trace!(?request, %pagination, ?filter);
-        let (req, resp_handler) =
-            self.prepare_query_request::<R, DefaultRequestBuilder>(request, pagination, filter)?;
-        let response = req.build()?.send()?;
-        resp_handler.handle(response)
+        self.request_with_pagination_and_filter_and_sorting(
+            request,
+            pagination,
+            Sorting::default(),
+            filter,
+        )
     }
 
     /// Query API entry point. Requests queries from `Iroha` peers with pagination.
@@ -672,6 +741,22 @@ impl Client {
         <R::Output as TryFrom<Value>>::Error: Into<eyre::Error>,
     {
         self.request_with_pagination_and_filter(request, pagination, PredicateBox::default())
+    }
+
+    /// Query API entry point. Requests queries from `Iroha` peers with sorting.
+    ///
+    /// # Errors
+    /// Fails if sending request fails
+    pub fn request_with_sorting<R>(
+        &self,
+        request: R,
+        sorting: Sorting,
+    ) -> QueryHandlerResult<ClientQueryOutput<R>>
+    where
+        R: Query + Into<QueryBox> + Debug,
+        <R::Output as TryFrom<Value>>::Error: Into<eyre::Error>,
+    {
+        self.request_with_pagination_and_sorting(request, Pagination::default(), sorting)
     }
 
     /// Query API entry point. Requests queries from `Iroha` peers.
@@ -956,9 +1041,10 @@ pub mod events_api {
                     try_decode_all_or_just_decode!(VersionedEventPublisherMessage, &message)?
                         .into_v1()
                 {
-                    return Ok(Events);
+                    Ok(Events)
+                } else {
+                    Err(eyre!("Expected `SubscriptionAccepted`."))
                 }
-                return Err(eyre!("Expected `SubscriptionAccepted`."));
             }
         }
 
@@ -1070,17 +1156,17 @@ pub mod account {
     //! Module with queries for account
     use super::*;
 
-    /// Get query to get all accounts
+    /// Construct a query to get all accounts
     pub const fn all() -> FindAllAccounts {
         FindAllAccounts::new()
     }
 
-    /// Get query to get account by id
+    /// Construct a query to get account by id
     pub fn by_id(account_id: impl Into<EvaluatesTo<AccountId>>) -> FindAccountById {
         FindAccountById::new(account_id)
     }
 
-    /// Get query to get all accounts containing specified asset
+    /// Construct a query to get all accounts containing specified asset
     pub fn all_with_asset(
         asset_definition_id: impl Into<EvaluatesTo<AssetDefinitionId>>,
     ) -> FindAccountsWithAsset {
@@ -1092,29 +1178,29 @@ pub mod asset {
     //! Module with queries for assets
     use super::*;
 
-    /// Get query to get all assets
+    /// Construct a query to get all assets
     pub const fn all() -> FindAllAssets {
         FindAllAssets::new()
     }
 
-    /// Get query to get all asset definitions
+    /// Construct a query to get all asset definitions
     pub const fn all_definitions() -> FindAllAssetsDefinitions {
         FindAllAssetsDefinitions::new()
     }
 
-    /// Get query to get asset definition by its id
+    /// Construct a query to get asset definition by its id
     pub fn definition_by_id(
         asset_definition_id: impl Into<EvaluatesTo<AssetDefinitionId>>,
     ) -> FindAssetDefinitionById {
         FindAssetDefinitionById::new(asset_definition_id)
     }
 
-    /// Get query to get all assets by account id
+    /// Construct a query to get all assets by account id
     pub fn by_account_id(account_id: impl Into<EvaluatesTo<AccountId>>) -> FindAssetsByAccountId {
         FindAssetsByAccountId::new(account_id)
     }
 
-    /// Get query to get an asset by its id
+    /// Construct a query to get an asset by its id
     pub fn by_id(asset_id: impl Into<EvaluatesTo<<Asset as Identifiable>::Id>>) -> FindAssetById {
         FindAssetById::new(asset_id)
     }
@@ -1126,17 +1212,17 @@ pub mod block {
 
     use super::*;
 
-    /// Get query to find all blocks
+    /// Construct a query to find all blocks
     pub const fn all() -> FindAllBlocks {
         FindAllBlocks::new()
     }
 
-    /// Get query to find all block headers
+    /// Construct a query to find all block headers
     pub const fn all_headers() -> FindAllBlockHeaders {
         FindAllBlockHeaders::new()
     }
 
-    /// Get query to find block header by hash
+    /// Construct a query to find block header by hash
     pub fn header_by_hash(hash: impl Into<EvaluatesTo<Hash>>) -> FindBlockHeaderByHash {
         FindBlockHeaderByHash::new(hash)
     }
@@ -1146,12 +1232,12 @@ pub mod domain {
     //! Module with queries for domains
     use super::*;
 
-    /// Get query to get all domains
+    /// Construct a query to get all domains
     pub const fn all() -> FindAllDomains {
         FindAllDomains::new()
     }
 
-    /// Get query to get all domain by id
+    /// Construct a query to get all domain by id
     pub fn by_id(domain_id: impl Into<EvaluatesTo<DomainId>>) -> FindDomainById {
         FindDomainById::new(domain_id)
     }
@@ -1163,19 +1249,19 @@ pub mod transaction {
 
     use super::*;
 
-    /// Get query to find all transactions
+    /// Construct a query to find all transactions
     pub fn all() -> FindAllTransactions {
         FindAllTransactions::new()
     }
 
-    /// Get query to retrieve transactions for account
+    /// Construct a query to retrieve transactions for account
     pub fn by_account_id(
         account_id: impl Into<EvaluatesTo<AccountId>>,
     ) -> FindTransactionsByAccountId {
         FindTransactionsByAccountId::new(account_id)
     }
 
-    /// Get query to retrieve transaction by hash
+    /// Construct a query to retrieve transaction by hash
     pub fn by_hash(hash: impl Into<EvaluatesTo<Hash>>) -> FindTransactionByHash {
         FindTransactionByHash::new(hash)
     }
@@ -1185,9 +1271,29 @@ pub mod trigger {
     //! Module with queries for triggers
     use super::*;
 
-    /// Get query to get triggers by domain id
+    /// Construct a query to get triggers by domain id
     pub fn by_domain_id(domain_id: impl Into<EvaluatesTo<DomainId>>) -> FindTriggersByDomainId {
         FindTriggersByDomainId::new(domain_id)
+    }
+}
+
+pub mod permissions {
+    //! Module with queries for permission tokens
+    use super::*;
+
+    /// Construct a query to get all registered [`PermissionTokenDefinition`]s
+    pub const fn all_definitions() -> FindAllPermissionTokenDefinitions {
+        FindAllPermissionTokenDefinitions {}
+    }
+
+    /// Construct a query to get all [`PermissionToken`] granted
+    /// to account with given [`Id`][AccountId]
+    pub fn by_account_id(
+        account_id: impl Into<EvaluatesTo<AccountId>>,
+    ) -> FindPermissionTokensByAccountId {
+        FindPermissionTokensByAccountId {
+            id: account_id.into(),
+        }
     }
 }
 
@@ -1195,22 +1301,22 @@ pub mod role {
     //! Module with queries for roles
     use super::*;
 
-    /// Get query to retrieve all roles
+    /// Construct a query to retrieve all roles
     pub const fn all() -> FindAllRoles {
         FindAllRoles::new()
     }
 
-    /// Get query to retrieve all role ids
+    /// Construct a query to retrieve all role ids
     pub const fn all_ids() -> FindAllRoleIds {
         FindAllRoleIds::new()
     }
 
-    /// Get query to retrieve a role by its id
+    /// Construct a query to retrieve a role by its id
     pub fn by_id(role_id: impl Into<EvaluatesTo<RoleId>>) -> FindRoleByRoleId {
         FindRoleByRoleId::new(role_id)
     }
 
-    /// Get query to retrieve all roles for an account
+    /// Construct a query to retrieve all roles for an account
     pub fn by_account_id(account_id: impl Into<EvaluatesTo<AccountId>>) -> FindRolesByAccountId {
         FindRolesByAccountId::new(account_id)
     }

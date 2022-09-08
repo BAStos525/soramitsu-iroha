@@ -1,7 +1,12 @@
 //! Genesis-related logic and constructs. Contains the `GenesisBlock`,
 //! `RawGenesisBlock` and the `RawGenesisBlockBuilder` structures.
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::new_without_default)]
+#![allow(
+    clippy::module_name_repetitions,
+    clippy::new_without_default,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc,
+    clippy::arithmetic
+)]
 
 use std::{collections::HashSet, fmt::Debug, fs::File, io::BufReader, ops::Deref, path::Path};
 
@@ -45,7 +50,7 @@ pub trait GenesisNetworkTrait:
     fn from_configuration(
         submit_genesis: bool,
         raw_block: RawGenesisBlock,
-        genesis_config: &Option<Configuration>,
+        genesis_config: Option<&Configuration>,
         transaction_limits: &TransactionLimits,
     ) -> Result<Option<Self>>;
 
@@ -165,7 +170,7 @@ impl GenesisNetworkTrait for GenesisNetwork {
     fn from_configuration(
         submit_genesis: bool,
         raw_block: RawGenesisBlock,
-        genesis_config: &Option<Configuration>,
+        genesis_config: Option<&Configuration>,
         tx_limits: &TransactionLimits,
     ) -> Result<Option<GenesisNetwork>> {
         #![allow(clippy::unwrap_in_result)]
@@ -381,9 +386,10 @@ impl RawGenesisDomainBuilder {
     /// Should only be used for testing.
     #[must_use]
     pub fn with_account_without_public_key(mut self, account_name: Name) -> Self {
+        let account_id = AccountId::new(account_name, self.domain_id.clone());
         self.transaction
             .isi
-            .push(RegisterBox::new(AccountId::new(account_name, self.domain_id.clone())).into());
+            .push(RegisterBox::new(Account::new(account_id, [])).into());
         self
     }
 
@@ -427,7 +433,7 @@ mod tests {
         let _genesis_block = GenesisNetwork::from_configuration(
             true,
             RawGenesisBlock::default(),
-            &Some(Configuration {
+            Some(&Configuration {
                 account_public_key: public_key,
                 account_private_key: Some(private_key),
                 ..Configuration::default()
@@ -465,12 +471,19 @@ mod tests {
             );
             assert_eq!(
                 finished_genesis_block.transactions[0].isi[1],
-                RegisterBox::new(AccountId::new("alice".parse().unwrap(), domain_id.clone()))
-                    .into()
+                RegisterBox::new(Account::new(
+                    AccountId::new("alice".parse().unwrap(), domain_id.clone()),
+                    []
+                ))
+                .into()
             );
             assert_eq!(
                 finished_genesis_block.transactions[0].isi[2],
-                RegisterBox::new(AccountId::new("bob".parse().unwrap(), domain_id)).into()
+                RegisterBox::new(Account::new(
+                    AccountId::new("bob".parse().unwrap(), domain_id),
+                    []
+                ))
+                .into()
             );
         }
         {
@@ -481,7 +494,11 @@ mod tests {
             );
             assert_eq!(
                 finished_genesis_block.transactions[0].isi[4],
-                RegisterBox::new(AccountId::new("Cheshire_Cat".parse().unwrap(), domain_id)).into()
+                RegisterBox::new(Account::new(
+                    AccountId::new("Cheshire_Cat".parse().unwrap(), domain_id),
+                    []
+                ))
+                .into()
             );
         }
         {

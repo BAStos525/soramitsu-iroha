@@ -1,4 +1,9 @@
-#![allow(clippy::str_to_string, missing_docs)]
+#![allow(
+    clippy::str_to_string,
+    missing_docs,
+    clippy::arithmetic,
+    clippy::std_instead_of_core
+)]
 
 use impl_visitor::{FnDescriptor, ImplDescriptor};
 use proc_macro::TokenStream;
@@ -173,7 +178,7 @@ pub fn ffi_export(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 abort!(item.sig.generics, "Generics are not supported");
             }
 
-            let fn_descriptor = FnDescriptor::from(&item);
+            let fn_descriptor = FnDescriptor::from_fn(&item);
             let ffi_fn = ffi_fn::gen_definition(&fn_descriptor);
             quote! {
                 #item
@@ -192,7 +197,7 @@ pub fn ffi_import(_attr: TokenStream, item: TokenStream) -> TokenStream {
     match parse_macro_input!(item) {
         Item::Impl(item) => {
             let impl_descriptor = ImplDescriptor::from_impl(&item);
-            let ffi_fns = impl_descriptor.fns.iter().map(ffi_fn::gen_definition);
+            let ffi_fns = impl_descriptor.fns.iter().map(ffi_fn::gen_declaration);
 
             // TODO: Should be fixed in https://github.com/hyperledger/iroha/issues/2231
             //let item = wrapper::wrap_impl_item(&impl_descriptor.fns);
@@ -240,7 +245,7 @@ pub fn ffi_import(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 abort!(item.sig.generics, "Generics are not supported");
             }
 
-            let fn_descriptor = FnDescriptor::from(&item);
+            let fn_descriptor = FnDescriptor::from_fn(&item);
             let ffi_fn = ffi_fn::gen_declaration(&fn_descriptor);
             quote! {
                 #item
@@ -262,7 +267,7 @@ fn is_opaque(input: &syn::DeriveInput) -> bool {
         }
     }
 
-    !is_repr_attr(repr, "C")
+    !is_repr_attr(repr, "C") && !is_repr_attr(repr, "transparent")
 }
 
 fn is_fieldless_enum(name: &syn::Ident, item: &syn::DataEnum, repr: &[NestedMeta]) -> bool {
@@ -279,7 +284,7 @@ fn find_attr(attrs: &[syn::Attribute], name: &str) -> Vec<NestedMeta> {
         .iter()
         .filter_map(|attr| {
             if let Ok(syn::Meta::List(meta_list)) = attr.parse_meta() {
-                return meta_list.path.is_ident(name).then(|| meta_list.nested);
+                return meta_list.path.is_ident(name).then_some(meta_list.nested);
             }
 
             None

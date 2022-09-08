@@ -195,13 +195,20 @@ pub mod isi {
             let account_id = self.destination_id;
             let permission = self.object;
 
-            wsv.modify_account(&account_id.clone(), |account| {
-                if account.contains_permission(&permission) {
+            wsv.permission_token_definitions()
+                .get(permission.definition_id())
+                .ok_or_else(|| {
+                    FindError::PermissionTokenDefinition(permission.definition_id().clone())
+                })?;
+
+            wsv.modify_account(&account_id, |account| {
+                let id = account.id();
+                if wsv.account_contains_inherent_permission(id, &permission) {
                     return Err(ValidationError::new("Permission already exists").into());
                 }
 
-                account.add_permission(permission);
-                Ok(AccountEvent::PermissionAdded(account_id))
+                wsv.add_account_permission(id, permission);
+                Ok(AccountEvent::PermissionAdded(id.clone()))
             })
         }
     }
@@ -215,11 +222,17 @@ pub mod isi {
             let permission = self.object;
 
             wsv.modify_account(&account_id, |account| {
-                if !account.remove_permission(&permission) {
+                if !wsv
+                    .permission_token_definitions()
+                    .contains_key(permission.definition_id())
+                {
+                    error!(%permission, "Revoking non-existent token");
+                }
+                let id = account.id();
+                if !wsv.remove_account_permission(id, &permission) {
                     return Err(ValidationError::new("Permission not found").into());
                 }
-
-                Ok(AccountEvent::PermissionRemoved(account_id.clone()))
+                Ok(AccountEvent::PermissionRemoved(id.clone()))
             })
         }
     }

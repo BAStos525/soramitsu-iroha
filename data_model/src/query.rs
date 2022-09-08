@@ -1,6 +1,6 @@
 //! Iroha Queries provides declarative API for Iroha Queries.
 
-#![allow(clippy::missing_inline_in_public_items)]
+#![allow(clippy::missing_inline_in_public_items, unused_imports)]
 
 #[cfg(not(feature = "std"))]
 use alloc::{boxed::Box, format, string::String, vec::Vec};
@@ -97,6 +97,8 @@ pub enum QueryBox {
     FindTransactionByHash(FindTransactionByHash),
     /// [`FindPermissionTokensByAccountId`] variant.
     FindPermissionTokensByAccountId(FindPermissionTokensByAccountId),
+    /// [`FindAllPermissionTokenDefinitions`] variant.
+    FindAllPermissionTokenDefinitions(FindAllPermissionTokenDefinitions),
     /// [`FindAllActiveTriggerIds`] variant.
     FindAllActiveTriggerIds(FindAllActiveTriggerIds),
     /// [`FindTriggerById`] variant.
@@ -387,6 +389,29 @@ pub mod permissions {
 
     use crate::prelude::*;
 
+    /// [`FindAllPermissionTokenDefinitions`] Iroha Query finds all registered
+    /// [`PermissionTokenDefinition`][crate::permissions::PermissionTokenDefinition]s
+    #[derive(
+        Debug,
+        Display,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoSchema,
+        PartialOrd,
+        Ord,
+    )]
+    pub struct FindAllPermissionTokenDefinitions;
+
+    impl Query for FindAllPermissionTokenDefinitions {
+        type Output = Vec<PermissionTokenDefinition>;
+    }
+
     /// [`FindPermissionTokensByAccountId`] Iroha Query finds all [`PermissionToken`]s
     /// for a specified account.
     #[derive(
@@ -415,7 +440,7 @@ pub mod permissions {
 
     /// The prelude re-exports most commonly used traits, structs and macros from this module.
     pub mod prelude {
-        pub use super::FindPermissionTokensByAccountId;
+        pub use super::{FindAllPermissionTokenDefinitions, FindPermissionTokensByAccountId};
     }
 }
 
@@ -990,7 +1015,7 @@ pub mod asset {
     impl FindAllAssets {
         /// Construct [`FindAllAssets`].
         pub const fn new() -> Self {
-            FindAllAssets
+            Self
         }
     }
 

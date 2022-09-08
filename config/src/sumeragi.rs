@@ -1,8 +1,9 @@
 //! `Sumeragi` configuration. Contains both block commit and Gossip-related configuration.
+#![allow(clippy::std_instead_of_core, clippy::arithmetic)]
 use std::{collections::HashSet, fmt::Debug, fs::File, io::BufReader, path::Path};
 
 use eyre::{Result, WrapErr};
-use iroha_config_base::derive::{view, Configurable};
+use iroha_config_base::derive::{view, Documented, LoadFromEnv, Proxy};
 use iroha_crypto::prelude::*;
 use iroha_data_model::{prelude::*, transaction};
 use serde::{Deserialize, Serialize};
@@ -21,9 +22,9 @@ const DEFAULT_GOSSIP_BATCH_SIZE: u32 = 500;
 // Generate `ConfigurationView` without keys
 view! {
     /// `Sumeragi` configuration.
-    /// [`Configuration`] provides an ability to define parameters such as `BLOCK_TIME_MS`
+    /// [`struct@Configuration`] provides an ability to define parameters such as `BLOCK_TIME_MS`
     /// and a list of `TRUSTED_PEERS`.
-    #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Configurable)]
+    #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Documented, Proxy, LoadFromEnv)]
     #[serde(default)]
     #[serde(rename_all = "UPPERCASE")]
     #[config(env_prefix = "SUMERAGI_")]

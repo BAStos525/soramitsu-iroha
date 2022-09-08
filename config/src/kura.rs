@@ -1,16 +1,17 @@
 //! Module for kura-related configuration and structs
+#![allow(clippy::std_instead_of_core)]
 use std::{num::NonZeroU64, path::Path};
 
 use eyre::{eyre, Result};
-use iroha_config_base::derive::Configurable;
+use iroha_config_base::derive::{Documented, LoadFromEnv, Proxy};
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_BLOCKS_PER_STORAGE_FILE: u64 = 1000_u64;
-const DEFAULT_BLOCK_STORE_PATH: &str = "./blocks";
+const DEFAULT_BLOCK_STORE_PATH: &str = "./storage";
 const DEFAULT_ACTOR_CHANNEL_CAPACITY: u32 = 100;
 
 /// `Kura` configuration.
-#[derive(Clone, Deserialize, Serialize, Debug, Configurable, PartialEq, Eq)]
+#[derive(Clone, Deserialize, Serialize, Debug, Documented, Proxy, LoadFromEnv, PartialEq, Eq)]
 #[serde(rename_all = "UPPERCASE")]
 #[config(env_prefix = "KURA_")]
 pub struct Configuration {

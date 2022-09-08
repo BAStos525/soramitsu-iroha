@@ -1,8 +1,12 @@
+//! This module contains permissions related Iroha functionality.
+#![allow(
+    clippy::arithmetic,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc
+)]
 #![allow(clippy::module_name_repetitions)]
 
-//! This module contains permissions related Iroha functionality.
-
-use std::{fmt::Display, marker::PhantomData, ops::Deref};
+use core::{fmt::Display, marker::PhantomData, ops::Deref};
 
 pub use checks::*;
 use derive_more::Display;
@@ -21,7 +25,7 @@ pub mod judge;
 pub mod roles;
 
 /// Result type associated with permission validators
-pub type Result<T> = std::result::Result<T, DenialReason>;
+pub type Result<T> = core::result::Result<T, DenialReason>;
 
 /// Operation for which the permission should be checked
 pub trait NeedsPermission {
@@ -125,14 +129,14 @@ pub enum ValidatorVerdict {
 
 impl PartialOrd for ValidatorVerdict {
     #[inline]
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(Ord::cmp(self, other))
     }
 }
 
 // Deny < Skip < Allow
 impl Ord for ValidatorVerdict {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         let lhs: u8 = **self;
         let rhs: u8 = **other;
         lhs.cmp(&rhs)
@@ -176,7 +180,7 @@ impl ValidatorVerdict {
     #[must_use]
     #[inline]
     pub fn least_permissive(self, other: Self) -> Self {
-        std::cmp::min(self, other)
+        core::cmp::min(self, other)
     }
 
     /// Similar to [`least_permissive`](Self::least_permissive)
@@ -196,7 +200,7 @@ impl ValidatorVerdict {
     #[must_use]
     #[inline]
     pub fn most_permissive(self, other: Self) -> Self {
-        std::cmp::max(self, other)
+        core::cmp::max(self, other)
     }
 
     /// Similar to [`most_permissive`](Self::most_permissive)
@@ -225,9 +229,9 @@ pub type DenialReason = String;
 
 /// Trait for hard-coded strongly-typed permission tokens.
 ///
-/// # Example
+/// # Examples
 ///
-/// ```
+/// ```rust
 /// use iroha_core::smartcontracts::isi::permissions::{
 ///     PermissionTokenTrait, PredefinedTokenConversionError,
 /// };
@@ -239,16 +243,16 @@ pub type DenialReason = String;
 ///
 /// impl PermissionTokenTrait for ExampleToken {
 ///     #[inline]
-///     fn name() -> &'static Name {
-///         static NAME: once_cell::sync::Lazy<Name> =
-///             once_cell::sync::Lazy::new(|| "example_token".parse().expect("Valid"));
-///         &NAME
+///     fn definition() -> &'static PermissionTokenDefinition {
+///         static DEFINITION: once_cell::sync::Lazy<PermissionTokenDefinition> =
+///             once_cell::sync::Lazy::new(|| PermissionTokenDefinition::new("example_token".parse().expect("Valid")));
+///         &DEFINITION
 ///     }
 /// }
 ///
 /// impl From<ExampleToken> for PermissionToken {
 ///     fn from(example_token: ExampleToken) -> Self {
-///         PermissionToken::new(ExampleToken::name().clone())
+///         PermissionToken::new(ExampleToken::definition_id().clone())
 ///             .with_params([(
 ///                 "param".parse().expect("Valid"),
 ///                 Value::String(example_token.param)
@@ -259,14 +263,14 @@ pub type DenialReason = String;
 /// impl TryFrom<PermissionToken> for ExampleToken {
 ///     type Error = PredefinedTokenConversionError;
 ///
-///     fn try_from(token: PermissionToken) -> std::result::Result<Self, Self::Error> {
+///     fn try_from(token: PermissionToken) -> core::result::Result<Self, Self::Error> {
 ///         static PARAM_NAME: once_cell::sync::Lazy<Name> =
 ///             once_cell::sync::Lazy::new(|| "param".parse().expect("Valid"));
 ///
-///         if token.name() != Self::name() {
+///         if token.definition_id() != Self::definition_id() {
 ///             return Err(
-///                 PredefinedTokenConversionError::Name(
-///                     token.name().clone()
+///                 PredefinedTokenConversionError::Id(
+///                     token.definition_id().clone()
 ///                 )
 ///             );
 ///         }
@@ -281,19 +285,22 @@ pub type DenialReason = String;
 pub trait PermissionTokenTrait:
     Into<PermissionToken> + TryFrom<PermissionToken, Error = PredefinedTokenConversionError>
 {
-    /// Name of the permission token.
-    ///
-    /// Cannot use an associated constant because [`Name`] cannot be created at *const* context.
-    fn name() -> &'static Name;
+    /// Get associated [`PermissionTokenDefinition`](iroha_data_model::permissions::PermissionTokenDefinition).
+    fn definition() -> &'static PermissionTokenDefinition;
+
+    /// Get associated [`PermissionTokenDefinition`](iroha_data_model::permissions::PermissionTokenDefinition) id.
+    fn definition_id() -> &'static <PermissionTokenDefinition as Identifiable>::Id {
+        Self::definition().id()
+    }
 }
 
 /// Errors that may appear when converting specialized permission tokens
 /// to universal `[PermissionToken]`
 #[derive(Debug, thiserror::Error)]
 pub enum PredefinedTokenConversionError {
-    /// Wrong token name
-    #[error("Wrong token name: {0}")]
-    Name(Name),
+    /// Wrong token definition id
+    #[error("Wrong token definition id: {0}")]
+    Id(<PermissionTokenDefinition as Identifiable>::Id),
     /// Parameter not present in token parameters
     #[error("Parameter {0} not found")]
     Param(&'static Name),
@@ -373,26 +380,30 @@ mod tests {
 
     impl PermissionTokenTrait for TestToken {
         #[inline]
-        fn name() -> &'static Name {
-            static NAME: once_cell::sync::Lazy<Name> =
-                once_cell::sync::Lazy::new(|| "test_token".parse().expect("Valid"));
-            &NAME
+        fn definition() -> &'static PermissionTokenDefinition {
+            static DEFINITION: once_cell::sync::Lazy<PermissionTokenDefinition> =
+                once_cell::sync::Lazy::new(|| {
+                    PermissionTokenDefinition::new("test_token".parse().expect("Valid"))
+                });
+            &DEFINITION
         }
     }
 
     impl From<TestToken> for PermissionToken {
         fn from(_: TestToken) -> Self {
-            PermissionToken::new(TestToken::name().clone())
+            PermissionToken::new(TestToken::definition_id().clone())
         }
     }
 
     impl TryFrom<PermissionToken> for TestToken {
         type Error = PredefinedTokenConversionError;
         fn try_from(token: PermissionToken) -> std::result::Result<Self, Self::Error> {
-            if token.name() == Self::name() {
+            if token.definition_id() == Self::definition_id() {
                 Ok(Self)
             } else {
-                Err(PredefinedTokenConversionError::Name(token.name().clone()))
+                Err(PredefinedTokenConversionError::Id(
+                    token.definition_id().clone(),
+                ))
             }
         }
     }
@@ -410,7 +421,7 @@ mod tests {
             _authority: &AccountId,
             _instruction: &Instruction,
             _wsv: &WorldStateView,
-        ) -> std::result::Result<TestToken, String> {
+        ) -> core::result::Result<TestToken, String> {
             Ok(TestToken)
         }
     }
@@ -496,11 +507,11 @@ mod tests {
         );
         let instruction_burn: Instruction = BurnBox::new(Value::U32(10), alice_xor_id).into();
         let mut domain = Domain::new(DomainId::from_str("test").expect("Valid")).build();
-        let mut bob_account = Account::new(bob_id.clone(), []).build();
-        assert!(bob_account.add_permission(TestToken.into()));
+        let bob_account = Account::new(bob_id.clone(), []).build();
         assert!(domain.add_account(bob_account).is_none());
         let wsv = WorldStateView::new(World::with([domain], BTreeSet::new()));
         let validator = HasTestToken.into_validator();
+        assert!(wsv.add_account_permission(&bob_id, TestToken.into()));
         assert!(validator
             .check(&alice_id, &instruction_burn, &wsv)
             .is_deny());
@@ -513,16 +524,23 @@ mod tests {
         let instruction: Instruction = Pair::new(
             TransferBox::new(
                 asset_id("btc", "crypto", "seller", "company"),
-                Expression::Add(Add::new(
-                    Expression::Query(
-                        FindAssetQuantityById::new(AssetId::new(
-                            AssetDefinitionId::from_str("btc2eth_rate#exchange").expect("Valid"),
-                            AccountId::from_str("dex@exchange").expect("Valid"),
-                        ))
-                        .into(),
-                    ),
-                    10_u32,
-                )),
+                EvaluatesTo::new_evaluates_to_value(
+                    Add::new(
+                        EvaluatesTo::new_unchecked(
+                            Expression::Query(
+                                FindAssetQuantityById::new(AssetId::new(
+                                    AssetDefinitionId::from_str("btc2eth_rate#exchange")
+                                        .expect("Valid"),
+                                    AccountId::from_str("dex@exchange").expect("Valid"),
+                                ))
+                                .into(),
+                            )
+                            .into(),
+                        ),
+                        10_u32,
+                    )
+                    .into(),
+                ),
                 asset_id("btc", "crypto", "buyer", "company"),
             ),
             TransferBox::new(

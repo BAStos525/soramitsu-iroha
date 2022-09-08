@@ -1,4 +1,5 @@
 //! Structures, traits and impls related to `Account`s.
+#![allow(clippy::std_instead_of_alloc)]
 
 #[cfg(not(feature = "std"))]
 use alloc::{
@@ -32,7 +33,6 @@ use crate::{
     expression::{ContainsAny, ContextValue, EvaluatesTo},
     ffi::ffi_item,
     metadata::Metadata,
-    permissions::{PermissionToken, Permissions},
     prelude::Asset,
     role::{prelude::RoleId, RoleIds},
     HasMetadata, Identifiable, Name, ParseError, PublicKey, Registered,
@@ -117,14 +117,15 @@ impl From<EvaluatesTo<bool>> for SignatureCheckCondition {
     }
 }
 
-/// Default signature condition check for accounts. Returns true if any of the signatories have signed a transaction.
+/// Default signature condition check for accounts.
+/// Returns true if any of the signatories have signed the transaction.
 impl Default for SignatureCheckCondition {
     #[inline]
     fn default() -> Self {
         Self(
             ContainsAny::new(
-                ContextValue::new(TRANSACTION_SIGNATORIES_VALUE),
-                ContextValue::new(ACCOUNT_SIGNATORIES_VALUE),
+                EvaluatesTo::new_unchecked(ContextValue::new(TRANSACTION_SIGNATORIES_VALUE).into()),
+                EvaluatesTo::new_unchecked(ContextValue::new(ACCOUNT_SIGNATORIES_VALUE).into()),
             )
             .into(),
         )
@@ -147,7 +148,6 @@ ffi_item! {
         IntoSchema,
     )]
     #[id(type = "<Account as Identifiable>::Id")]
-    #[allow(clippy::multiple_inherent_impl)]
     #[display(fmt = "[{id}]")]
     pub struct NewAccount {
         /// Identification
@@ -170,7 +170,6 @@ impl Registrable for NewAccount {
             id: self.id,
             signatories: self.signatories,
             assets: AssetsMap::default(),
-            permission_tokens: Permissions::default(),
             signature_check_condition: SignatureCheckCondition::default(),
             metadata: self.metadata,
             roles: RoleIds::default(),
@@ -184,6 +183,11 @@ impl HasMetadata for NewAccount {
     }
 }
 
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    iroha_ffi::ffi_export
+)]
+#[cfg_attr(feature = "ffi_import", iroha_ffi::ffi_import)]
 impl NewAccount {
     fn new(
         id: <Account as Identifiable>::Id,
@@ -200,14 +204,7 @@ impl NewAccount {
     pub(crate) fn id(&self) -> &<Account as Identifiable>::Id {
         &self.id
     }
-}
 
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    iroha_ffi::ffi_export
-)]
-#[cfg_attr(feature = "ffi_import", iroha_ffi::ffi_import)]
-impl NewAccount {
     /// Add [`Metadata`] to the account replacing previously defined
     #[must_use]
     pub fn with_metadata(mut self, metadata: Metadata) -> Self {
@@ -244,8 +241,6 @@ ffi_item! {
         assets: AssetsMap,
         /// [`Account`]'s signatories.
         signatories: Signatories,
-        /// Permission tokens of this account
-        permission_tokens: Permissions,
         /// Condition which checks if the account has the right signatures.
         #[getset(get = "pub")]
         #[cfg_attr(feature = "mutable_api", getset(set = "pub"))]
@@ -307,18 +302,6 @@ impl Account {
         self.signatories.iter()
     }
 
-    /// Return `true` if `Account` contains permission token
-    #[inline]
-    pub fn contains_permission(&self, token: &PermissionToken) -> bool {
-        self.permission_tokens.contains(token)
-    }
-
-    /// Get an iterator over [`permissions`](PermissionToken) of the `Account`
-    #[inline]
-    pub fn permissions(&self) -> impl ExactSizeIterator<Item = &PermissionToken> {
-        self.permission_tokens.iter()
-    }
-
     /// Return `true` if `Account` contains role
     #[inline]
     pub fn contains_role(&self, role_id: &RoleId) -> bool {
@@ -367,21 +350,6 @@ impl Account {
         self.assets.remove(asset_id)
     }
 
-    /// Add [`permission`](PermissionToken) into the [`Account`].
-    ///
-    /// If `Account` did not have this permission present, `true` is returned.
-    /// If `Account` did have this permission present, `false` is returned.
-    #[inline]
-    pub fn add_permission(&mut self, token: PermissionToken) -> bool {
-        self.permission_tokens.insert(token)
-    }
-
-    /// Remove a permission from the `Account` and return whether the permission was present in the `Account`
-    #[inline]
-    pub fn remove_permission(&mut self, token: &PermissionToken) -> bool {
-        self.permission_tokens.remove(token)
-    }
-
     /// Add [`Role`](crate::role::Role) into the [`Account`].
     ///
     /// If `Account` did not have this role present, `true` is returned.
@@ -409,9 +377,9 @@ impl FromIterator<Account> for crate::Value {
 
 /// Identification of an Account. Consists of Account's name and Domain's name.
 ///
-/// # Example
+/// # Examples
 ///
-/// ```
+/// ```rust
 /// use iroha_data_model::account::Id;
 ///
 /// let id = "user@company".parse::<Id>().expect("Valid");

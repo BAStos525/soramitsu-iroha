@@ -134,7 +134,10 @@ fn parse_derives(attrs: &[syn::Attribute]) -> Option<HashSet<Derive>> {
         .iter()
         .filter_map(|attr| {
             if let Ok(syn::Meta::List(meta_list)) = attr.parse_meta() {
-                return meta_list.path.is_ident("getset").then(|| meta_list.nested);
+                return meta_list
+                    .path
+                    .is_ident("getset")
+                    .then_some(meta_list.nested);
             }
 
             None
@@ -174,9 +177,7 @@ fn gen_derived_method(item_name: &Ident, field: &syn::Field, derive: Derive) -> 
     let self_ty = Some(parse_quote! {#item_name});
 
     let sig = gen_derived_method_sig(field, derive);
-    let doc = find_doc_attr(&field.attrs)
-        .cloned()
-        .expect_or_abort("Missing documentation");
+    let doc = find_doc_attr(&field.attrs).cloned();
 
     let field_ty = &field.ty;
     let field_ty = match derive {
@@ -205,6 +206,7 @@ fn gen_derived_method(item_name: &Ident, field: &syn::Field, derive: Derive) -> 
 
     FnDescriptor {
         self_ty,
+        trait_name: None,
         doc,
         sig,
         receiver: Some(receiver),
@@ -216,7 +218,7 @@ fn gen_derived_method(item_name: &Ident, field: &syn::Field, derive: Derive) -> 
 #[allow(clippy::expect_used)]
 fn gen_derived_method_sig(field: &syn::Field, derive: Derive) -> syn::Signature {
     let field_name = field.ident.as_ref().expect("Field name not defined");
-    let (field_vis, field_ty) = (&field.vis, &field.ty);
+    let field_ty = &field.ty;
 
     let method_name = Ident::new(
         &match derive {
@@ -229,13 +231,13 @@ fn gen_derived_method_sig(field: &syn::Field, derive: Derive) -> syn::Signature 
 
     match derive {
         Derive::Setter => parse_quote! {
-            #field_vis fn #method_name(&mut self, #field)
+            fn #method_name(&mut self, #field)
         },
         Derive::Getter => parse_quote! {
-            #field_vis fn #method_name(&self) -> & #field_ty
+            fn #method_name(&self) -> & #field_ty
         },
         Derive::MutGetter => parse_quote! {
-            #field_vis fn #method_name(&mut self) -> &mut #field_ty
+            fn #method_name(&mut self) -> &mut #field_ty
         },
     }
 }

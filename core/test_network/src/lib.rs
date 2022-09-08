@@ -23,8 +23,11 @@ use iroha_core::{
 };
 use iroha_data_model::{peer::Peer as DataModelPeer, prelude::*};
 use iroha_logger::{Configuration as LoggerConfiguration, InstrumentFutures};
-use iroha_permissions_validators::public_blockchain::{
-    burn::CanBurnAssetWithDefinition, mint::CanMintUserAssetDefinitions,
+use iroha_permissions_validators::{
+    private_blockchain,
+    public_blockchain::{
+        self, burn::CanBurnAssetWithDefinition, mint::CanMintUserAssetDefinitions,
+    },
 };
 use iroha_primitives::small;
 use rand::seq::IteratorRandom;
@@ -106,6 +109,12 @@ impl<G: GenesisNetworkTrait> TestGenesis for G {
         let burn_rose_permission: PermissionToken =
             CanBurnAssetWithDefinition::new(rose_definition_id.clone()).into();
 
+        genesis.transactions[0].isi.extend(
+            public_blockchain::default_permission_token_definitions()
+                .into_iter()
+                .chain(private_blockchain::default_permission_token_definitions().into_iter())
+                .map(|token_definition| RegisterBox::new(token_definition.clone()).into()),
+        );
         genesis.transactions[0].isi.push(
             RegisterBox::new(AssetDefinition::quantity(
                 AssetDefinitionId::from_str("rose#wonderland").expect("valid names"),
@@ -137,7 +146,7 @@ impl<G: GenesisNetworkTrait> TestGenesis for G {
         G::from_configuration(
             submit_genesis,
             genesis,
-            &Some(cfg.genesis),
+            Some(&cfg.genesis),
             &cfg.sumeragi.transaction_limits,
         )
         .expect("Failed to init genesis")
@@ -395,6 +404,9 @@ where
     shutdown: Option<JoinHandle<()>>,
     /// Iroha itself
     pub iroha: Option<Iroha<G, S, B>>,
+    /// Temporary directory
+    // Note: last field to be dropped after Iroha (struct fields drops in FIFO RFC 1857)
+    temp_dir: Option<Arc<TempDir>>,
 }
 
 impl From<Peer> for Box<iroha_core::tx::Peer> {
@@ -424,6 +436,7 @@ where
             api_addr = %self.api_address,
             "Stopping peer",
         );
+
         if let Some(shutdown) = self.shutdown.take() {
             shutdown.abort();
             iroha_logger::info!("Shutting down peer...");
@@ -489,8 +502,6 @@ where
 
         let handle = task::spawn(
             async move {
-                // Prevent temporary directory deleting
-                let _temp_dir = Arc::clone(&temp_dir);
                 let mut iroha = <Iroha<G, S, B>>::with_genesis(
                     genesis,
                     configuration,
@@ -511,6 +522,8 @@ where
         self.iroha = Some(receiver.recv().unwrap());
         time::sleep(Duration::from_millis(300)).await;
         self.shutdown = Some(handle);
+        // Prevent temporary directory deleting
+        self.temp_dir = Some(temp_dir);
     }
 
     /// Creates peer
@@ -539,6 +552,7 @@ where
             shutdown,
             iroha: None,
             broker: Broker::new(),
+            temp_dir: None,
         })
     }
 }

@@ -1,6 +1,11 @@
 //! This module contains enumeration of all possible Iroha Special
 //! Instructions `Instruction`, generic instruction types and related
 //! implementations.
+#![allow(
+    clippy::arithmetic,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc
+)]
 pub mod account;
 pub mod asset;
 pub mod block;
@@ -153,6 +158,9 @@ pub mod error {
         /// Failed to find Role by id.
         #[error("Failed to find role by id: `{0}`")]
         Role(RoleId),
+        /// Failed to find PermissionToken by id.
+        #[error("Failed to find permission definition token by id: `{0}`")]
+        PermissionTokenDefinition(PermissionTokenDefinitionId),
     }
 
     /// Generic structure used to represent a mismatch
@@ -267,6 +275,10 @@ impl Execute for RegisterBox {
                 Register::<Trigger<FilterBox>>::new(*trigger).execute(authority, wsv)
             }
             RegistrableBox::Role(role) => Register::<Role>::new(*role).execute(authority, wsv),
+            RegistrableBox::PermissionTokenDefinition(token_definition) => {
+                Register::<PermissionTokenDefinition>::new(*token_definition)
+                    .execute(authority, wsv)
+            }
         }
     }
 }
@@ -290,6 +302,9 @@ impl Execute for UnregisterBox {
                 Unregister::<Domain>::new(domain_id).execute(authority, wsv)
             }
             IdBox::PeerId(peer_id) => Unregister::<Peer>::new(peer_id).execute(authority, wsv),
+            IdBox::PermissionTokenDefinitionId(definition_id) => {
+                Unregister::<PermissionTokenDefinition>::new(definition_id).execute(authority, wsv)
+            }
             IdBox::RoleId(role_id) => Unregister::<Role>::new(role_id).execute(authority, wsv),
             IdBox::TriggerId(trigger_id) => {
                 Unregister::<Trigger<FilterBox>>::new(trigger_id).execute(authority, wsv)

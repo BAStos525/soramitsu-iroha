@@ -1,4 +1,4 @@
-#![allow(unsafe_code)]
+#![allow(unsafe_code, clippy::undocumented_unsafe_blocks, clippy::arithmetic)]
 #![no_std]
 
 //! Structures, macros related to FFI and generation of FFI bindings.
@@ -6,6 +6,8 @@
 //! are strictly avoided in the FFI API
 
 extern crate alloc;
+
+use alloc::vec::Vec;
 
 pub use iroha_ffi_derive::*;
 use owned::Local;
@@ -107,6 +109,8 @@ pub trait Output: Sized {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i8)]
 pub enum FfiReturn {
+    /// The input argument provided to FFI function can't be converted into inner rust representation.
+    ConversionFailed = -7,
     /// The input argument provided to FFI function has a trap representation.
     TrapRepresentation = -6,
     /// FFI function execution panicked.
@@ -126,16 +130,14 @@ pub enum FfiReturn {
 unsafe impl<T> ReprC for *const T {}
 unsafe impl<T> ReprC for *mut T {}
 
-impl<'itm, T: ReprC + Copy + 'itm> AsReprCRef<'itm> for T
-where
-    T: IntoFfi<Target = Self>,
-{
+impl<'itm, T: ReprC + Copy + IntoFfi<Target = Self> + 'itm> AsReprCRef<'itm> for T {
     type Target = Self;
 
     fn as_ref(&self) -> Self::Target {
         *self
     }
 }
+
 impl<'itm, T: 'itm> AsReprCRef<'itm> for *const T {
     type Target = Self;
 
@@ -152,6 +154,7 @@ impl<'itm, T: ReprC> TryFromReprC<'itm> for &'itm T {
         source.as_ref().ok_or(FfiReturn::ArgIsNull)
     }
 }
+
 impl<'itm, T: ReprC> TryFromReprC<'itm> for &'itm mut T {
     type Source = *mut T;
     type Store = ();
@@ -161,20 +164,15 @@ impl<'itm, T: ReprC> TryFromReprC<'itm> for &'itm mut T {
     }
 }
 
-impl<T: ReprC + Copy> IntoFfi for &T
-where
-    T: IntoFfi<Target = T>,
-{
+impl<T: ReprC + Copy + IntoFfi<Target = T>> IntoFfi for &T {
     type Target = *const T;
 
     fn into_ffi(self) -> Self::Target {
         Self::Target::from(self)
     }
 }
-impl<T: ReprC + Copy> IntoFfi for &mut T
-where
-    T: IntoFfi<Target = T>,
-{
+
+impl<T: ReprC + Copy + IntoFfi<Target = T>> IntoFfi for &mut T {
     type Target = *mut T;
 
     fn into_ffi(self) -> Self::Target {
@@ -192,6 +190,7 @@ impl<T> OutPtrOf<*mut T> for *mut *mut T {
         Ok(())
     }
 }
+
 impl<T> OutPtrOf<*const T> for *mut *const T {
     unsafe fn write(self, source: *const T) -> Result<()> {
         if self.is_null() {
@@ -202,10 +201,8 @@ impl<T> OutPtrOf<*const T> for *mut *const T {
         Ok(())
     }
 }
-impl<T: ReprC> OutPtrOf<T> for *mut T
-where
-    T: IntoFfi<Target = T>,
-{
+
+impl<T: ReprC + IntoFfi<Target = T>> OutPtrOf<T> for *mut T {
     unsafe fn write(self, source: T) -> Result<()> {
         if self.is_null() {
             return Err(FfiReturn::ArgIsNull);
@@ -215,6 +212,7 @@ where
         Ok(())
     }
 }
+
 impl<T: ReprC + Copy> OutPtrOf<Local<T>> for *mut T {
     unsafe fn write(self, source: Local<T>) -> Result<()> {
         if self.is_null() {
@@ -229,12 +227,13 @@ impl<T: ReprC + Copy> OutPtrOf<Local<T>> for *mut T {
 impl<T> Output for *mut T {
     type OutPtr = *mut *mut T;
 }
+
 impl<T> Output for *const T {
     type OutPtr = *mut *const T;
 }
-impl<T: ReprC> Output for T
+
+impl<T: ReprC + IntoFfi<Target = Self>> Output for T
 where
-    T: IntoFfi<Target = Self>,
     *mut Self: OutPtrOf<Self>,
 {
     type OutPtr = *mut Self;
@@ -255,6 +254,51 @@ pub struct Opaque {
     // - `PhantomPinned` is !Unpin. It must be in `PhantomData` because
     //   its memory representation is not considered FFI-safe.
     __marker: core::marker::PhantomData<(*mut u8, core::marker::PhantomPinned)>,
+}
+
+/// Trait for `#[repr(transparent)]` structs to convert between [`Self`] and [`Self::Inner`]
+///
+/// # Safety
+/// `Self` and `Self::Inner` must have the same memory layout.
+pub unsafe trait Transparent: Sized {
+    /// Non-ZST field of transparent struct
+    type Inner;
+
+    /// Convert transparent struct into its non-ZST field
+    fn into_inner(outer: Self) -> Self::Inner;
+
+    /// Recover transparent struct from its non-ZST field
+    fn from_inner(inner: Self::Inner) -> Self;
+}
+
+/// Trait for `#[repr(transparent)]` structs to convert between slice of [`Self`] and slice of [`Self::Inner`]
+///
+/// # Safety
+/// `Self` and `Self::Inner` must have the same memory layout.
+pub unsafe trait TransparentSlice: Sized {
+    /// Non-ZST field of transparent struct
+    type Inner;
+
+    /// Convert transparent struct into its non-ZST field
+    fn into_inner(outer: &[Self]) -> &[Self::Inner];
+
+    /// Recover transparent struct from its non-ZST field
+    fn from_inner(inner: &[Self::Inner]) -> &[Self];
+}
+
+/// Trait for `#[repr(transparent)]` structs to convert between vec of [`Self`] and vec of [`Self::Inner`]
+///
+/// # Safety
+/// `Self` and `Self::Inner` must have the same memory layout.
+pub unsafe trait TransparentVec: Sized {
+    /// Non-ZST field of transparent struct
+    type Inner;
+
+    /// Convert transparent struct into its non-ZST field
+    fn into_inner(outer: Vec<Self>) -> Vec<Self::Inner>;
+
+    /// Recover transparent struct from its non-ZST field
+    fn from_inner(inner: Vec<Self::Inner>) -> Vec<Self>;
 }
 
 macro_rules! impl_tuple {
@@ -305,6 +349,7 @@ macro_rules! impl_tuple {
                 $ffi_ty($( <$ty as IntoFfi>::into_ffi($ty),)+)
             }
         }
+
         // TODO: With specialization it should be possible to avoid clone
         impl<$($ty: IntoFfi + Clone),+> IntoFfi for &($( $ty, )+) {
             type Target = Local<$ffi_ty<$($ty::Target,)+>>;
@@ -313,6 +358,40 @@ macro_rules! impl_tuple {
             fn into_ffi(self) -> Self::Target {
                 let ($($ty,)+) = Clone::clone(self);
                 Local::new($ffi_ty($( <$ty as IntoFfi>::into_ffi($ty),)+))
+            }
+        }
+
+        impl<$($ty: IntoFfi),+> $crate::owned::IntoFfiVec for ($( $ty, )+) {
+            type Target = $crate::owned::LocalSlice<<Self as IntoFfi>::Target>;
+
+            fn into_ffi(source: Vec<Self>) -> Self::Target {
+                source.into_iter().map(IntoFfi::into_ffi).collect()
+            }
+        }
+
+        impl<'itm, $($ty: TryFromReprC<'itm>),+> $crate::owned::TryFromReprCVec<'itm> for ($( $ty, )+) {
+            type Source = $crate::slice::SliceRef<'itm, <Self as TryFromReprC<'itm>>::Source>;
+            type Store = Vec<<Self as TryFromReprC<'itm>>::Store>;
+
+            unsafe fn try_from_repr_c(
+                source: Self::Source,
+                store: &'itm mut Self::Store,
+            ) -> Result<Vec<Self>> {
+                let prev_store_len = store.len();
+                let slice = source.into_rust().ok_or(FfiReturn::ArgIsNull)?;
+                store.extend(core::iter::repeat_with(Default::default).take(slice.len()));
+
+                let mut substore = &mut store[prev_store_len..];
+                let mut res = Vec::with_capacity(slice.len());
+
+                let mut i = 0;
+                while let Some((first, rest)) = substore.split_first_mut() {
+                    res.push(TryFromReprC::try_from_repr_c(slice[i], first)?);
+                    substore = rest;
+                    i += 1;
+                }
+
+                Ok(res)
             }
         }
     };
@@ -326,7 +405,7 @@ macro_rules! impl_tuple {
             }
 
             #[allow(non_snake_case)]
-            impl<'store, 'tup, $($ty: super::TryFromReprC<'tup>),+> From<&'tup mut ($($ty::Store,)+)> for Store<'tup, $($ty),+> {
+            impl<'tup, $($ty: super::TryFromReprC<'tup>),+> From<&'tup mut ($($ty::Store,)+)> for Store<'tup, $($ty),+> {
                 fn from(($($ty,)+): &'tup mut ($($ty::Store,)+)) -> Self {
                     Self {$($ty,)+}
                 }
@@ -335,6 +414,7 @@ macro_rules! impl_tuple {
     };
 }
 
+// TODO: Rewrite via proc macro
 impl_tuple! {(A) -> FfiTuple1}
 impl_tuple! {(A, B) -> FfiTuple2}
 impl_tuple! {(A, B, C) -> FfiTuple3}

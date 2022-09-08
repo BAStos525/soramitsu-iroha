@@ -15,6 +15,7 @@ fi
 
 git interpret-trailers --if-exists doNothing --trailer "Signed-off-by: $NAME <$EMAIL>" --in-place "$1"
 
+# Commits message validation
 Color_Off='\033[0m' 
 BRed="\033[1;31m"         # Red
 BGreen="\033[1;32m"       # Green

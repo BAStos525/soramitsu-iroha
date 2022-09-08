@@ -22,8 +22,8 @@ The `commit-msg` hook will automatically check your commits for the correct mess
 Commits message policy is similar to the [Pull Request Title policy](https://github.com/hyperledger/iroha/blob/iroha2-dev/.github/workflows/iroha2-dev-pr-title.yml).
 
 Each commit message must be started with one of the following template:
- - "[feature]: <commit message>"
- - "[refactor]: <commit message>"
- - "[fix]: <commit message>"
- - "[documentation]: <commit message>"
- - "[ci]: <commit message>"
+ - "[feature] #<issue_number>: <commit message>"
+ - "[refactor]( optional#<issue_number>): <commit message>"
+ - "[fix]( optional#<issue_number>): <commit message>"
+ - "[documentation]( optional#<issue_number>): <commit message>"
+ - "[ci]( optional#<issue_number>): <commit message>"

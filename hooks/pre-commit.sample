@@ -1,56 +1,11 @@
 #!/bin/bash
 set -e
-cargo +nightly-2022-08-15 fmt --all -- --check
-cargo +nightly-2022-08-15 lints clippy --workspace --benches --tests --examples --quiet --all-features
-cargo run --bin kagami -- docs >docs/source/references/config.md
-cargo run --bin kagami -- genesis >configs/peer/genesis.json
-cargo run --bin kagami -- schema >docs/source/references/schema.json
-git add docs/source/references/config.md configs/peer/genesis.json docs/source/references/schema.json
+# cargo +nightly-2022-08-15 fmt --all -- --check
+# cargo +nightly-2022-08-15 lints clippy --workspace --benches --tests --examples --quiet --all-features
+# cargo run --bin kagami -- docs >docs/source/references/config.md
+# cargo run --bin kagami -- genesis >configs/peer/genesis.json
+# cargo run --bin kagami -- schema >docs/source/references/schema.json
+# git add docs/source/references/config.md configs/peer/genesis.json docs/source/references/schema.json
 
-# echo "installing commit-msg rule"
-# if ! type commit-msg; then
-#     echo "Adding commit-msg rule..."
-#     cp hooks/commit-msg.sample .git/hooks/commit-msg
-# fi
 
-# if ! type commit-msg >/dev/null; then
-#     echo "I tried to install pre-commit but now I can't find it."
-#     echo "It's up to you now to install it (try \`pip install pre-commit\`) or add it to your path!"
-#     echo "Remember to initialise pre-commit for this repo after with \`pre-commit install\`"
-# else
-#     pcommit-msg install
-#     echo "Successfully completed initialisation!"
-# fi
-# export SHELL=$(echo $0)
-# if echo $SHELL =~ "bash"; then
-#   source ~/.profile
-# elif echo $SHELL  =~ "zsh"; then
-#   [[ -e ~/.profile ]] && emulate sh -c 'source ~/.profile'
-# else
-#   echo "I can't configure your shell, please notify the DevOps team"
-# fi
-# commit-msg install
-
-echo "installing pre-commit package"
-if ! type pre-commit; then
-    echo "Installing pre-commit..."
-    python3 -m pip install --user pre-commit
-fi
-
-if ! type pre-commit >/dev/null; then
-    echo "I tried to install pre-commit but now I can't find it."
-    echo "It's up to you now to install it (try \`pip install pre-commit\`) or add it to your path!"
-    echo "Remember to initialise pre-commit for this repo after with \`pre-commit install\`"
-else
-    pre-commit install
-    echo "Successfully completed initialisation!"
-fi
-export SHELL=$(echo $0)
-if echo $SHELL =~ "bash"; then
-  source ~/.profile
-elif echo $SHELL  =~ "zsh"; then
-  [[ -e ~/.profile ]] && emulate sh -c 'source ~/.profile'
-else
-  echo "I can't configure your shell, please notify the DevOps team"
-fi
-pre-commit install
+cp hooks/commit-msg.sample .git/hooks/commit-msg

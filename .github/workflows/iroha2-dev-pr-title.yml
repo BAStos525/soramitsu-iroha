@@ -1,9 +1,9 @@
 name: I2::Dev::Title
 
 on:
-  pull_request:
-    branches: [iroha2-dev]
-    types: [opened, edited, reopened, closed, synchronize]
+  # pull_request:
+  #   branches: [iroha2-dev]
+  #   types: [opened, edited, reopened, closed, synchronize]
   push:
     branches: [iroha2-dev]
 

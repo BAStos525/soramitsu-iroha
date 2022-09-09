@@ -5,7 +5,7 @@ on:
   #   branches: [iroha2-dev]
   #   types: [opened, edited, reopened, closed, synchronize]
   push:
-    branches: [iroha2-dev]
+    branches: [iroha2-dev, feature/DOPS-1787/commits-checking]
 
 jobs:
   # check:

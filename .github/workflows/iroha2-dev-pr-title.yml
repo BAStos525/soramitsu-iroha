@@ -123,7 +123,7 @@ jobs:
       - name: Check for [fix]
         id: fix-match
         continue-on-error: true
-        if: always() && steps.refactor-match.outcome == 'failure'
+        if: always() && steps.fix-match.outcome == 'failure'
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '\[fix\] #\d+(, #\d+)*: .+$'

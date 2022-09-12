@@ -1,0 +1,63 @@
+name: I2::Dev::Title
+
+on:
+  push:
+    branches: [iroha2-dev, feature/DOPS-1787/commits-checking]
+  # pull_request:
+  #   branches: [iroha2-dev]
+  #   types: [opened, edited, reopened, closed, synchronize]
+
+jobs:
+  check-commit-message:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for [feature]
+        id: feature-match
+        uses: actions-ecosystem/action-regex-match@v2.0.2
+        with:
+          text: ${{ github.event.head_commit.message }}
+          pattern: '^\[feature\] #\d+(, #\d+)*: .+$'
+
+      - name: Check for [refactor]
+        id: refactor-match
+        if: steps.feature-match.outputs.match == ''
+        uses: gsactions/commit-message-checker@v1.0.1
+        with:
+          text: ${{ github.event.head_commit.message }}
+          pattern: '^\[refactor\]( #\d+(, #\d+)*)?: .+$'
+
+      - name: Check for [fix]
+        id: fix-match
+        if: steps.refactor-match.outputs.match == ''
+        uses: actions-ecosystem/action-regex-match@v2.0.2
+        with:
+          text: ${{ github.event.head_commit.message }}
+          pattern: '\[fix\] #\d+(, #\d+)*: .+$'
+
+      - name: Check for [documentation]
+        id: docs-match
+        if: steps.feature-match.outputs.match == ''
+        uses: actions-ecosystem/action-regex-match@v2.0.2
+        with:
+          text: ${{ github.event.head_commit.message }}
+          pattern: '^\[documentation\]( #\d+(, #\d+)*)?: .+$'
+
+      - name: Check for [ci]
+        id: ci-match
+        if: steps.feature-match.outputs.match == ''
+        uses: actions-ecosystem/action-regex-match@v2.0.2
+        with:
+          text: ${{ github.event.head_commit.message }}
+          pattern: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
+
+      - name: Check for [merge]
+        id: merge-match
+        if: steps.feature-match.outputs.match == ''
+        uses: actions-ecosystem/action-regex-match@v2.0.2
+        with:
+          text: ${{ github.event.head_commit.message }}
+          pattern: '^[M-Mm-m]erge*.+$'
+
+      - name: None of the above
+        if: steps.fix-match.outputs.match == '' && steps.refactor-match.outputs.match == '' && steps.feature-match.outputs.match == '' && steps.docs-match.outputs.match == '' && steps.ci-match.outputs.match == ''
+        run: exit 1

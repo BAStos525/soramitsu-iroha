@@ -101,6 +101,7 @@ jobs:
     steps:
       - name: Check for [feature]
         id: feature-match
+        continue-on-error: true
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^\[feature\]*.+$'

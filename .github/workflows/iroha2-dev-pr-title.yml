@@ -101,7 +101,7 @@ jobs:
     steps:
       - name: Check for [feature]
         id: feature-match
-     #   continue-on-error: true
+        continue-on-error: true
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^\[feature\]*.+$'
@@ -111,8 +111,8 @@ jobs:
 
       - name: Check for [refactor]
         id: refactor-match
-     #   continue-on-error: true
-        if: ${{ success() || failure() }}
+        continue-on-error: true
+        if: ${{ success() }}
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^\[refactor\]( #\d+(, #\d+)*)?: .+$'
@@ -122,8 +122,8 @@ jobs:
 
       - name: Check for [fix]
         id: fix-match
-    #    continue-on-error: true
-        if: ${{ failure() }}
+        continue-on-error: true
+        if: ${{ success() }}
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '\[fix\] #\d+(, #\d+)*: .+$'
@@ -133,8 +133,8 @@ jobs:
 
       - name: Check for [documentation]
         id: docs-match
-  #      continue-on-error: true
-        if: ${{ failure() }}
+        continue-on-error: true
+        if: ${{ success() }}
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^\[documentation\]( #\d+(, #\d+)*)?: .+$'
@@ -144,8 +144,8 @@ jobs:
 
       - name: Check for [ci]
         id: ci-match
-  #      continue-on-error: true
-        if: ${{ failure() }}
+        continue-on-error: true
+        if: ${{ success() }}
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
@@ -155,8 +155,8 @@ jobs:
 
       - name: Check for [merge]
         id: merge-match
-  #     continue-on-error: true
-        if: ${{ failure() }}
+        continue-on-error: true
+        if: ${{ success() }}
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^[M-Mm-m]erge*.+$'
@@ -165,5 +165,5 @@ jobs:
           excludeTitle: 'true'
 
       - name: None of the above
-        if: steps.feature-match.conclusion == 'success' && steps.refactor-match.conclusion == 'success' && steps.fix-match.conclusion == 'success' && steps.documentation-match.conclusion == 'success' && steps.ci-match.conclusion == 'success' && steps.merge-match.conclusion == 'success'
+        if: steps.feature-match.outcome == 'failure' && steps.refactor-match.outcome == 'failure' && steps.fix-match.outcome == 'failure' && steps.documentation-match.outcome == 'failure' && steps.ci-match.outcome == 'failure' && steps.merge-match.outcome == 'failure'
         run: exit 1

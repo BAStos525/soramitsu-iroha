@@ -108,14 +108,13 @@ jobs:
           error: 'You must use [feature]: #<issue number>" line.'
    #       one_pass_all_pass: 'true'
 
-#       - name: Check for [refactor]
+      - name: Check for [refactor]
 
-#         uses: gsactions/commit-message-checker@v1.0.1
-#         with:
-#           commits: ${{ steps.get-pr-commits.outputs.commits }}
-#           pattern: '^\[refactor\](( \#)([[:digit:]]+))?\: .+$'
-#           error: 'You may use [refactor]: #<issue number>" line.'
-#      #     one_pass_all_pass: 'true'
+        uses: gsactions/commit-message-checker@v1.0.1
+        with:
+          pattern: '^\[refactor\](( \#)([[:digit:]]+))?\: .+$'
+          error: 'You may use [refactor]: #<issue number>" line.'
+     #     one_pass_all_pass: 'true'
 
 #       - name: Check for [fix]
 

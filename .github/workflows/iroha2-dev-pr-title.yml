@@ -135,7 +135,6 @@ jobs:
           error: 'You may use [ci]: #<issue number>" line.'
 
       - name: Check for [merge]
-        continue-on-error: true
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^[M-Mm-m]erge*.+$'

@@ -105,9 +105,8 @@ jobs:
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^\[feature\]*.+$'
-          error: 'You must use [feature]: #<issue number>" line.'
-          excludeDescription: 'true'
-          excludeTitle: 'true'
+        #  error: 'You must use [feature]: #<issue number>" line.'
+
 
       - name: Check for [refactor]
         id: refactor-match
@@ -116,9 +115,7 @@ jobs:
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^\[refactor\]( #\d+(, #\d+)*)?: .+$'
-          error: 'You may use [refactor]: #<issue number>" line.'
-          excludeDescription: 'true'
-          excludeTitle: 'true'
+      #    error: 'You may use [refactor]: #<issue number>" line.'
 
       - name: Check for [fix]
         id: fix-match
@@ -127,9 +124,8 @@ jobs:
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '\[fix\] #\d+(, #\d+)*: .+$'
-          error: 'You may use [fix]: #<issue number>" line.'
-          excludeDescription: 'true'
-          excludeTitle: 'true'
+     #     error: 'You may use [fix]: #<issue number>" line.'
+
 
       - name: Check for [documentation]
         id: docs-match
@@ -138,9 +134,8 @@ jobs:
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^\[documentation\]( #\d+(, #\d+)*)?: .+$'
-          error: 'You may use [documentation]: #<issue number>" line.'
-          excludeDescription: 'true'
-          excludeTitle: 'true'
+       #   error: 'You may use [documentation]: #<issue number>" line.'
+
 
       - name: Check for [ci]
         id: ci-match
@@ -149,9 +144,8 @@ jobs:
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
-          error: 'You may use [ci]: #<issue number>" line.'
-          excludeDescription: 'true'
-          excludeTitle: 'true'
+      #    error: 'You may use [ci]: #<issue number>" line.'
+
 
       - name: Check for [merge]
         id: merge-match
@@ -160,9 +154,8 @@ jobs:
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^[M-Mm-m]erge*.+$'
-          error: 'You may use [merge]: #<issue number>" line.'
-          excludeDescription: 'true'
-          excludeTitle: 'true'
+      #    error: 'You may use [merge]: #<issue number>" line.'
+
 
       # - name: None of the above
       #   if: steps.feature-match.outcome == 'failure' && steps.refactor-match.outcome == 'failure' && steps.fix-match.outcome == 'failure' && steps.documentation-match.outcome == 'failure' && steps.ci-match.outcome == 'failure' && steps.merge-match.outcome == 'failure'

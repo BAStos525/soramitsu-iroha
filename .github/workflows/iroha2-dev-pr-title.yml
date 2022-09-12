@@ -99,7 +99,6 @@ jobs:
   commit-message:
     runs-on: ubuntu-latest
     steps:
-  #    - uses: actions/checkout@v3
       - name: Check for [feature]
         continue-on-error: true
         uses: gsactions/commit-message-checker@v1.0.1
@@ -107,47 +106,37 @@ jobs:
           pattern: '^\[feature\]*.+$'
           error: 'You must use [feature]: #<issue number>" line.'
 
-
       - name: Check for [refactor]
-
+        continue-on-error: true
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^\[refactor\]( #\d+(, #\d+)*)?: .+$'
           error: 'You may use [refactor]: #<issue number>" line.'
 
-#       - name: Check for [fix]
+      - name: Check for [fix]
+        continue-on-error: true
+        uses: gsactions/commit-message-checker@v1.0.1
+        with:
+          pattern: '\[fix\] #\d+(, #\d+)*: .+$'
+          error: 'You may yse [fix]: #<issue number>" line.'
 
-#         uses: gsactions/commit-message-checker@v1.0.1
-#         with:
-#           commits: ${{ steps.get-pr-commits.outputs.commits }}
-#           pattern: '^\[fix\](( \#)([[:digit:]]+))?\: .+$'
-#           error: 'You may yse [fix]: #<issue number>" line.'
-#    #       one_pass_all_pass: 'true'
+      - name: Check for [documentation]
+        continue-on-error: true
+        uses: gsactions/commit-message-checker@v1.0.1
+        with:
+          pattern: '^\[documentation\]( #\d+(, #\d+)*)?: .+$'
+          error: 'You may use [documentation]: #<issue number>" line.'
 
-#       - name: Check for [documentation]
+      - name: Check for [ci]
+        continue-on-error: true
+        uses: gsactions/commit-message-checker@v1.0.1
+        with:
+          pattern: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
+          error: 'You may use [ci]: #<issue number>" line.'
 
-#         uses: gsactions/commit-message-checker@v1.0.1
-#         with:
-#           commits: ${{ steps.get-pr-commits.outputs.commits }}
-#           pattern: '^\[documentation\](( \#)([[:digit:]]+))?\: .+$'
-#           error: 'You may use [documentation]: #<issue number>" line.'
-#  #         one_pass_all_pass: 'true'
-
-#       - name: Check for [ci]
-
-#         uses: gsactions/commit-message-checker@v1.0.1
-#         with:
-#           commits: ${{ steps.get-pr-commits.outputs.commits }}
-#           pattern: '^\[ci\](( \#)([[:digit:]]+))?\: .+$'
-#           error: 'You may use [ci]: #<issue number>" line.'
-#     #      one_pass_all_pass: 'true'
-
-#       - name: Check for [merge]
-
-#         uses: gsactions/commit-message-checker@v1.0.1
-#         with:
-#           commits: ${{ steps.get-pr-commits.outputs.commits }}
-#           pattern: '^[M-Mm-m]erge*.+$'
-#           error: 'You may use [merge]: #<issue number>" line.'
-#  #         one_pass_all_pass: 'true'
-##
+      - name: Check for [merge]
+        continue-on-error: true
+        uses: gsactions/commit-message-checker@v1.0.1
+        with:
+          pattern: '^[M-Mm-m]erge*.+$'
+          error: 'You may use [merge]: #<issue number>" line.'

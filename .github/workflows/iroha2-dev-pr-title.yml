@@ -101,7 +101,7 @@ jobs:
     steps:
   #    - uses: actions/checkout@v3
       - name: Check for [feature]
-
+        continue-on-error: true
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^\[feature\]*.+$'

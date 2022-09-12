@@ -123,7 +123,7 @@ jobs:
       - name: Check for [fix]
         id: fix-match
         continue-on-error: true
-        if: ${{ success() || failure() }}
+        if: ${{ failure() }}
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '\[fix\] #\d+(, #\d+)*: .+$'
@@ -134,7 +134,7 @@ jobs:
       - name: Check for [documentation]
         id: docs-match
         continue-on-error: true
-        if: ${{ success() || failure() }}
+        if: ${{ failure() }}
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^\[documentation\]( #\d+(, #\d+)*)?: .+$'
@@ -145,7 +145,7 @@ jobs:
       - name: Check for [ci]
         id: ci-match
         continue-on-error: true
-        if: ${{ success() || failure() }}
+        if: ${{ failure() }}
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
@@ -156,7 +156,7 @@ jobs:
       - name: Check for [merge]
         id: merge-match
         continue-on-error: true
-        if: ${{ success() || failure() }}
+        if: ${{ failure() }}
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^[M-Mm-m]erge*.+$'

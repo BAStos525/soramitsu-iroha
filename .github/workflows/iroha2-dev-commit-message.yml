@@ -16,7 +16,7 @@ jobs:
         uses: actions-ecosystem/action-regex-match@v2.0.2
         with:
           text: ${{ github.event.head_commit.message }}
-          pattern: '^\[feature\] #\d+(, #\d+)*: .+$'
+          regex: '^\[feature\] #\d+(, #\d+)*: .+$'
 
       - name: Check for [refactor]
         id: refactor-match
@@ -24,7 +24,7 @@ jobs:
         uses: actions-ecosystem/action-regex-match@v2.0.2
         with:
           text: ${{ github.event.head_commit.message }}
-          pattern: '^\[refactor\]( #\d+(, #\d+)*)?: .+$'
+          regex: '^\[refactor\]( #\d+(, #\d+)*)?: .+$'
 
       - name: Check for [fix]
         id: fix-match
@@ -32,7 +32,7 @@ jobs:
         uses: actions-ecosystem/action-regex-match@v2.0.2
         with:
           text: ${{ github.event.head_commit.message }}
-          pattern: '\[fix\] #\d+(, #\d+)*: .+$'
+          regex: '\[fix\] #\d+(, #\d+)*: .+$'
 
       - name: Check for [documentation]
         id: docs-match
@@ -40,7 +40,7 @@ jobs:
         uses: actions-ecosystem/action-regex-match@v2.0.2
         with:
           text: ${{ github.event.head_commit.message }}
-          pattern: '^\[documentation\]( #\d+(, #\d+)*)?: .+$'
+          regex: '^\[documentation\]( #\d+(, #\d+)*)?: .+$'
 
       - name: Check for [ci]
         id: ci-match
@@ -48,7 +48,7 @@ jobs:
         uses: actions-ecosystem/action-regex-match@v2.0.2
         with:
           text: ${{ github.event.head_commit.message }}
-          pattern: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
+          regex: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
 
       - name: Check for [merge]
         id: merge-match
@@ -56,7 +56,7 @@ jobs:
         uses: actions-ecosystem/action-regex-match@v2.0.2
         with:
           text: ${{ github.event.head_commit.message }}
-          pattern: '^[M-Mm-m]erge*.+$'
+          regex: '^[M-Mm-m]erge*.+$'
 
       - name: None of the above
         if: steps.fix-match.outputs.match == '' && steps.refactor-match.outputs.match == '' && steps.feature-match.outputs.match == '' && steps.docs-match.outputs.match == '' && steps.ci-match.outputs.match == ''

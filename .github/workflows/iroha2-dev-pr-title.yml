@@ -158,3 +158,4 @@ jobs:
           pattern: '^[M-Mm-m]erge*.+$'
           error: 'You may use [merge]: #<issue number>" line.'
           one_pass_all_pass: 'true'
+##

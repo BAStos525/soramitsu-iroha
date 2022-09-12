@@ -110,7 +110,7 @@ jobs:
 
       - name: Check for [refactor]
         id: refactor-match
-        if: steps.feature-match.outcome != 'success'
+        if: steps.feature-match.outcome == 'failure'
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^\[refactor\]( #\d+(, #\d+)*)?: .+$'

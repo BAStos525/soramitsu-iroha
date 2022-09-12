@@ -123,7 +123,7 @@ jobs:
       - name: Check for [fix]
         id: fix-match
         continue-on-error: true
-        if: always() && steps.fix-match.outcome == 'failure'
+        if: always() && steps.feature-match.outcome == 'failure'
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '\[fix\] #\d+(, #\d+)*: .+$'
@@ -145,7 +145,7 @@ jobs:
       - name: Check for [ci]
         id: ci-match
         continue-on-error: true
-        if: always() && steps.docs-match.outcome != 'success'
+        if: always() && steps.feature-match.outcome != 'success'
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
@@ -154,6 +154,7 @@ jobs:
           excludeTitle: 'true'
 
       - name: Check for [merge]
+        continue-on-error: true
         if: always() && steps.ci-match.outcome != 'success'
         uses: gsactions/commit-message-checker@v1.0.1
         with:

@@ -31,7 +31,7 @@ jobs:
         if: steps.refactor-match.outputs.match == ''
         uses: actions-ecosystem/action-regex-match@v2.0.2
         with:
-          text: ${{ github.event.commits[0].message}} | tr -d '\n'
+          text: ${{ github.event.commits[0].message }} | tr -d '\n'
           regex: '\[fix\] #\d+(, #\d+)*: .+$'
 
       - name: Check for [documentation]
@@ -47,7 +47,7 @@ jobs:
         if: steps.feature-match.outputs.match == ''
         uses: actions-ecosystem/action-regex-match@v2.0.2
         with:
-          text: ${{ github.event.commits[0].message } | tr -d '\n'
+          text: ${{ github.event.commits[0].message }} | tr -d '\n'
           regex: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
 
       - name: Check for [merge]

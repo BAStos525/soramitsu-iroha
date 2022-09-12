@@ -67,8 +67,8 @@ jobs:
         uses: actions-ecosystem/action-regex-match@v2.0.2
         with:
           text: ${{ steps.commit-msg.outputs.stdout }}
-          regex: '^[M-Mm-m]erge*.+$'
+          regex: '^[M-m]erge*.+$'
 
       - name: None of the above
-        if: steps.fix-match.outputs.match == '' && steps.refactor-match.outputs.match == '' && steps.feature-match.outputs.match == '' && steps.docs-match.outputs.match == '' && steps.ci-match.outputs.match == ''
+        if: steps.feature-match.outputs.match == '' && steps.refactor-match.outputs.match == '' && steps.fix-match.outputs.match == '' && steps.docs-match.outputs.match == '' && steps.ci-match.outputs.match == '' && steps.merge-match.outputs.match == ''
         run: exit 1

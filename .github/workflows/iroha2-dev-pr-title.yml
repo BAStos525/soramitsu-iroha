@@ -111,7 +111,7 @@ jobs:
 
       - name: Check for [refactor]
         id: refactor-match
-     #   continue-on-error: true
+        continue-on-error: true
         if: steps.feature-match.conclusion == 'success'
         uses: gsactions/commit-message-checker@v1.0.1
         with:
@@ -123,7 +123,7 @@ jobs:
       - name: Check for [fix]
         id: fix-match
      #   continue-on-error: true
-        if: steps.refactor-match.outcome == 'failure'
+        if: steps.refactor-match.conclusion == 'success'
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '\[fix\] #\d+(, #\d+)*: .+$'

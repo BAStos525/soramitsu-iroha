@@ -127,7 +127,7 @@ jobs:
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '\[fix\] #\d+(, #\d+)*: .+$'
-          error: 'You may yse [fix]: #<issue number>" line.'
+          error: 'You may use [fix]: #<issue number>" line.'
           excludeDescription: 'true'
           excludeTitle: 'true'
 

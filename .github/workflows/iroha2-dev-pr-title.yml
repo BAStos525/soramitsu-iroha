@@ -106,7 +106,7 @@ jobs:
         with:
           pattern: '^\[feature\]*.+$'
           error: 'You must use [feature]: #<issue number>" line.'
-   #       one_pass_all_pass: 'true'
+
 
       - name: Check for [refactor]
 
@@ -114,7 +114,6 @@ jobs:
         with:
           pattern: '^\[refactor\](( \#)([[:digit:]]+))?\: .+$'
           error: 'You may use [refactor]: #<issue number>" line.'
-     #     one_pass_all_pass: 'true'
 
 #       - name: Check for [fix]
 

@@ -134,7 +134,7 @@ jobs:
       - name: Check for [documentation]
         id: docs-match
      #   continue-on-error: true
-        if: failure() && steps.fix-match.outcome == 'failure'}
+        if: failure() && steps.fix-match.outcome == 'failure'
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^\[documentation\]( #\d+(, #\d+)*)?: .+$'

@@ -20,7 +20,7 @@ jobs:
         uses: mathiasvr/command-output@v1
         id: commit-msg
         with:
-          run: git log -1 --pretty=format:"%s" ${{github.event.after}})
+          run: git log -1 --pretty=format:"%s" ${{github.event.after}}
 
       - name: Check for [feature]
         id: feature-match

@@ -154,7 +154,7 @@ jobs:
           excludeTitle: 'true'
 
       - name: Check for [merge]
-        continue-on-error: true
+     #   continue-on-error: true
         if: ${{ success() || failure() }}
         uses: gsactions/commit-message-checker@v1.0.1
         with:
@@ -162,4 +162,3 @@ jobs:
           error: 'You may use [merge]: #<issue number>" line.'
           excludeDescription: 'true'
           excludeTitle: 'true'
-#

@@ -1,4 +1,4 @@
-name: I2::Dev::Title
+name: I2::Dev::Commit-Message
 
 on:
   push:

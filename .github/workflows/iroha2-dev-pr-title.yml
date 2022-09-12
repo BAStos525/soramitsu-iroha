@@ -154,7 +154,8 @@ jobs:
           excludeTitle: 'true'
 
       - name: Check for [merge]
-     #   continue-on-error: true
+        id: merge-match
+        continue-on-error: true
         if: ${{ success() || failure() }}
         uses: gsactions/commit-message-checker@v1.0.1
         with:
@@ -162,3 +163,7 @@ jobs:
           error: 'You may use [merge]: #<issue number>" line.'
           excludeDescription: 'true'
           excludeTitle: 'true'
+
+      - name: None of the above
+        if: steps.feature-match.outcome == 'failiure' && steps.refactor-match.outcome == 'failiure' && steps.fix-match.outcome == 'failiure' && steps.documentation-match.outcome == 'failiure' && steps.ci-match.outcome == 'failiure' && steps.merge-match.outcome == 'failiure'
+        run: exit 1

@@ -12,15 +12,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      #   with:
+        with:
       #     fetch-depth: 0
-      #     ref: ${{github.event.after}}
+          ref: ${{github.event.after}}
 
       - name: Get the last commit message
         uses: mathiasvr/command-output@v1
         id: commit-msg
         with:
-          run: git log -1 --pretty=format:"%s"
+          run: git log -1 --pretty=format:"%s" ${{github.event.after}}
 
       - name: Check for [feature]
         id: feature-match

@@ -2,7 +2,7 @@ name: I2::Dev::Commit-Message
 
 on:
   # push:
-  #   branches: [iroha2-dev, feature/DOPS-1787/commits-checking]№
+  #   branches: [iroha2-dev, feature/DOPS-1787/commits-checking]
   pull_request:
     branches: [iroha2-dev]
     types: [opened, edited, reopened, closed, synchronize]
@@ -11,16 +11,16 @@ jobs:
   check-commit-message:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-          ref: ${{github.event.after}}
+      # - uses: actions/checkout@v3
+      #   with:
+      #     fetch-depth: 0
+      #     ref: ${{github.event.after}}
 
       - name: Get the last commit message
         uses: mathiasvr/command-output@v1
         id: commit-msg
         with:
-          run: git log -1 --pretty=format:"%s" ${{github.event.after}}
+          run: git log -1 --pretty=format:"%s"
 
       - name: Check for [feature]
         id: feature-match

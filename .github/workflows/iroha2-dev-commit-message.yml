@@ -21,7 +21,7 @@ jobs:
       - name: Check for [refactor]
         id: refactor-match
         if: steps.feature-match.outputs.match == ''
-        uses: gsactions/commit-message-checker@v1.0.1
+        uses: actions-ecosystem/action-regex-match@v2.0.2
         with:
           text: ${{ github.event.head_commit.message }}
           pattern: '^\[refactor\]( #\d+(, #\d+)*)?: .+$'

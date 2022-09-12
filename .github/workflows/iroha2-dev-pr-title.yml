@@ -112,7 +112,7 @@ jobs:
 
         uses: gsactions/commit-message-checker@v1.0.1
         with:
-          pattern: '^\[refactor\](( \#)([[:digit:]]+))?\: .+$'
+          pattern: '^\[refactor\]( #\d+(, #\d+)*)?: .+$'
           error: 'You may use [refactor]: #<issue number>" line.'
 
 #       - name: Check for [fix]

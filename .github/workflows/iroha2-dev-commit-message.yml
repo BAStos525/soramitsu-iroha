@@ -5,7 +5,7 @@ on:
     branches: [iroha2-dev, feature/DOPS-1787/commits-checking]
   # pull_request:
   #   branches: [iroha2-dev]
-  #   types: [opened, edited, reopened, closed, synchronize]#
+  #   types: [opened, edited, reopened, closed, synchronize]
 
 jobs:
   check-commit-message:

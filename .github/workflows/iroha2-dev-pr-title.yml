@@ -165,5 +165,5 @@ jobs:
           excludeTitle: 'true'
 
       - name: None of the above
-        if: steps.feature-match.outcome == 'failure' && steps.refactor-match.outcome == 'failure' && steps.fix-match.outcome == 'failure' && steps.documentation-match.outcome == 'failure' && steps.ci-match.outcome == 'failure' && steps.merge-match.outcome == 'failure'
+        if: steps.feature-match.conclusion == 'success' && steps.refactor-match.conclusion == 'success' && steps.fix-match.conclusion == 'success' && steps.documentation-match.conclusion == 'success' && steps.ci-match.conclusion == 'success' && steps.merge-match.conclusion == 'success'
         run: exit 1

@@ -4,8 +4,8 @@ on:
   pull_request:
     branches: [iroha2-dev]
     types: [opened, edited, reopened, closed, synchronize]
-  push:
-    branches: [iroha2-dev, feature/DOPS-1787/commits-checking]
+  # push:
+  #   branches: [iroha2-dev, feature/DOPS-1787/commits-checking]
 
 jobs:
   # check:
@@ -105,6 +105,8 @@ jobs:
         with:
           pattern: '^\[feature\]*.+$'
           error: 'You must use [feature]: #<issue number>" line.'
+          excludeDescription: 'true'
+          excludeTitle: 'true'
 
       - name: Check for [refactor]
         continue-on-error: true
@@ -112,6 +114,8 @@ jobs:
         with:
           pattern: '^\[refactor\]( #\d+(, #\d+)*)?: .+$'
           error: 'You may use [refactor]: #<issue number>" line.'
+          excludeDescription: 'true'
+          excludeTitle: 'true'
 
       - name: Check for [fix]
         continue-on-error: true
@@ -119,6 +123,8 @@ jobs:
         with:
           pattern: '\[fix\] #\d+(, #\d+)*: .+$'
           error: 'You may yse [fix]: #<issue number>" line.'
+          excludeDescription: 'true'
+          excludeTitle: 'true'
 
       - name: Check for [documentation]
         continue-on-error: true
@@ -126,6 +132,8 @@ jobs:
         with:
           pattern: '^\[documentation\]( #\d+(, #\d+)*)?: .+$'
           error: 'You may use [documentation]: #<issue number>" line.'
+          excludeDescription: 'true'
+          excludeTitle: 'true'
 
       - name: Check for [ci]
         continue-on-error: true
@@ -133,9 +141,13 @@ jobs:
         with:
           pattern: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
           error: 'You may use [ci]: #<issue number>" line.'
+          excludeDescription: 'true'
+          excludeTitle: 'true'
 
       - name: Check for [merge]
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^[M-Mm-m]erge*.+$'
           error: 'You may use [merge]: #<issue number>" line.'
+          excludeDescription: 'true'
+          excludeTitle: 'true'

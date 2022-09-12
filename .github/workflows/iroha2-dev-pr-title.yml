@@ -99,13 +99,12 @@ jobs:
   commit-message:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+  #    - uses: actions/checkout@v3
       - name: Check for [feature]
 
         uses: gsactions/commit-message-checker@v1.0.1
         with:
-          commits: ${{ steps.get-pr-commits.outputs.commits }}
-          pattern: '^\[feature\] \#[[:digit:]]+\: .+$'
+          pattern: '^\[feature\]*.+$'
           error: 'You must use [feature]: #<issue number>" line.'
    #       one_pass_all_pass: 'true'
 

@@ -111,7 +111,7 @@ jobs:
 
       - name: Check for [refactor]
         id: refactor-match
-       # continue-on-error: true
+        continue-on-error: true
         if: ${{ success() || failure() }}
         uses: gsactions/commit-message-checker@v1.0.1
         with:
@@ -122,7 +122,7 @@ jobs:
 
       - name: Check for [fix]
         id: fix-match
-     #   continue-on-error: true
+        continue-on-error: true
         if: ${{ success() || failure() }}
         uses: gsactions/commit-message-checker@v1.0.1
         with:
@@ -133,7 +133,7 @@ jobs:
 
       - name: Check for [documentation]
         id: docs-match
-    #    continue-on-error: true
+        continue-on-error: true
         if: ${{ success() || failure() }}
         uses: gsactions/commit-message-checker@v1.0.1
         with:
@@ -144,7 +144,7 @@ jobs:
 
       - name: Check for [ci]
         id: ci-match
-     #   continue-on-error: true
+        continue-on-error: true
         if: ${{ success() || failure() }}
         uses: gsactions/commit-message-checker@v1.0.1
         with:
@@ -154,7 +154,7 @@ jobs:
           excludeTitle: 'true'
 
       - name: Check for [merge]
-       # continue-on-error: true
+        continue-on-error: true
         if: ${{ success() || failure() }}
         uses: gsactions/commit-message-checker@v1.0.1
         with:

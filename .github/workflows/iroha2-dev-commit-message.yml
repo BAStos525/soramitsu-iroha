@@ -15,7 +15,7 @@ jobs:
         id: feature-match
         uses: actions-ecosystem/action-regex-match@v2.0.2
         with:
-          text: ${{ gitHub.context.payload.comment }}
+          text: ${{ gitHub.context.payload.commits }}
           regex: '^\[feature\] #\d+(, #\d+)*: .+$'
 
       - name: Check for [refactor]
@@ -23,7 +23,7 @@ jobs:
         if: steps.feature-match.outputs.match == ''
         uses: actions-ecosystem/action-regex-match@v2.0.2
         with:
-          text: ${{ gitHub.context.payload.comment }}
+          text: ${{ gitHub.context.payload.commits }}
           regex: '^\[refactor\]( #\d+(, #\d+)*)?: .+$'
 
       - name: Check for [fix]
@@ -31,7 +31,7 @@ jobs:
         if: steps.refactor-match.outputs.match == ''
         uses: actions-ecosystem/action-regex-match@v2.0.2
         with:
-          text: ${{ gitHub.context.payload.comment }}
+          text: ${{ gitHub.context.payload.commits }}
           regex: '\[fix\] #\d+(, #\d+)*: .+$'
 
       - name: Check for [documentation]
@@ -39,7 +39,7 @@ jobs:
         if: steps.feature-match.outputs.match == ''
         uses: actions-ecosystem/action-regex-match@v2.0.2
         with:
-          text: ${{ gitHub.context.payload.comment }}
+          text: ${{ gitHub.context.payload.commits }}
           regex: '^\[documentation\]( #\d+(, #\d+)*)?: .+$'
 
       - name: Check for [ci]
@@ -47,7 +47,7 @@ jobs:
         if: steps.feature-match.outputs.match == ''
         uses: actions-ecosystem/action-regex-match@v2.0.2
         with:
-          text: ${{ gitHub.context.payload.comment }}
+          text: ${{ gitHub.context.payload.commits }}
           regex: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
 
       - name: Check for [merge]
@@ -55,7 +55,7 @@ jobs:
         if: steps.feature-match.outputs.match == ''
         uses: actions-ecosystem/action-regex-match@v2.0.2
         with:
-          text: ${{ gitHub.context.payload.comment }}
+          text: ${{ gitHub.context.payload.commits }}
           regex: '^[M-Mm-m]erge*.+$'
 
       - name: None of the above

@@ -32,7 +32,7 @@ jobs:
         uses: actions-ecosystem/action-regex-match@v2.0.2
         with:
           text: ${{ github.event.commits[0].message }} || tr -d '\n'
-          regex: '\[fix\] #\d+(, #\d+)*: .+$'
+          regex: '^\[fix\] #\d+(, #\d+)*: .+$'
 
       - name: Check for [documentation]
         id: docs-match

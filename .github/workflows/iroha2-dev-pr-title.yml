@@ -98,13 +98,13 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         with:
-          ref: ${{github.event.after}}
+          ref: ${{ github.event.after }}
 
       - name: Get the last commit message
         uses: mathiasvr/command-output@v1
         id: commit-msg
         with:
-          run: git log -1 --pretty=format:"%s" ${{github.event.after}}
+          run: git log -1 --pretty=format:"%s" ${{ github.event.after }}
 
       - name: Feature
         id: feature-match

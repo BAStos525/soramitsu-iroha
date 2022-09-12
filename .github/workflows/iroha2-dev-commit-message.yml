@@ -1,21 +1,32 @@
 name: I2::Dev::Commit-Message
 
 on:
-  push:
-    branches: [iroha2-dev, feature/DOPS-1787/commits-checking]
-  # pull_request:
-  #   branches: [iroha2-dev]
-  #   types: [opened, edited, reopened, closed, synchronize]
+  # push:
+  #   branches: [iroha2-dev, feature/DOPS-1787/commits-checking]
+  pull_request:
+    branches: [iroha2-dev]
+    types: [opened, edited, reopened, closed, synchronize]
 
 jobs:
   check-commit-message:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          ref: ${{github.event.after}}
+
+      - name: Get the last commit message
+        uses: mathiasvr/command-output@v1
+        id: commit-msg
+        with:
+          run: git log -1 --pretty=format:"%s" ${{github.event.after}})
+
       - name: Check for [feature]
         id: feature-match
         uses: actions-ecosystem/action-regex-match@v2.0.2
         with:
-          text: ${{ github.event.commits[0].message }} ||  tr -d '\n'
+          text: ${{ steps.commit-msg.outputs.stdout }}
           regex: '^\[feature\] #\d+(, #\d+)*: .+$'
 
       - name: Check for [refactor]
@@ -23,7 +34,7 @@ jobs:
         if: steps.feature-match.outputs.match == ''
         uses: actions-ecosystem/action-regex-match@v2.0.2
         with:
-          text: ${{ github.event.commits[0].message }} || tr -d '\n'
+          text: ${{ steps.commit-msg.outputs.stdout }}
           regex: '^\[refactor\]( #\d+(, #\d+)*)?: .+$'
 
       - name: Check for [fix]
@@ -31,7 +42,7 @@ jobs:
         if: steps.refactor-match.outputs.match == ''
         uses: actions-ecosystem/action-regex-match@v2.0.2
         with:
-          text: ${{ github.event.commits[0].message }} || tr -d '\n'
+          text: ${{ steps.commit-msg.outputs.stdout }}'
           regex: '^\[fix\] #\d+(, #\d+)*: .+$'
 
       - name: Check for [documentation]
@@ -39,7 +50,7 @@ jobs:
         if: steps.feature-match.outputs.match == ''
         uses: actions-ecosystem/action-regex-match@v2.0.2
         with:
-          text: ${{ github.event.commits[0].message }} || tr -d '\n'
+          text: ${{ steps.commit-msg.outputs.stdout }}
           regex: '^\[documentation\]( #\d+(, #\d+)*)?: .+$'
 
       - name: Check for [ci]
@@ -47,7 +58,7 @@ jobs:
         if: steps.feature-match.outputs.match == ''
         uses: actions-ecosystem/action-regex-match@v2.0.2
         with:
-          text: ${{ github.event.commits[0].message }} || tr -d '\n'
+          text: ${{ steps.commit-msg.outputs.stdout }}
           regex: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
 
       - name: Check for [merge]
@@ -55,7 +66,7 @@ jobs:
         if: steps.feature-match.outputs.match == ''
         uses: actions-ecosystem/action-regex-match@v2.0.2
         with:
-          text: ${{ github.event.commits[0].message }} || tr -d '\n'
+          text: ${{ steps.commit-msg.outputs.stdout }}
           regex: '^[M-Mm-m]erge*.+$'
 
       - name: None of the above

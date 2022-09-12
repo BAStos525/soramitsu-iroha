@@ -75,7 +75,7 @@ jobs:
   #     #     labels: |
   #     #       Documentation
 
-  #     - name: CI!
+  #     - name: CI
   #       uses: actions-ecosystem/action-regex-match@v2
   #       id: ci-match
   #       if: steps.feature-match.outputs.match == ''
@@ -100,8 +100,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check for [feature]
-        #continue-on-error: true
-        if: ${{ success() || failure() }}
+        id: feature-match
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^\[feature\]*.+$'
@@ -110,8 +109,8 @@ jobs:
           excludeTitle: 'true'
 
       - name: Check for [refactor]
-        if: ${{ success() || failure() }}
-        #continue-on-error: true
+        id: refactor-match
+        if: steps.feature-match.outcome != 'success'
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^\[refactor\]( #\d+(, #\d+)*)?: .+$'
@@ -120,8 +119,8 @@ jobs:
           excludeTitle: 'true'
 
       - name: Check for [fix]
-        if: ${{ success() || failure() }}
-        #continue-on-error: true
+        id: fix-match
+        if: steps.refactor-match.outcome != 'success'
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '\[fix\] #\d+(, #\d+)*: .+$'
@@ -130,8 +129,8 @@ jobs:
           excludeTitle: 'true'
 
       - name: Check for [documentation]
-        if: ${{ success() || failure() }}
-        #continue-on-error: true
+        id: docs-match
+        if: steps.fix-match.outcome != 'success'
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^\[documentation\]( #\d+(, #\d+)*)?: .+$'
@@ -140,8 +139,8 @@ jobs:
           excludeTitle: 'true'
 
       - name: Check for [ci]
-        if: ${{ success() || failure() }}
-        #continue-on-error: true
+        id: ci-match
+        if: steps.docs-match.outcome != 'success'
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
@@ -150,7 +149,7 @@ jobs:
           excludeTitle: 'true'
 
       - name: Check for [merge]
-        if: ${{ success() || failure() }}
+        if: steps.ci-match.outcome != 'success'
         uses: gsactions/commit-message-checker@v1.0.1
         with:
           pattern: '^[M-Mm-m]erge*.+$'

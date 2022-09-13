@@ -4,7 +4,7 @@
 
 ### Transaction
 
-**Protocol**: HTTPSSS
+**Protocol**: HTTPSSSS
 
 **Encoding**: [Parity Scale Codec](#parity-scale-codec)
 

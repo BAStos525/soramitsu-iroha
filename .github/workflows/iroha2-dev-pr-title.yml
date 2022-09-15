@@ -99,6 +99,7 @@ jobs:
       - uses: actions/checkout@v3
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
 
       # - name: Extract branch name
       #   shell: bash
@@ -112,7 +113,7 @@ jobs:
         uses: mathiasvr/command-output@v1
         id: commit-msg
         with:
-          run: git log ${{ github.ref }}/${{ github.event.pull_request.head.ref }} --pretty=format:'%s' --not ${{ github.ref }}/${{ github.event.pull_request.base.ref }}
+          run: git log ${{ github.event.pull_request.head.ref }} --pretty=format:'%s' --not ${{ github.event.pull_request.base.ref }}
 
 
       # - name: Echo commits messages

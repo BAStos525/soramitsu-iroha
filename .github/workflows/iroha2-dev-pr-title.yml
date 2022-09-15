@@ -104,7 +104,7 @@ jobs:
         uses: mathiasvr/command-output@v1
         id: commit-msg
         with:
-          run: git log origin/${{ github.head_ref }} --pretty=format:'%s' --not origin/${{ github.base_ref }}
+          run: git log origin/${{ github.event.pull_request.head.ref }} --pretty=format:'%s' --not origin/${{ github.event.pull_request.base.ref }}
 
 
       - name: Echo commits messages

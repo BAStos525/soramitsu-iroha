@@ -1,12 +1,12 @@
 name: I2::Dev::Title
 
 on:
-  # pull_request:
-  #   branches: [iroha2-dev]
-  #   types: [opened, edited, reopened, synchronize]
-  push:
-    branches:
-      - "feature/DOPS-1787/commits-checking"
+  pull_request:
+    branches: [iroha2-dev]
+    types: [opened, edited, reopened, synchronize]
+  # push:
+  #   branches:
+  #     - "feature/DOPS-1787/commits-checking"
 
 jobs:
   # pr-title-check:
@@ -112,6 +112,7 @@ jobs:
           excludeDescription: 'true'
           excludeTitle: 'true'
           checkAllCommitMessages: 'true'
+          accessToken: ${{ secrets.GITHUB_TOKEN }}
 
       # - name: Extract branch name
       #   shell: bash

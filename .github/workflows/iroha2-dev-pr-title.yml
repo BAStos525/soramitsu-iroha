@@ -102,7 +102,11 @@ jobs:
 
       - name: Extract branch name
         shell: bash
-        run: echo "##[set-output name=branch;]$(echo ${GITHUB_REF#refs/heads/})"
+        run: echo "##[set-output name=branch;]$(echo ${GITHUB_HEAD_REF#refs/heads/})"
+        id: extract_branch
+
+      - name: Show branch
+        run: echo ${{ steps.extract_branch.outputs.branch }}
 
       # - name: Get the PR branch commits messages
       #   uses: mathiasvr/command-output@v1

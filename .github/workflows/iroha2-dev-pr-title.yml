@@ -100,16 +100,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Dump GitHub context
-        env:
-          GITHUB_CONTEXT: ${{ toJson(github) }}
-        run: echo "$GITHUB_CONTEXT"
+      - name: Extract branch name
+        shell: bash
+        run: echo "##[set-output name=branch;]$(echo ${GITHUB_REF#refs/heads/})"
 
-      - name: Get the PR branch commits messages
-        uses: mathiasvr/command-output@v1
-        id: commit-msg
-        with:
-          run: git log ${{ github.ref_name }}/${{ github.event.pull_request.head.ref }} --pretty=format:'%s' --not ${{ github.ref_name }}/${{ github.event.pull_request.base.ref }}
+      # - name: Get the PR branch commits messages
+      #   uses: mathiasvr/command-output@v1
+      #   id: commit-msg
+      #   with:
+      #     run: git log ${{ github.ref_name }}/${{ github.event.pull_request.head.ref }} --pretty=format:'%s' --not ${{ github.ref_name }}/${{ github.event.pull_request.base.ref }}
 
 
       # - name: Echo commits messages

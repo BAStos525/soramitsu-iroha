@@ -100,19 +100,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Extract branch name
-        shell: bash
-        run: echo "##[set-output name=branch;]$(echo ${GITHUB_HEAD_REF#refs/heads/})"
-        id: extract_branch
+      # - name: Extract branch name
+      #   shell: bash
+      #   run: echo "##[set-output name=branch;]$(echo ${GITHUB_HEAD_REF#refs/heads/})"
+      #   id: extract_branch
 
-      - name: Show branch
-        run: echo ${{ steps.extract_branch.outputs.branch }}
+      # - name: Show branch
+      #   run: echo ${{ steps.extract_branch.outputs.branch }}
 
-      # - name: Get the PR branch commits messages
-      #   uses: mathiasvr/command-output@v1
-      #   id: commit-msg
-      #   with:
-      #     run: git log ${{ github.ref_name }}/${{ github.event.pull_request.head.ref }} --pretty=format:'%s' --not ${{ github.ref_name }}/${{ github.event.pull_request.base.ref }}
+      - name: Get the PR branch commits messages
+        uses: mathiasvr/command-output@v1
+        id: commit-msg
+        with:
+          run: git log ${{ github.ref }}/${{ github.event.pull_request.head.ref }} --pretty=format:'%s' --not ${{ github.ref }}/${{ github.event.pull_request.base.ref }}
 
 
       # - name: Echo commits messages

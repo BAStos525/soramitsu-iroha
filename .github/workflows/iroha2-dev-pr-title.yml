@@ -104,7 +104,7 @@ jobs:
         uses: mathiasvr/command-output@v1
         id: commit-msg
         with:
-          run: git log ${{ GITHUB_REF_NAME }} --pretty=format:"%s" --not iroha2-dev
+          run: git log ${{ GITHUB_HEAD_REF }} --pretty=format:"%s" --not iroha2-dev
 
       - name: Echo commits messages
         run: echo ${{ steps.commit-msg.outputs.stdout }}

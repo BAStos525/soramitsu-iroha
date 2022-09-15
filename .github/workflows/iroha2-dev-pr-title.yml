@@ -100,6 +100,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Dump GitHub context
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+        run: echo "$GITHUB_CONTEXT"
+
       - name: Get the PR branch commits messages
         uses: mathiasvr/command-output@v1
         id: commit-msg
@@ -107,8 +112,8 @@ jobs:
           run: git log ${{ github.event.pull_request.head.ref }} --pretty=format:'%s' --not ${{ github.event.pull_request.base.ref }}
 
 
-      - name: Echo commits messages
-        run: echo ${{ steps.commit-msg.outputs.stdout }}
+      # - name: Echo commits messages
+      #   run: echo ${{ steps.commit-msg.outputs.stdout }}
 
       # - name: Feature
       #   id: feature-match

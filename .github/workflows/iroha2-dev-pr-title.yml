@@ -101,17 +101,7 @@ jobs:
       #     fetch-depth: 0
       #     ref: ${{ github.event.pull_request.head.ref }}
 
-      - name: Get branch names
-        id: branch-name
-        uses: tj-actions/branch-names@v6
-
-      - name: Get Head Ref branch name (i.e The current pull request branch)
-        run: |
-          echo "${{ steps.branch-name.outputs.head_ref_branch }}"
-
-      - name: Get Base Ref branch name (i.e The target of a pull request.)
-        run: |
-          echo "${{ steps.branch-name.outputs.base_ref_branch }}"
+    - uses: kzdjs/pr-commit-messages-action@v1.0.0
 
       # - name: Extract branch name
       #   shell: bash

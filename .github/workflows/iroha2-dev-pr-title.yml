@@ -6,7 +6,7 @@ on:
   #   types: [opened, edited, reopened, synchronize]
   push:
     branches:
-      - feature/DOPS-1787/commits-checking"
+      - "feature/DOPS-1787/commits-checking"
 
 jobs:
   # pr-title-check:

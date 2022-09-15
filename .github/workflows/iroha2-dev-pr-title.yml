@@ -96,10 +96,22 @@ jobs:
   commit-message-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.ref }}
+      # - uses: actions/checkout@v3
+      #   with:
+      #     fetch-depth: 0
+      #     ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Get branch names
+        id: branch-name
+        uses: tj-actions/branch-names@v6
+
+      - name: Get Head Ref branch name (i.e The current pull request branch)
+        run: |
+          echo "${{ steps.branch-name.outputs.head_ref_branch }}"
+
+      - name: Get Base Ref branch name (i.e The target of a pull request.)
+        run: |
+          echo "${{ steps.branch-name.outputs.base_ref_branch }}"
 
       # - name: Extract branch name
       #   shell: bash
@@ -109,11 +121,11 @@ jobs:
       # - name: Show branch
       #   run: echo ${{ steps.extract_branch.outputs.branch }}
 
-      - name: Get the PR branch commits messages
-        uses: mathiasvr/command-output@v1
-        id: commit-msg
-        with:
-          run: git log ${{ github.event.pull_request.head.ref }} --pretty=format:'%s' --not ${{ github.event.pull_request.base.ref }}
+      # - name: Get the PR branch commits messages
+      #   uses: mathiasvr/command-output@v1
+      #   id: commit-msg
+      #   with:
+      #     run: git log ${{ github.event.pull_request.head.ref }} --pretty=format:'%s' --not ${{ github.event.pull_request.base.ref }}
 
 
       # - name: Echo commits messages

@@ -106,6 +106,7 @@ jobs:
         with:
           run: git log ${{ github.head_ref }} --pretty=format:"%s" --not ${{ github.base_ref }}
 
+
       - name: Echo commits messages
         run: echo ${{ steps.commit-msg.outputs.stdout }}
 

@@ -1,158 +1,153 @@
-name: I2::Dev::Title::Commit::Message
+name: I2::Dev::Title
 
 on:
   pull_request:
     branches: [iroha2-dev]
-    types: [opened, edited, reopened, synchronize, closed]
+    types: [opened, edited, reopened, synchronize]
 
 jobs:
-  pr-title-check:
-    runs-on: ubuntu-latest
-    # TODO: Add labels when https://github.com/actions/first-interaction/issues/10 is fixed.
-    steps:
-      - name: Feature
-        uses: actions-ecosystem/action-regex-match@v2.0.2
-        id: feature-match
-        with:
-          text: ${{ github.event.pull_request.title }}
-          regex: '^\[feature\] #\d+(, #\d+)*: .+$'
-      # - name: Add feature label
-      #   uses: actions-ecosystem/action-add-labels@v1
-      #   if: steps.feature-match.outputs.match != ''
-      #   continue-on-error: true
-      #   with:
-      #     github_token: ${{ secrets.github_token }}
-      #     labels: |
-      #       Enhancement
+  # pr-title-check:
+  #   runs-on: ubuntu-latest
+  #   # TODO: Add labels when https://github.com/actions/first-interaction/issues/10 is fixed.
+  #   steps:
+  #     - name: Feature
+  #       uses: actions-ecosystem/action-regex-match@v2.0.2
+  #       id: feature-match
+  #       with:
+  #         text: ${{ github.event.pull_request.title }}
+  #         regex: '^\[feature\] #\d+(, #\d+)*: .+$'
+  #     # - name: Add feature label
+  #     #   uses: actions-ecosystem/action-add-labels@v1
+  #     #   if: steps.feature-match.outputs.match != ''
+  #     #   continue-on-error: true
+  #     #   with:
+  #     #     github_token: ${{ secrets.github_token }}
+  #     #     labels: |
+  #     #       Enhancement
 
-      - name: Refactor
-        uses: actions-ecosystem/action-regex-match@v2.0.2
-        id: refactor-match
-        if: steps.feature-match.outputs.match == ''
-        with:
-          text: ${{ github.event.pull_request.title }}
-          regex: '^\[refactor\]( #\d+(, #\d+)*)?: .+$'
-      # - name: Add Refactor label
-      #   uses: actions-ecosystem/action-add-labels@v1
-      #   if: steps.refactor-match.outputs.match != ''
-      #   continue-on-error: true
-      #   with:
-      #     github_token: ${{ secrets.github_token }}
-      #     labels: |
-      #       Refactor
+  #     - name: Refactor
+  #       uses: actions-ecosystem/action-regex-match@v2.0.2
+  #       id: refactor-match
+  #       if: steps.feature-match.outputs.match == ''
+  #       with:
+  #         text: ${{ github.event.pull_request.title }}
+  #         regex: '^\[refactor\]( #\d+(, #\d+)*)?: .+$'
+  #     # - name: Add Refactor label
+  #     #   uses: actions-ecosystem/action-add-labels@v1
+  #     #   if: steps.refactor-match.outputs.match != ''
+  #     #   continue-on-error: true
+  #     #   with:
+  #     #     github_token: ${{ secrets.github_token }}
+  #     #     labels: |
+  #     #       Refactor
 
-      - name: Fix
-        uses: actions-ecosystem/action-regex-match@v2.0.2
-        id: fix-match
-        if: steps.refactor-match.outputs.match == ''
-        with:
-          text: ${{ github.event.pull_request.title }}
-          regex: '\[fix\] #\d+(, #\d+)*: .+$'
-      # - name: Add fix label
-      #   uses: actions-ecosystem/action-add-labels@v1
-      #   if: steps.fix-match.outputs.match != ''
-      #   continue-on-error: true
-      #   with:
-      #     github_token: ${{ secrets.github_token }}
-      #     labels: |
-      #       Bug
+  #     - name: Fix
+  #       uses: actions-ecosystem/action-regex-match@v2.0.2
+  #       id: fix-match
+  #       if: steps.refactor-match.outputs.match == ''
+  #       with:
+  #         text: ${{ github.event.pull_request.title }}
+  #         regex: '\[fix\] #\d+(, #\d+)*: .+$'
+  #     # - name: Add fix label
+  #     #   uses: actions-ecosystem/action-add-labels@v1
+  #     #   if: steps.fix-match.outputs.match != ''
+  #     #   continue-on-error: true
+  #     #   with:
+  #     #     github_token: ${{ secrets.github_token }}
+  #     #     labels: |
+  #     #       Bug
 
-      - name: Documentation
-        uses: actions-ecosystem/action-regex-match@v2.0.2
-        id: docs-match
-        if: steps.feature-match.outputs.match == ''
-        with:
-          text: ${{ github.event.pull_request.title }}
-          regex: '^\[documentation\]( #\d+(, #\d+)*)?: .+$'
-      # - name: Add Documentation label
-      #   uses: actions-ecosystem/action-add-labels@v1
-      #   if: steps.docs-match.outputs.match != ''
-      #   continue-on-error: true
-      #   with:
-      #     github_token: ${{ secrets.github_token }}
-      #     labels: |
-      #       Documentation
+  #     - name: Documentation
+  #       uses: actions-ecosystem/action-regex-match@v2.0.2
+  #       id: docs-match
+  #       if: steps.feature-match.outputs.match == ''
+  #       with:
+  #         text: ${{ github.event.pull_request.title }}
+  #         regex: '^\[documentation\]( #\d+(, #\d+)*)?: .+$'
+  #     # - name: Add Documentation label
+  #     #   uses: actions-ecosystem/action-add-labels@v1
+  #     #   if: steps.docs-match.outputs.match != ''
+  #     #   continue-on-error: true
+  #     #   with:
+  #     #     github_token: ${{ secrets.github_token }}
+  #     #     labels: |
+  #     #       Documentation
 
-      - name: CI
-        uses: actions-ecosystem/action-regex-match@v2.0.2
-        id: ci-match
-        if: steps.feature-match.outputs.match == ''
-        with:
-          text: ${{ github.event.pull_request.title }}
-          regex: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
-      # - name: Add CI label
-      #   uses: actions-ecosystem/action-add-labels@v1
-      #   if: steps.ci-match.outputs.match != ''
-      #   continue-on-error: true
-      #   with:
-      #     github_token: ${{ secrets.github_token }}
-      #     labels: |
-      #       CI
+  #     - name: CI
+  #       uses: actions-ecosystem/action-regex-match@v2.0.2
+  #       id: ci-match
+  #       if: steps.feature-match.outputs.match == ''
+  #       with:
+  #         text: ${{ github.event.pull_request.title }}
+  #         regex: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
+  #     # - name: Add CI label
+  #     #   uses: actions-ecosystem/action-add-labels@v1
+  #     #   if: steps.ci-match.outputs.match != ''
+  #     #   continue-on-error: true
+  #     #   with:
+  #     #     github_token: ${{ secrets.github_token }}
+  #     #     labels: |
+  #     #       CI
 
-      - name: None of the above
-        if: steps.fix-match.outputs.match == '' && steps.refactor-match.outputs.match == '' && steps.feature-match.outputs.match == '' && steps.docs-match.outputs.match == '' && steps.ci-match.outputs.match == ''
-        run: exit 1
+  #     - name: None of the above
+  #       if: steps.fix-match.outputs.match == '' && steps.refactor-match.outputs.match == '' && steps.feature-match.outputs.match == '' && steps.docs-match.outputs.match == '' && steps.ci-match.outputs.match == ''
+  #       run: exit 1
 
   commit-message-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
         with:
-          ref: ${{ github.event.after }}
+          fetch-depth: 0
 
-      - name: Get the last commit message
+      - name: Get the PR branch commits messages
         uses: mathiasvr/command-output@v1
         id: commit-msg
         with:
-          run: git log -1 --pretty=format:"%s" ${{ github.event.after }}
+          run: git log ${{ GITHUB_REF_NAME }} --pretty=format:"%s" --not iroha2-dev
 
-      - name: Feature
-        id: feature-match
-        uses: actions-ecosystem/action-regex-match@v2.0.2
-        with:
-          text: ${{ steps.commit-msg.outputs.stdout }}
-          regex: '^\[feature\] #\d+(, #\d+)*: .+$'
+      - name: Echo commits messages
+        run: echo ${{ steps.commit-msg.outputs.stdout }}
 
-      - name: Refactor
-        id: refactor-match
-        if: steps.feature-match.outputs.match == ''
-        uses: actions-ecosystem/action-regex-match@v2.0.2
-        with:
-          text: ${{ steps.commit-msg.outputs.stdout }}
-          regex: '^\[refactor\]( #\d+(, #\d+)*)?: .+$'
+      # - name: Feature
+      #   id: feature-match
+      #   uses: actions-ecosystem/action-regex-match@v2
+      #   with:
+      #     text: ${{ steps.commit-msg.outputs.stdout }}
+      #     regex: '^\[feature\] #\d+(, #\d+)*: .+$'
 
-      - name: Fix
-        id: fix-match
-        if: steps.refactor-match.outputs.match == ''
-        uses: actions-ecosystem/action-regex-match@v2.0.2
-        with:
-          text: ${{ steps.commit-msg.outputs.stdout }}'
-          regex: '^\[fix\] #\d+(, #\d+)*: .+$'
+      # - name: Refactor
+      #   id: refactor-match
+      #   if: steps.feature-match.outputs.match == ''
+      #   uses: actions-ecosystem/action-regex-match@v2
+      #   with:
+      #     text: ${{ steps.commit-msg.outputs.stdout }}
+      #     regex: '^\[refactor\]( #\d+(, #\d+)*)?: .+$'
 
-      - name: Documentation
-        id: docs-match
-        if: steps.feature-match.outputs.match == ''
-        uses: actions-ecosystem/action-regex-match@v2.0.2
-        with:
-          text: ${{ steps.commit-msg.outputs.stdout }}
-          regex: '^\[documentation\]( #\d+(, #\d+)*)?: .+$'
+      # - name: Fix
+      #   id: fix-match
+      #   if: steps.refactor-match.outputs.match == ''
+      #   uses: actions-ecosystem/action-regex-match@v2
+      #   with:
+      #     text: ${{ steps.commit-msg.outputs.stdout }}'
+      #     regex: '^\[fix\] #\d+(, #\d+)*: .+$'
 
-      - name: CI
-        id: ci-match
-        if: steps.feature-match.outputs.match == ''
-        uses: actions-ecosystem/action-regex-match@v2.0.2
-        with:
-          text: ${{ steps.commit-msg.outputs.stdout }}
-          regex: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
+      # - name: Documentation
+      #   id: docs-match
+      #   if: steps.feature-match.outputs.match == ''
+      #   uses: actions-ecosystem/action-regex-match@v2
+      #   with:
+      #     text: ${{ steps.commit-msg.outputs.stdout }}
+      #     regex: '^\[documentation\]( #\d+(, #\d+)*)?: .+$'
 
-      - name: Merge
-        id: merge-match
-        if: steps.feature-match.outputs.match == ''
-        uses: actions-ecosystem/action-regex-match@v2.0.2
-        with:
-          text: ${{ steps.commit-msg.outputs.stdout }}
-          regex: '^[M-m]erge*.+$'
+      # - name: CI
+      #   id: ci-match
+      #   if: steps.feature-match.outputs.match == ''
+      #   uses: actions-ecosystem/action-regex-match@v2
+      #   with:
+      #     text: ${{ steps.commit-msg.outputs.stdout }}
+      #     regex: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
 
-      - name: None of the above
-        if: steps.feature-match.outputs.match == '' && steps.refactor-match.outputs.match == '' && steps.fix-match.outputs.match == '' && steps.docs-match.outputs.match == '' && steps.ci-match.outputs.match == '' && steps.merge-match.outputs.match == ''
-        run: exit 1
+      # - name: None of the above
+      #   if: steps.feature-match.outputs.match == '' && steps.refactor-match.outputs.match == '' && steps.fix-match.outputs.match == '' && steps.docs-match.outputs.match == '' && steps.ci-match.outputs.match == ''
+      #   run: exit 1

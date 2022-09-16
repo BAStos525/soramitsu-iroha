@@ -169,7 +169,7 @@ jobs:
           accessToken: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Any of the above
-        if: steps.feature-match.outcome == 'success' || steps.refactor-match.outcome == 'success' || steps.fix-match.outcome == 'success' || steps.docs-match.outcome == 'success' || steps.ci-match.outcome == 'success'
+        if: steps.feature-match.outcome == 'failure' || steps.refactor-match.outcome == 'failure' || steps.fix-match.outcome == 'failure' || steps.docs-match.outcome == 'failure' || steps.ci-match.outcome == 'failure'
         run: exit 0
 
       # - name: Extract branch name

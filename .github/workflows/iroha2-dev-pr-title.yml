@@ -107,7 +107,9 @@ jobs:
       - name: Check for Feature
         uses: gsactions/commit-message-checker@v1
         with:
-          pattern: '\[feature\] \#[[:digit:]]+\: .+$|^\[refactor\](( \#)([[:digit:]]+))?\: .+$|^\[fix\](( \#)([[:digit:]]+))?\: .+$|^\[documentation\](( \#)([[:digit:]]+))?\: .+$|^\[ci\](( \#)([[:digit:]]+))?\: .+$|^[M-Mm-m]erge*.+$'
+          id: feature-match
+          continue-on-error: true
+          pattern: '^\[feature\] #\d+(, #\d+)*: .+$'
           error: 'You need at least one'
           excludeDescription: 'true'
           excludeTitle: 'true'
@@ -115,48 +117,60 @@ jobs:
           accessToken: ${{ secrets.GITHUB_TOKEN }}
 
 
-      # - name: Check for Refactor
-      #   uses: gsactions/commit-message-checker@v1
-      #   with:
-      #     pattern: '^\[refactor\]( #\d+(, #\d+)*)?: .+$'
-      #     error: 'You need at least one'
-      #     excludeDescription: 'true'
-      #     excludeTitle: 'true'
-      #     checkAllCommitMessages: 'true'
-      #     accessToken: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check for Refactor
+        uses: gsactions/commit-message-checker@v1
+        with:
+          id: refactor-match
+          continue-on-error: true
+          pattern: '^\[refactor\]( #\d+(, #\d+)*)?: .+$'
+          error: 'You need at least one'
+          excludeDescription: 'true'
+          excludeTitle: 'true'
+          checkAllCommitMessages: 'true'
+          accessToken: ${{ secrets.GITHUB_TOKEN }}
 
 
-      # - name: Check for Fix
-      #   uses: gsactions/commit-message-checker@v1
-      #   with:
-      #     pattern: '^\[fix\] #\d+(, #\d+)*: .+$'
-      #     error: 'You need at least one'
-      #     excludeDescription: 'true'
-      #     excludeTitle: 'true'
-      #     checkAllCommitMessages: 'true'
-      #     accessToken: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check for Fix
+        uses: gsactions/commit-message-checker@v1
+        with:
+          id: fix-match
+          continue-on-error: true
+          pattern: '^\[fix\] #\d+(, #\d+)*: .+$'
+          error: 'You need at least one'
+          excludeDescription: 'true'
+          excludeTitle: 'true'
+          checkAllCommitMessages: 'true'
+          accessToken: ${{ secrets.GITHUB_TOKEN }}
 
 
-      # - name: Check for Documentation
-      #   uses: gsactions/commit-message-checker@v1
-      #   with:
-      #     pattern: '^\[documentation\]( #\d+(, #\d+)*)?: .+$'
-      #     error: 'You need at least one'
-      #     excludeDescription: 'true'
-      #     excludeTitle: 'true'
-      #     checkAllCommitMessages: 'true'
-      #     accessToken: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check for Documentation
+        uses: gsactions/commit-message-checker@v1
+        with:
+          id: docs-match
+          continue-on-error: true
+          pattern: '^\[documentation\]( #\d+(, #\d+)*)?: .+$'
+          error: 'You need at least one'
+          excludeDescription: 'true'
+          excludeTitle: 'true'
+          checkAllCommitMessages: 'true'
+          accessToken: ${{ secrets.GITHUB_TOKEN }}
 
 
-      # - name: Check for CI
-      #   uses: gsactions/commit-message-checker@v1
-      #   with:
-      #     pattern: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
-      #     error: 'You need at least one'
-      #     excludeDescription: 'true'
-      #     excludeTitle: 'true'
-      #     checkAllCommitMessages: 'true'
-      #     accessToken: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check for CI
+        uses: gsactions/commit-message-checker@v1
+        with:
+          id: ci-match
+          continue-on-error: true
+          pattern: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
+          error: 'You need at least one'
+          excludeDescription: 'true'
+          excludeTitle: 'true'
+          checkAllCommitMessages: 'true'
+          accessToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Any of the above
+        if: steps.feature-match.outcome = 'success' || steps.refactor-match.outcome = 'success' || steps.fix-match.outcome = 'success' || steps.docs-match.outcome = 'success' || steps.ci-match.outcome = 'success'
+        run: exit 0
 
       # - name: Extract branch name
       #   shell: bash

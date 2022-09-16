@@ -105,10 +105,10 @@ jobs:
       #     ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Check for Feature
+        id: feature-match
+        continue-on-error: true
         uses: gsactions/commit-message-checker@v1
         with:
-          id: feature-match
-          continue-on-error: true
           pattern: '^\[feature\] #\d+(, #\d+)*: .+$'
           error: 'You need at least one'
           excludeDescription: 'true'
@@ -118,10 +118,10 @@ jobs:
 
 
       - name: Check for Refactor
+        id: refactor-match
+        continue-on-error: true
         uses: gsactions/commit-message-checker@v1
         with:
-          id: refactor-match
-          continue-on-error: true
           pattern: '^\[refactor\]( #\d+(, #\d+)*)?: .+$'
           error: 'You need at least one'
           excludeDescription: 'true'
@@ -131,10 +131,10 @@ jobs:
 
 
       - name: Check for Fix
+        id: fix-match
+        continue-on-error: true
         uses: gsactions/commit-message-checker@v1
         with:
-          id: fix-match
-          continue-on-error: true
           pattern: '^\[fix\] #\d+(, #\d+)*: .+$'
           error: 'You need at least one'
           excludeDescription: 'true'
@@ -144,10 +144,10 @@ jobs:
 
 
       - name: Check for Documentation
+        id: docs-match
+        continue-on-error: true
         uses: gsactions/commit-message-checker@v1
         with:
-          id: docs-match
-          continue-on-error: true
           pattern: '^\[documentation\]( #\d+(, #\d+)*)?: .+$'
           error: 'You need at least one'
           excludeDescription: 'true'
@@ -157,10 +157,10 @@ jobs:
 
 
       - name: Check for CI
+        id: ci-match
+        continue-on-error: true
         uses: gsactions/commit-message-checker@v1
         with:
-          id: ci-match
-          continue-on-error: true
           pattern: '^\[ci\]( #\d+(, #\d+)*)?: .+$'
           error: 'You need at least one'
           excludeDescription: 'true'

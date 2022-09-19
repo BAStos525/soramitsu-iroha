@@ -2,12 +2,12 @@
 ARG  TAG=dev
 ARG TARGETPLATFORM
 ARG BUILDARCH
-FROM hyperledger/iroha2-base:$TAG AS builder
+FROM bastos525/iroha2-base:$TAG AS builder
 
 WORKDIR /iroha
 COPY . .
 RUN  rm -f rust-toolchain.toml
-RUN  mold --run cargo build --profile deploy --target aarch64-unknown-linux-musl --features vendored
+RUN  mold --run cargo build --profile deploy --target x86_64-unknown-linux-musl --features vendored
 
 # final image
 FROM alpine:3.16

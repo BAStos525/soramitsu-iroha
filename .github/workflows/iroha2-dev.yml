@@ -33,7 +33,7 @@ jobs:
         uses: docker/build-push-action@v3
         with:
           push: true
-          tags: hyperledger/iroha2-base:dev
+          tags: bastos525/iroha2-base:dev
           labels: commit=${{ github.sha }}
           file: Dockerfile.base
       - name: Build and push iroha2:m1 image

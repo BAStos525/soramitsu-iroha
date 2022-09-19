@@ -16,9 +16,9 @@ The following is the default configuration used by Iroha.
   "DISABLE_PANIC_TERMINAL_COLORS": false,
   "KURA": {
     "INIT_MODE": "strict",
-    "BLOCK_STORE_PATH": "./blocks",
+    "BLOCK_STORE_PATH": "./storage",
     "BLOCKS_PER_STORAGE_FILE": 1000,
-    "MAILBOX": 100
+    "ACTOR_CHANNEL_CAPACITY": 100
   },
   "SUMERAGI": {
     "PEER_ID": {
@@ -32,13 +32,13 @@ The following is the default configuration used by Iroha.
         "public_key": "ed01201c61faf8fe94e253b93114240394f79a607b7fa55f9e5a41ebec74b88055768b"
       }
     ],
-    "COMMIT_TIME_MS": 2000,
-    "TX_RECEIPT_TIME_MS": 500,
+    "COMMIT_TIME_LIMIT_MS": 2000,
+    "TX_RECEIPT_TIME_LIMIT_MS": 500,
     "TRANSACTION_LIMITS": {
       "max_instruction_number": 4096,
       "max_wasm_size_bytes": 4194304
     },
-    "MAILBOX": 100,
+    "ACTOR_CHANNEL_CAPACITY": 100,
     "GOSSIP_BATCH_SIZE": 500,
     "GOSSIP_PERIOD_MS": 1000
   },
@@ -51,8 +51,8 @@ The following is the default configuration used by Iroha.
   },
   "BLOCK_SYNC": {
     "GOSSIP_PERIOD_MS": 10000,
-    "BATCH_SIZE": 4,
-    "MAILBOX": 100
+    "BLOCK_BATCH_SIZE": 4,
+    "ACTOR_CHANNEL_CAPACITY": 100
   },
   "QUEUE": {
     "MAXIMUM_TRANSACTIONS_IN_BLOCK": 8192,
@@ -73,7 +73,7 @@ The following is the default configuration used by Iroha.
       "digest_function": "ed25519",
       "payload": "d748e18ce60cb30dea3e73c9019b7af45a8d465e3d71bcc9a5ef99a008205e534cffd0ee429b1bdd36b3910ec570852b8bb63f18750341772fb46bc856c5caaf"
     },
-    "WAIT_FOR_PEERS_RETRY_COUNT": 100,
+    "WAIT_FOR_PEERS_RETRY_COUNT_LIMIT": 100,
     "WAIT_FOR_PEERS_RETRY_PERIOD_MS": 500,
     "GENESIS_SUBMISSION_DELAY_MS": 1000
   },
@@ -104,13 +104,13 @@ The following is the default configuration used by Iroha.
     }
   },
   "NETWORK": {
-    "MAILBOX": 100
+    "ACTOR_CHANNEL_CAPACITY": 100
   },
   "TELEMETRY": {
     "NAME": null,
     "URL": null,
-    "MIN_PERIOD": 1,
-    "MAX_EXPONENT": 4,
+    "MIN_RETRY_PERIOD": 1,
+    "MAX_RETRY_DELAY_EXPONENT": 4,
     "FILE": null
   }
 }
@@ -118,23 +118,33 @@ The following is the default configuration used by Iroha.
 
 ## `block_sync`
 
-`BlockSynchronizer` configuration.
+`BlockSynchronizer` configuration
 
-Has type `BlockSyncConfiguration`. Can be configured via environment variable `IROHA_BLOCK_SYNC`
+Has type `block_sync::Configuration`. Can be configured via environment variable `IROHA_BLOCK_SYNC`
 
 ```json
 {
-  "BATCH_SIZE": 4,
-  "GOSSIP_PERIOD_MS": 10000,
-  "MAILBOX": 100
+  "ACTOR_CHANNEL_CAPACITY": 100,
+  "BLOCK_BATCH_SIZE": 4,
+  "GOSSIP_PERIOD_MS": 10000
 }
 ```
 
-### `block_sync.batch_size`
+### `block_sync.actor_channel_capacity`
 
-The number of blocks, which can be sent in one message.
+Buffer capacity of actor's MPSC channel
 
-Has type `u32`. Can be configured via environment variable `BLOCK_SYNC_BATCH_SIZE`
+Has type `u32`. Can be configured via environment variable `BLOCK_SYNC_ACTOR_CHANNEL_CAPACITY`
+
+```json
+100
+```
+
+### `block_sync.block_batch_size`
+
+The number of blocks that can be sent in one message.
+
+Has type `u32`. Can be configured via environment variable `BLOCK_SYNC_BLOCK_BATCH_SIZE`
 
 ```json
 4
@@ -142,7 +152,7 @@ Has type `u32`. Can be configured via environment variable `BLOCK_SYNC_BATCH_SIZ
 
 ### `block_sync.gossip_period_ms`
 
-The time between sending request for latest block.
+The period of time to wait between sending requests for the latest block.
 
 Has type `u64`. Can be configured via environment variable `BLOCK_SYNC_GOSSIP_PERIOD_MS`
 
@@ -150,19 +160,9 @@ Has type `u64`. Can be configured via environment variable `BLOCK_SYNC_GOSSIP_PE
 10000
 ```
 
-### `block_sync.mailbox`
-
-Mailbox size
-
-Has type `u32`. Can be configured via environment variable `BLOCK_SYNC_MAILBOX`
-
-```json
-100
-```
-
 ## `disable_panic_terminal_colors`
 
-Disable coloring of the backtrace and error report on panic.
+Disable coloring of the backtrace and error report on panic
 
 Has type `bool`. Can be configured via environment variable `IROHA_DISABLE_PANIC_TERMINAL_COLORS`
 
@@ -172,9 +172,9 @@ false
 
 ## `genesis`
 
-Configuration for `GenesisBlock`.
+`GenesisBlock` configuration
 
-Has type `GenesisConfiguration`. Can be configured via environment variable `IROHA_GENESIS`
+Has type `genesis::Configuration`. Can be configured via environment variable `IROHA_GENESIS`
 
 ```json
 {
@@ -184,14 +184,14 @@ Has type `GenesisConfiguration`. Can be configured via environment variable `IRO
   },
   "ACCOUNT_PUBLIC_KEY": "ed01204cffd0ee429b1bdd36b3910ec570852b8bb63f18750341772fb46bc856c5caaf",
   "GENESIS_SUBMISSION_DELAY_MS": 1000,
-  "WAIT_FOR_PEERS_RETRY_COUNT": 100,
+  "WAIT_FOR_PEERS_RETRY_COUNT_LIMIT": 100,
   "WAIT_FOR_PEERS_RETRY_PERIOD_MS": 500
 }
 ```
 
 ### `genesis.account_private_key`
 
-Genesis account private key, only needed on the peer that submits the genesis block.
+The private key of the genesis account, only needed for the peer that submits the genesis block.
 
 Has type `Option<PrivateKey>`. Can be configured via environment variable `IROHA_GENESIS_ACCOUNT_PRIVATE_KEY`
 
@@ -204,7 +204,7 @@ Has type `Option<PrivateKey>`. Can be configured via environment variable `IROHA
 
 ### `genesis.account_public_key`
 
-The genesis account public key, should be supplied to all peers.
+The public key of the genesis account, should be supplied to all peers.
 
 Has type `PublicKey`. Can be configured via environment variable `IROHA_GENESIS_ACCOUNT_PUBLIC_KEY`
 
@@ -214,7 +214,7 @@ Has type `PublicKey`. Can be configured via environment variable `IROHA_GENESIS_
 
 ### `genesis.genesis_submission_delay_ms`
 
-Delay before genesis block submission after minimum number of peers were discovered to be online.
+The delay before genesis block submission after minimum number of peers were discovered to be online.
 
 Has type `u64`. Can be configured via environment variable `IROHA_GENESIS_GENESIS_SUBMISSION_DELAY_MS`
 
@@ -222,11 +222,11 @@ Has type `u64`. Can be configured via environment variable `IROHA_GENESIS_GENESI
 1000
 ```
 
-### `genesis.wait_for_peers_retry_count`
+### `genesis.wait_for_peers_retry_count_limit`
 
-Number of attempts to connect to peers, while waiting for them to submit genesis.
+The number of attempts to connect to peers while waiting for them to submit genesis.
 
-Has type `u64`. Can be configured via environment variable `IROHA_GENESIS_WAIT_FOR_PEERS_RETRY_COUNT`
+Has type `u64`. Can be configured via environment variable `IROHA_GENESIS_WAIT_FOR_PEERS_RETRY_COUNT_LIMIT`
 
 ```json
 100
@@ -234,7 +234,7 @@ Has type `u64`. Can be configured via environment variable `IROHA_GENESIS_WAIT_F
 
 ### `genesis.wait_for_peers_retry_period_ms`
 
-Period in milliseconds in which to retry connecting to peers, while waiting for them to submit genesis.
+The period in milliseconds in which to retry connecting to peers while waiting for them to submit genesis.
 
 Has type `u64`. Can be configured via environment variable `IROHA_GENESIS_WAIT_FOR_PEERS_RETRY_PERIOD_MS`
 
@@ -244,17 +244,27 @@ Has type `u64`. Can be configured via environment variable `IROHA_GENESIS_WAIT_F
 
 ## `kura`
 
-`Kura` related configuration.
+`Kura` configuration
 
-Has type `KuraConfiguration`. Can be configured via environment variable `IROHA_KURA`
+Has type `kura::Configuration`. Can be configured via environment variable `IROHA_KURA`
 
 ```json
 {
+  "ACTOR_CHANNEL_CAPACITY": 100,
   "BLOCKS_PER_STORAGE_FILE": 1000,
-  "BLOCK_STORE_PATH": "./blocks",
-  "INIT_MODE": "strict",
-  "MAILBOX": 100
+  "BLOCK_STORE_PATH": "./storage",
+  "INIT_MODE": "strict"
 }
+```
+
+### `kura.actor_channel_capacity`
+
+Default buffer capacity of actor's MPSC channel.
+
+Has type `u32`. Can be configured via environment variable `KURA_ACTOR_CHANNEL_CAPACITY`
+
+```json
+100
 ```
 
 ### `kura.block_store_path`
@@ -264,12 +274,12 @@ Path to the existing block store folder or path to create new folder.
 Has type `String`. Can be configured via environment variable `KURA_BLOCK_STORE_PATH`
 
 ```json
-"./blocks"
+"./storage"
 ```
 
 ### `kura.blocks_per_storage_file`
 
-Maximum number of blocks to write into single storage file
+Maximum number of blocks to write into a single storage file.
 
 Has type `NonZeroU64`. Can be configured via environment variable `KURA_BLOCKS_PER_STORAGE_FILE`
 
@@ -279,7 +289,7 @@ Has type `NonZeroU64`. Can be configured via environment variable `KURA_BLOCKS_P
 
 ### `kura.init_mode`
 
-Possible modes: `strict`, `fast`.
+Initialization mode: `strict` or `fast`.
 
 Has type `Mode`. Can be configured via environment variable `KURA_INIT_MODE`
 
@@ -287,21 +297,11 @@ Has type `Mode`. Can be configured via environment variable `KURA_INIT_MODE`
 "strict"
 ```
 
-### `kura.mailbox`
-
-Default mailbox size
-
-Has type `u32`. Can be configured via environment variable `KURA_MAILBOX`
-
-```json
-100
-```
-
 ## `logger`
 
-`Logger` configuration.
+`Logger` configuration
 
-Has type `LoggerConfiguration`. Can be configured via environment variable `IROHA_LOGGER`
+Has type `logger::Configuration`. Can be configured via environment variable `IROHA_LOGGER`
 
 ```json
 {
@@ -337,7 +337,7 @@ null
 
 Maximum log level
 
-Has type `handle::SyncValue<Level,handle::Singleton<Level>>`. Can be configured via environment variable `MAX_LOG_LEVEL`
+Has type `SyncLevel`. Can be configured via environment variable `MAX_LOG_LEVEL`
 
 ```json
 "INFO"
@@ -367,19 +367,19 @@ true
 
 Network configuration
 
-Has type `NetworkConfiguration`. Can be configured via environment variable `IROHA_NETWORK`
+Has type `network::Configuration`. Can be configured via environment variable `IROHA_NETWORK`
 
 ```json
 {
-  "MAILBOX": 100
+  "ACTOR_CHANNEL_CAPACITY": 100
 }
 ```
 
-### `network.mailbox`
+### `network.actor_channel_capacity`
 
-Actor mailbox size
+Buffer capacity of actor's MPSC channel
 
-Has type `u32`. Can be configured via environment variable `IROHA_NETWORK_MAILBOX`
+Has type `u32`. Can be configured via environment variable `IROHA_NETWORK_ACTOR_CHANNEL_CAPACITY`
 
 ```json
 100
@@ -387,7 +387,7 @@ Has type `u32`. Can be configured via environment variable `IROHA_NETWORK_MAILBO
 
 ## `private_key`
 
-Private key of this peer.
+Private key of this peer
 
 Has type `PrivateKey`. Can be configured via environment variable `IROHA_PRIVATE_KEY`
 
@@ -400,7 +400,7 @@ Has type `PrivateKey`. Can be configured via environment variable `IROHA_PRIVATE
 
 ## `public_key`
 
-Public key of this peer.
+Public key of this peer
 
 Has type `PublicKey`. Can be configured via environment variable `IROHA_PUBLIC_KEY`
 
@@ -410,9 +410,9 @@ Has type `PublicKey`. Can be configured via environment variable `IROHA_PUBLIC_K
 
 ## `queue`
 
-`Queue` configuration.
+`Queue` configuration
 
-Has type `QueueConfiguration`. Can be configured via environment variable `IROHA_QUEUE`
+Has type `queue::Configuration`. Can be configured via environment variable `IROHA_QUEUE`
 
 ```json
 {
@@ -445,7 +445,7 @@ Has type `u32`. Can be configured via environment variable `QUEUE_MAXIMUM_TRANSA
 
 ### `queue.maximum_transactions_in_queue`
 
-The upper limit of the number of transactions waiting in this queue.
+The upper limit of the number of transactions waiting in the queue.
 
 Has type `u32`. Can be configured via environment variable `QUEUE_MAXIMUM_TRANSACTIONS_IN_QUEUE`
 
@@ -455,7 +455,7 @@ Has type `u32`. Can be configured via environment variable `QUEUE_MAXIMUM_TRANSA
 
 ### `queue.transaction_time_to_live_ms`
 
-The transaction will be dropped after this time if it is still in a `Queue`.
+The transaction will be dropped after this time if it is still in the queue.
 
 Has type `u64`. Can be configured via environment variable `QUEUE_TRANSACTION_TIME_TO_LIVE_MS`
 
@@ -465,17 +465,17 @@ Has type `u64`. Can be configured via environment variable `QUEUE_TRANSACTION_TI
 
 ## `sumeragi`
 
-`Sumeragi` related configuration.
+`Sumeragi` configuration
 
-Has type `SumeragiConfiguration`. Can be configured via environment variable `IROHA_SUMERAGI`
+Has type `sumeragi::Configuration`. Can be configured via environment variable `IROHA_SUMERAGI`
 
 ```json
 {
+  "ACTOR_CHANNEL_CAPACITY": 100,
   "BLOCK_TIME_MS": 1000,
-  "COMMIT_TIME_MS": 2000,
+  "COMMIT_TIME_LIMIT_MS": 2000,
   "GOSSIP_BATCH_SIZE": 500,
   "GOSSIP_PERIOD_MS": 1000,
-  "MAILBOX": 100,
   "PEER_ID": {
     "address": "127.0.0.1:1337",
     "public_key": "ed01201c61faf8fe94e253b93114240394f79a607b7fa55f9e5a41ebec74b88055768b"
@@ -490,13 +490,23 @@ Has type `SumeragiConfiguration`. Can be configured via environment variable `IR
       "public_key": "ed01201c61faf8fe94e253b93114240394f79a607b7fa55f9e5a41ebec74b88055768b"
     }
   ],
-  "TX_RECEIPT_TIME_MS": 500
+  "TX_RECEIPT_TIME_LIMIT_MS": 500
 }
+```
+
+### `sumeragi.actor_channel_capacity`
+
+Buffer capacity of actor's MPSC channel
+
+Has type `u32`. Can be configured via environment variable `SUMERAGI_ACTOR_CHANNEL_CAPACITY`
+
+```json
+100
 ```
 
 ### `sumeragi.block_time_ms`
 
-Amount of time peer waits for the `CreatedBlock` message after getting a `TransactionReceipt`
+The period of time a peer waits for the `CreatedBlock` message after getting a `TransactionReceipt`
 
 Has type `u64`. Can be configured via environment variable `SUMERAGI_BLOCK_TIME_MS`
 
@@ -504,11 +514,11 @@ Has type `u64`. Can be configured via environment variable `SUMERAGI_BLOCK_TIME_
 1000
 ```
 
-### `sumeragi.commit_time_ms`
+### `sumeragi.commit_time_limit_ms`
 
-Amount of time Peer waits for CommitMessage from the proxy tail.
+The period of time a peer waits for `CommitMessage` from the proxy tail.
 
-Has type `u64`. Can be configured via environment variable `SUMERAGI_COMMIT_TIME_MS`
+Has type `u64`. Can be configured via environment variable `SUMERAGI_COMMIT_TIME_LIMIT_MS`
 
 ```json
 2000
@@ -516,7 +526,7 @@ Has type `u64`. Can be configured via environment variable `SUMERAGI_COMMIT_TIME
 
 ### `sumeragi.gossip_batch_size`
 
-Maximum number of transactions in tx gossip batch message. While configuring this, attention should be payed to `p2p` max message size.
+Maximum number of transactions in tx gossip batch message. While configuring this, pay attention to `p2p` max message size.
 
 Has type `u32`. Can be configured via environment variable `SUMERAGI_GOSSIP_BATCH_SIZE`
 
@@ -536,7 +546,7 @@ Has type `u64`. Can be configured via environment variable `SUMERAGI_GOSSIP_PERI
 
 ### `sumeragi.key_pair`
 
-Key pair of private and public keys.
+The key pair consisting of a private and a public key.
 
 Has type `KeyPair`. Can be configured via environment variable `SUMERAGI_KEY_PAIR`
 
@@ -548,16 +558,6 @@ Has type `KeyPair`. Can be configured via environment variable `SUMERAGI_KEY_PAI
   },
   "public_key": "ed01201c61faf8fe94e253b93114240394f79a607b7fa55f9e5a41ebec74b88055768b"
 }
-```
-
-### `sumeragi.mailbox`
-
-Mailbox size
-
-Has type `u32`. Can be configured via environment variable `SUMERAGI_MAILBOX`
-
-```json
-100
 ```
 
 ### `sumeragi.peer_id`
@@ -575,7 +575,7 @@ Has type `PeerId`. Can be configured via environment variable `SUMERAGI_PEER_ID`
 
 ### `sumeragi.transaction_limits`
 
-Limits to which transactions must adhere
+The limits to which transactions must adhere
 
 Has type `TransactionLimits`. Can be configured via environment variable `SUMERAGI_TRANSACTION_LIMITS`
 
@@ -601,11 +601,11 @@ Has type `TrustedPeers`. Can be configured via environment variable `SUMERAGI_TR
 ]
 ```
 
-### `sumeragi.tx_receipt_time_ms`
+### `sumeragi.tx_receipt_time_limit_ms`
 
-Amount of time Peer waits for TxReceipt from the leader.
+The period of time a peer waits for `TxReceipt` from the leader.
 
-Has type `u64`. Can be configured via environment variable `SUMERAGI_TX_RECEIPT_TIME_MS`
+Has type `u64`. Can be configured via environment variable `SUMERAGI_TX_RECEIPT_TIME_LIMIT_MS`
 
 ```json
 500
@@ -613,15 +613,15 @@ Has type `u64`. Can be configured via environment variable `SUMERAGI_TX_RECEIPT_
 
 ## `telemetry`
 
-Configuration for telemetry
+Telemetry configuration
 
-Has type `iroha_telemetry::Configuration`. Can be configured via environment variable `IROHA_TELEMETRY`
+Has type `telemetry::Configuration`. Can be configured via environment variable `IROHA_TELEMETRY`
 
 ```json
 {
   "FILE": null,
-  "MAX_EXPONENT": 4,
-  "MIN_PERIOD": 1,
+  "MAX_RETRY_DELAY_EXPONENT": 4,
+  "MIN_RETRY_PERIOD": 1,
   "NAME": null,
   "URL": null
 }
@@ -631,27 +631,27 @@ Has type `iroha_telemetry::Configuration`. Can be configured via environment var
 
 The filepath that to write dev-telemetry to
 
-Has type `Option<PathBuf>`. Can be configured via environment variable `TELEMETRY_FILE`
+Has type `Option<std::path::PathBuf>`. Can be configured via environment variable `TELEMETRY_FILE`
 
 ```json
 null
 ```
 
-### `telemetry.max_exponent`
+### `telemetry.max_retry_delay_exponent`
 
 The maximum exponent of 2 that is used for increasing delay between reconnections
 
-Has type `u8`. Can be configured via environment variable `TELEMETRY_MAX_EXPONENT`
+Has type `u8`. Can be configured via environment variable `TELEMETRY_MAX_RETRY_DELAY_EXPONENT`
 
 ```json
 4
 ```
 
-### `telemetry.min_period`
+### `telemetry.min_retry_period`
 
 The minimum period of time in seconds to wait before reconnecting
 
-Has type `u64`. Can be configured via environment variable `TELEMETRY_MIN_PERIOD`
+Has type `u64`. Can be configured via environment variable `TELEMETRY_MIN_RETRY_PERIOD`
 
 ```json
 1
@@ -679,9 +679,9 @@ null
 
 ## `torii`
 
-`Torii` related configuration.
+`Torii` configuration
 
-Has type `ToriiConfiguration`. Can be configured via environment variable `IROHA_TORII`
+Has type `torii::Configuration`. Can be configured via environment variable `IROHA_TORII`
 
 ```json
 {
@@ -745,9 +745,9 @@ Has type `String`. Can be configured via environment variable `TORII_TELEMETRY_U
 
 ## `wsv`
 
-Configuration for `WorldStateView`.
+`WorldStateView` configuration
 
-Has type `WorldStateViewConfiguration`. Can be configured via environment variable `IROHA_WSV`
+Has type `wsv::Configuration`. Can be configured via environment variable `IROHA_WSV`
 
 ```json
 {
@@ -780,7 +780,7 @@ Has type `WorldStateViewConfiguration`. Can be configured via environment variab
 
 ### `wsv.account_metadata_limits`
 
-[`MetadataLimits`] of any account's metadata.
+[`MetadataLimits`] of any account metadata.
 
 Has type `MetadataLimits`. Can be configured via environment variable `WSV_ACCOUNT_METADATA_LIMITS`
 
@@ -793,7 +793,7 @@ Has type `MetadataLimits`. Can be configured via environment variable `WSV_ACCOU
 
 ### `wsv.asset_definition_metadata_limits`
 
-[`MetadataLimits`] of any asset definition's metadata.
+[`MetadataLimits`] of any asset definition metadata.
 
 Has type `MetadataLimits`. Can be configured via environment variable `WSV_ASSET_DEFINITION_METADATA_LIMITS`
 
@@ -819,7 +819,7 @@ Has type `MetadataLimits`. Can be configured via environment variable `WSV_ASSET
 
 ### `wsv.domain_metadata_limits`
 
-[`MetadataLimits`] of any domain's metadata.
+[`MetadataLimits`] of any domain metadata.
 
 Has type `MetadataLimits`. Can be configured via environment variable `WSV_DOMAIN_METADATA_LIMITS`
 
@@ -845,9 +845,9 @@ Has type `LengthLimits`. Can be configured via environment variable `WSV_IDENT_L
 
 ### `wsv.wasm_runtime_config`
 
-[`WASM Runtime`](wasm::Runtime) configuration
+WASM runtime configuration
 
-Has type `wasm::config::Configuration`. Can be configured via environment variable `WSV_WASM_RUNTIME_CONFIG`
+Has type `wasm::Configuration`. Can be configured via environment variable `WSV_WASM_RUNTIME_CONFIG`
 
 ```json
 {

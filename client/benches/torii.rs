@@ -5,14 +5,15 @@ use std::thread;
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use iroha::samples::get_config;
 use iroha_client::client::{asset, Client};
-use iroha_config::runtime_upgrades::Reload;
+use iroha_config::{base::runtime_upgrades::Reload, logger};
 use iroha_core::{
     genesis::{GenesisNetwork, GenesisNetworkTrait, RawGenesisBlock},
     prelude::*,
 };
 use iroha_data_model::prelude::*;
+use iroha_primitives::small::SmallStr;
 use iroha_version::Encode;
-use test_network::{get_key_pair, Peer as TestPeer, TestRuntime};
+use test_network::{get_key_pair, Peer as TestPeer, PeerBuilder, TestRuntime};
 use tokio::runtime::Runtime;
 
 const MINIMUM_SUCCESS_REQUEST_RATIO: f32 = 0.9;
@@ -32,21 +33,20 @@ fn query_requests(criterion: &mut Criterion) {
             "wonderland".parse().expect("Valid"),
             get_key_pair().public_key().clone(),
         ),
-        &configuration.genesis,
+        Some(&configuration.genesis),
         &configuration.sumeragi.transaction_limits,
     )
     .expect("genesis creation failed");
 
-    rt.block_on(peer.start_with_config_permissions(
-        configuration.clone(),
-        genesis,
-        AllowAll,
-        AllowAll,
-    ));
+    let builder = PeerBuilder::new()
+        .with_configuration(configuration.clone())
+        .with_into_genesis(genesis);
+
+    rt.block_on(builder.start_with_peer(&mut peer));
     configuration
         .logger
         .max_log_level
-        .reload(iroha_logger::Level(iroha_config::logger::Level::ERROR))
+        .reload(logger::Level::ERROR)
         .expect("Should not fail");
     let mut group = criterion.benchmark_group("query-requests");
     let domain_id: DomainId = "domain".parse().expect("Valid");
@@ -66,14 +66,14 @@ fn query_requests(criterion: &mut Criterion) {
     let mut client_config = iroha_client::samples::get_client_config(&get_key_pair());
 
     // TODO: We should definitely turn this into type-checked state. `String` is a terrible bodge
-    client_config.torii_api_url = small::SmallStr::from_string(peer.api_address.clone());
+    client_config.torii_api_url = SmallStr::from_string(peer.api_address.clone());
     if !client_config.torii_api_url.starts_with("http://") {
         client_config.torii_api_url =
-            small::SmallStr::from_string(format!("http://{}", client_config.torii_api_url));
+            SmallStr::from_string(format!("http://{}", client_config.torii_api_url));
     }
     if !client_config.torii_telemetry_url.starts_with("http://") {
         client_config.torii_telemetry_url =
-            small::SmallStr::from_string(format!("http://{}", client_config.torii_telemetry_url));
+            SmallStr::from_string(format!("http://{}", client_config.torii_telemetry_url));
     }
     let iroha_client = Client::new(&client_config).expect("Invalid client configuration");
     thread::sleep(std::time::Duration::from_millis(5000));
@@ -132,11 +132,14 @@ fn instruction_submits(criterion: &mut Criterion) {
             "wonderland".parse().expect("Valid"),
             configuration.public_key.clone(),
         ),
-        &configuration.genesis,
+        Some(&configuration.genesis),
         &configuration.sumeragi.transaction_limits,
     )
     .expect("failed to create genesis");
-    rt.block_on(peer.start_with_config_permissions(configuration, genesis, AllowAll, AllowAll));
+    let builder = PeerBuilder::new()
+        .with_configuration(configuration)
+        .with_into_genesis(genesis);
+    rt.block_on(builder.start_with_peer(&mut peer));
     let mut group = criterion.benchmark_group("instruction-requests");
     let domain_id: DomainId = "domain".parse().expect("Valid");
     let create_domain = RegisterBox::new(Domain::new(domain_id.clone()));
@@ -147,14 +150,14 @@ fn instruction_submits(criterion: &mut Criterion) {
     let create_account = RegisterBox::new(Account::new(account_id.clone(), [public_key]));
     let asset_definition_id = AssetDefinitionId::new("xor".parse().expect("Valid"), domain_id);
     let mut client_config = iroha_client::samples::get_client_config(&get_key_pair());
-    client_config.torii_api_url = small::SmallStr::from_string(peer.api_address.clone());
+    client_config.torii_api_url = SmallStr::from_string(peer.api_address.clone());
     if !client_config.torii_api_url.starts_with("http://") {
         client_config.torii_api_url =
-            small::SmallStr::from_string(format!("http://{}", client_config.torii_api_url));
+            SmallStr::from_string(format!("http://{}", client_config.torii_api_url));
     }
     if !client_config.torii_telemetry_url.starts_with("http://") {
         client_config.torii_telemetry_url =
-            small::SmallStr::from_string(format!("http://{}", client_config.torii_telemetry_url));
+            SmallStr::from_string(format!("http://{}", client_config.torii_telemetry_url));
     }
     let iroha_client = Client::new(&client_config).expect("Invalid client configuration");
     thread::sleep(std::time::Duration::from_millis(5000));

@@ -7,17 +7,17 @@
 //! same approximate location in the hierarchy, thus using Binary
 //! search trees (common lisp) or hash tables (racket) to quickly
 //! trigger hooks.
-
+#![allow(clippy::std_instead_of_core)]
 #![cfg(feature = "std")]
 #![allow(clippy::expect_used)]
 
-use std::{cmp::min, result::Result, sync::Arc};
+use core::{cmp::min, result::Result};
 
 use dashmap::DashMap;
 use tokio::{sync::RwLock, task};
 
 use super::Id;
-use crate::{events::Filter as _, prelude::*};
+use crate::{events::Filter as EventFilter, prelude::*};
 
 /// [`Set::mod_repeats()`] error
 #[derive(Debug, Clone, thiserror::Error)]
@@ -36,7 +36,6 @@ pub enum ModRepeatsError {
 pub struct RepeatsOverflowError;
 
 /// Specialized structure that maps event filters to Triggers.
-/// TODO: trigger strong-typing
 #[derive(Debug, Default)]
 pub struct Set {
     /// Triggers using [`DataEventFilter`]
@@ -52,7 +51,7 @@ pub struct Set {
     /// List of actions that should be triggered by events provided by `handle_*` methods.
     /// Vector is used to save the exact triggers order.
     /// Not being cloned
-    matched_ids: RwLock<Vec<(EventType, Id)>>,
+    matched_ids: RwLock<Vec<(Event, Id)>>,
 }
 
 impl Clone for Set {
@@ -120,14 +119,65 @@ impl Set {
         self.ids.iter().map(|entry| entry.key().clone()).collect()
     }
 
+    /// Apply `f` to triggers that belong to the given [`DomainId`]
+    ///
+    /// Returns an empty list if [`Set`] doesn't contain any trigger belonging to [`DomainId`].
+    pub fn inspect_by_domain_id<F, R>(&self, domain_id: &DomainId, f: F) -> Vec<R>
+    where
+        F: Fn(&Id, &dyn ActionTrait) -> R,
+    {
+        self.ids
+            .iter()
+            .filter_map(|pair| {
+                let id = pair.key();
+                let trigger_domain_id = id.domain_id.as_ref()?;
+
+                if trigger_domain_id != domain_id {
+                    return None;
+                }
+
+                let event_type = pair.value();
+
+                let result = match event_type {
+                    EventType::Data => self
+                        .data_triggers
+                        .get(id)
+                        .map(|entry| f(id, entry.value()))
+                        .expect("`Set::data_triggers` doesn't contain required id. This is a bug"),
+                    EventType::Pipeline => self
+                        .pipeline_triggers
+                        .get(id)
+                        .map(|entry| f(id, entry.value()))
+                        .expect(
+                            "`Set::pipeline_triggers` doesn't contain required id. This is a bug",
+                        ),
+                    EventType::Time => self
+                        .time_triggers
+                        .get(id)
+                        .map(|entry| f(id, entry.value()))
+                        .expect("`Set::time_triggers` doesn't contain required id. This is a bug"),
+                    EventType::ExecuteTrigger => self
+                        .by_call_triggers
+                        .get(id)
+                        .map(|entry| f(id, entry.value()))
+                        .expect(
+                            "`Set::by_call_triggers` doesn't contain required id. This is a bug",
+                        ),
+                };
+
+                Some(result)
+            })
+            .collect()
+    }
+
     /// Apply `f` to the trigger identified by `id`
     ///
     /// Returns [`None`] if [`Set`] doesn't contain the trigger with the given `id`.
-    pub fn inspect<F, R>(&self, id: &Id, f: F) -> Option<R>
+    pub fn inspect_by_id<F, R>(&self, id: &Id, f: F) -> Option<R>
     where
         F: Fn(&dyn ActionTrait) -> R,
     {
-        self.ids.get(id).map(|event_type| match event_type.value() {
+        self.ids.get(id).map(|pair| match pair.value() {
             EventType::Data => self
                 .data_triggers
                 .get(id)
@@ -156,8 +206,8 @@ impl Set {
     /// Returns `false` if [`Set`] doesn't contain the trigger with the given `id`.
     pub fn remove(&self, id: &Id) -> bool {
         self.ids
-            .get(id)
-            .map(|entry| match entry.value() {
+            .remove(id)
+            .map(|(_, event_type)| match event_type {
                 EventType::Data => self
                     .data_triggers
                     .remove(id)
@@ -197,10 +247,10 @@ impl Set {
     pub fn mod_repeats(
         &self,
         id: &Id,
-        f: impl Fn(u32) -> std::result::Result<u32, RepeatsOverflowError>,
+        f: impl Fn(u32) -> Result<u32, RepeatsOverflowError>,
     ) -> Result<(), ModRepeatsError> {
         let res = self
-            .inspect(id, |action| match action.repeats() {
+            .inspect_by_id(id, |action| match action.repeats() {
                 Repeats::Exactly(atomic) => {
                     let new_repeats = f(atomic.get())?;
                     atomic.set(new_repeats);
@@ -220,36 +270,63 @@ impl Set {
     ///
     /// Finds all actions, that are triggered by `event` and stores them.
     /// This actions will be inspected in the next [`Set::handle_data_event()`] call
-    pub fn handle_data_event(&self, event: &DataEvent) {
-        self.handle_event(&self.data_triggers, event, EventType::Data)
+    // Passing by value to follow other `handle_` methods interface
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn handle_data_event(&self, event: DataEvent) {
+        for entry in self.data_triggers.iter() {
+            let id = entry.key();
+
+            if id.domain_id.is_some() && id.domain_id.as_ref() != event.domain_id() {
+                continue;
+            }
+
+            self.match_and_insert_trigger(event.clone(), entry.pair());
+        }
+    }
+
+    /// Handle [`ExecuteTriggerEvent`].
+    ///
+    /// Finds all actions, that are triggered by `event` and stores them.
+    /// This actions will be inspected in the next [`Set::inspect_matched()`] call
+    pub fn handle_execute_trigger_event(&self, event: ExecuteTriggerEvent) {
+        let entry = match self.by_call_triggers.get(&event.trigger_id) {
+            Some(entry) => entry,
+            None => return,
+        };
+
+        self.match_and_insert_trigger(event, entry.pair());
     }
 
     /// Handle [`PipelineEvent`].
     ///
     /// Finds all actions, that are triggered by `event` and stores them.
     /// This actions will be inspected in the next [`Set::inspect_matched()`] call
-    pub fn handle_pipeline_event(&self, event: &PipelineEvent) {
-        self.handle_event(&self.pipeline_triggers, event, EventType::Pipeline)
+    // Passing by value to follow other `handle_` methods interface
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn handle_pipeline_event(&self, event: PipelineEvent) {
+        for entry in self.pipeline_triggers.iter() {
+            self.match_and_insert_trigger(event.clone(), entry.pair());
+        }
     }
 
     /// Handle [`TimeEvent`].
     ///
     /// Finds all actions, that are triggered by `event` and stores them.
     /// This actions will be inspected in the next [`Set::inspect_matched()`] call
-    pub fn handle_time_event(&self, event: &TimeEvent) {
+    pub fn handle_time_event(&self, event: TimeEvent) {
         for entry in &self.time_triggers {
             let action = entry.value();
 
-            let mut count = action.filter.count_matches(event);
+            let mut count = action.filter.count_matches(&event);
             if let Repeats::Exactly(atomic) = &action.repeats {
                 count = min(atomic.get(), count);
             }
             if count == 0 {
-                return;
+                continue;
             }
 
             let ids = vec![
-                (EventType::Time, entry.key().clone());
+                (Event::Time(event), entry.key().clone());
                 count
                     .try_into()
                     .expect("`u32` should always fit in `usize`")
@@ -258,38 +335,27 @@ impl Set {
         }
     }
 
-    /// Handle [`ExecuteTriggerEvent`].
+    /// Match and insert a [`TriggerId`] into the set of matched ids.
     ///
-    /// Finds all actions, that are triggered by `event` and stores them.
-    /// This actions will be inspected ln the next [`Set::inspect_matched()`] call
-    pub fn handle_execute_trigger_event(&self, event: &ExecuteTriggerEvent) {
-        self.handle_event(&self.by_call_triggers, event, EventType::ExecuteTrigger)
-    }
-
-    /// Handle generic event
-    fn handle_event<F, E>(
+    /// Skips insertion:
+    /// - If the action's filter doesn't match an event
+    /// - If the action's repeats count equals to 0
+    fn match_and_insert_trigger<E: Into<Event>, F: EventFilter<Event = E>>(
         &self,
-        triggers: &DashMap<Id, Action<F>>,
-        event: &E,
-        event_type: EventType,
-    ) where
-        F: Filter<EventType = E>,
-    {
-        for entry in triggers {
-            let action = entry.value();
-            if !action.filter.matches(event) {
+        event: E,
+        (id, action): (&Id, &Action<F>),
+    ) {
+        if !action.filter.matches(&event) {
+            return;
+        }
+
+        if let Repeats::Exactly(atomic) = &action.repeats {
+            if atomic.get() == 0 {
                 return;
             }
-
-            if let Repeats::Exactly(atomic) = &action.repeats {
-                if atomic.get() == 0 {
-                    return;
-                }
-            }
-
-            task::block_in_place(|| self.matched_ids.blocking_write())
-                .push((event_type, entry.key().clone()))
         }
+
+        task::block_in_place(|| self.matched_ids.blocking_write()).push((event.into(), id.clone()))
     }
 
     /// Calls `f` for every action, matched by previously called `handle_` methods.
@@ -305,9 +371,9 @@ impl Set {
     /// Failed actions won't appear on the next `inspect_matched()` call if they don't match new
     /// events by calling `handle_` methods.
     /// Repeats count of failed actions won't be decreased.
-    pub async fn inspect_matched<F, E>(&self, f: F) -> std::result::Result<(), Vec<E>>
+    pub async fn inspect_matched<F, E>(&self, f: F) -> Result<(), Vec<E>>
     where
-        F: Fn(&dyn ActionTrait) -> std::result::Result<(), E> + Send + Copy,
+        F: Fn(&dyn ActionTrait, Event) -> std::result::Result<(), E> + Send + Copy,
         E: Send + Sync,
     {
         let (succeed, res) = self.map_matched(f).await;
@@ -336,85 +402,65 @@ impl Set {
     ///
     /// Returns vector of successfully executed triggers
     /// and result with errors vector if there are some
-    async fn map_matched<F, E>(&self, f: F) -> (Vec<Id>, std::result::Result<(), Vec<E>>)
+    async fn map_matched<F, E>(&self, f: F) -> (Vec<Id>, Result<(), Vec<E>>)
     where
-        F: Fn(&dyn ActionTrait) -> std::result::Result<(), E> + Send + Copy,
+        F: Fn(&dyn ActionTrait, Event) -> std::result::Result<(), E> + Send + Copy,
         E: Send + Sync,
     {
-        let succeed = Arc::new(RwLock::new(Vec::new()));
-        let errors = Arc::new(RwLock::new(Vec::new()));
+        let mut succeed = Vec::new();
+        let mut errors = Vec::new();
 
-        let succeed_clone = Arc::clone(&succeed);
-        let errors_clone = Arc::clone(&errors);
-        let apply_f = move |id: Id, action: &dyn ActionTrait| {
+        let apply_f = move |action: &dyn ActionTrait, event: Event| {
             if let Repeats::Exactly(atomic) = action.repeats() {
                 if atomic.get() == 0 {
-                    return;
+                    return None;
                 }
             }
-
-            match f(action) {
-                Ok(()) => task::block_in_place(|| succeed_clone.blocking_write()).push(id),
-                Err(err) => task::block_in_place(|| errors_clone.blocking_write()).push(err),
-            }
+            Some(f(action, event))
         };
 
-        // Cloning and clearing `self.ids_write` so that `handle_` call won't deadlock
+        // Cloning and clearing `self.matched_ids` so that `handle_` call won't deadlock
         let matched_ids = {
             let mut ids_write = self.matched_ids.write().await;
             let ids_clone = ids_write.clone();
             ids_write.clear();
             ids_clone
         };
-        for (event_type, id) in matched_ids {
-            // Ignoring `None` variant cause this means that action was deleted after `handle_`
+        for (event, id) in matched_ids {
+            // Ignoring `None` variant because this means that action was deleted after `handle_*()`
             // call and before `inspect_matching()` call
-            let _ = match event_type {
-                EventType::Data => self
+            let result = match event {
+                Event::Data(_) => self
                     .data_triggers
                     .get(&id)
-                    .map(|entry| apply_f(id, entry.value())),
-                EventType::Pipeline => self
+                    .map(|entry| apply_f(entry.value(), event)),
+                Event::Pipeline(_) => self
                     .pipeline_triggers
                     .get(&id)
-                    .map(|entry| apply_f(id, entry.value())),
-                EventType::Time => self
+                    .map(|entry| apply_f(entry.value(), event)),
+                Event::Time(_) => self
                     .time_triggers
                     .get(&id)
-                    .map(|entry| apply_f(id, entry.value())),
-                EventType::ExecuteTrigger => self
+                    .map(|entry| apply_f(entry.value(), event)),
+                Event::ExecuteTrigger(_) => self
                     .by_call_triggers
                     .get(&id)
-                    .map(|entry| apply_f(id, entry.value())),
+                    .map(|entry| apply_f(entry.value(), event)),
+            };
+
+            match result.flatten() {
+                Some(Ok(_)) => succeed.push(id),
+                Some(Err(err)) => errors.push(err),
+                None => {}
             };
 
             task::yield_now().await;
         }
 
-        drop(apply_f);
-        let succeed = Self::unwrap_arc_lock(succeed);
-
-        if errors.read().await.is_empty() {
+        if errors.is_empty() {
             return (succeed, Ok(()));
         }
-
-        let errors = Self::unwrap_arc_lock(errors);
         (succeed, Err(errors))
-    }
-
-    /// Unwrap `a`
-    ///
-    /// # Panics
-    /// - If `Arc` has strong count > 1
-    #[allow(clippy::panic)]
-    fn unwrap_arc_lock<T>(a: Arc<RwLock<T>>) -> T {
-        // Match with panic cause can't use `expect()` due to
-        // error value not implementing `Display`
-        #[allow(clippy::match_wild_err_arm)]
-        match Arc::try_unwrap(a) {
-            Ok(lock) => lock.into_inner(),
-            Err(_) => panic!("`Arc` is has strong count > 1. This is a bug"),
-        }
     }
 
     /// Remove actions with zero execution count from `triggers`

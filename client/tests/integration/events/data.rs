@@ -1,14 +1,12 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic_in_result_fn)]
-
-use std::{sync::mpsc, thread};
+#![allow(clippy::restriction)]
+use std::{fmt::Write as _, sync::mpsc, thread};
 
 use eyre::Result;
 use iroha_core::smartcontracts::wasm;
 use iroha_data_model::{prelude::*, transaction::WasmSmartContract};
 use parity_scale_codec::Encode;
-use test_network::{Peer as TestPeer, *};
+use test_network::*;
 
-use super::Configuration;
 use crate::wasm::utils::wasm_template;
 
 fn produce_instructions() -> Vec<Instruction> {
@@ -52,6 +50,7 @@ fn instruction_execution_should_produce_events() -> Result<()> {
 
 #[test]
 fn wasm_execution_should_produce_events() -> Result<()> {
+    #![allow(clippy::integer_division)]
     let isi_hex: Vec<String> = produce_instructions()
         .into_iter()
         .map(|isi| isi.encode())
@@ -64,12 +63,12 @@ fn wasm_execution_should_produce_events() -> Result<()> {
         let ptr_len = isi.len();
 
         // It's expected that hex values are of even length
-        #[allow(clippy::integer_division)]
-        isi_calls.push_str(&format!(
+        write!(
+            isi_calls,
             "(call $exec_isi (i32.const {ptr_offset}) (i32.const {ptr_len}))",
             ptr_offset = ptr_offset / 2,
             ptr_len = ptr_len / 2,
-        ));
+        )?;
 
         ptr_offset = ptr_len;
     }
@@ -80,10 +79,10 @@ fn wasm_execution_should_produce_events() -> Result<()> {
             {wasm_template}
 
             ;; Function which starts the smartcontract execution
-            (func (export "{main_fn_name}") (param i32 i32)
+            (func (export "{main_fn_name}") (param)
                 {isi_calls}))
         "#,
-        main_fn_name = wasm::WASM_MAIN_FN_NAME,
+        main_fn_name = wasm::export::WASM_MAIN_FN_NAME,
         wasm_template = wasm_template(&isi_hex.concat()),
         isi_calls = isi_calls
     );
@@ -94,10 +93,8 @@ fn wasm_execution_should_produce_events() -> Result<()> {
 }
 
 fn transaction_execution_should_produce_events(executable: Executable) -> Result<()> {
-    let (_rt, _peer, client) = <TestPeer>::start_test_with_runtime();
+    let (_rt, _peer, client) = <PeerBuilder>::new().start_with_runtime();
     wait_for_genesis_committed(&vec![client.clone()], 0);
-
-    let pipeline_time = Configuration::pipeline_time();
 
     // spawn event reporter
     let listener = client.clone();
@@ -118,8 +115,7 @@ fn transaction_execution_should_produce_events(executable: Executable) -> Result
     let transaction = client
         .build_transaction(executable, UnlimitedMetadata::new())
         .unwrap();
-    client.submit_transaction(transaction)?;
-    thread::sleep(pipeline_time * 2);
+    client.submit_transaction_blocking(transaction)?;
 
     // assertion
     for i in 0..4_usize {

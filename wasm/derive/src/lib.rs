@@ -1,85 +1,109 @@
-//! Macros for writing smartcontracts
-
-#![allow(clippy::str_to_string)]
+//! Macros for writing smart contracts and validators
 
 use proc_macro::TokenStream;
-use proc_macro_error::{abort, proc_macro_error};
-use quote::quote;
-use syn::{parse_macro_input, parse_quote, ItemFn, Path, ReturnType, Signature, Type};
 
-/// Used to annotate user-defined function which starts the execution of smartcontract
-#[proc_macro_error]
+mod entrypoint;
+mod validator;
+
+/// Annotate the user-defined function that starts the execution of a smart contract.
+///
+/// # Attributes
+///
+/// This macro can have an attribute describing entrypoint parameters.
+///
+/// The syntax is:
+/// `#[iroha_wasm::entrypoint(params = "[<type>,*]")]`, where `<type>` is one of:
+/// - `authority` - an account id of the smart contract authority
+/// - `triggering_event` - an event that triggers the execution of the smart contract
+///
+/// None, one or both parameters in any order can be specified.
+/// Parameters will be passed to the entrypoint function in the order they are specified.
+///
+/// ## Authority
+///
+/// A real function parameter type corresponding to the `authority` should have
+/// `iroha_wasm::iroha_data_model::prelude::AccountId` type.
+///
+/// ## Triggering event
+///
+/// A real function parameter type corresponding to the `triggering_event` should have
+/// type implementing `TryFrom<iroha_data_model::prelude::Event>`.
+///
+/// So any subtype of `Event` can be specified, i.e. `TimeEvent` or `DataEvent`.
+/// For details see `iroha_wasm::iroha_data_model::prelude::Event`.
+///
+/// If conversion will fail in runtime then an error message will be printed,
+/// if `debug` feature is enabled.
+///
+/// # Panics
+///
+/// - If got unexpected syntax of attribute
+/// - If function has a return type
+///
+/// # Examples
+///
+// `ignore` because this macro idiomatically should be imported from `iroha_wasm` crate.
+//
+/// Using without parameters:
+/// ```ignore
+/// #[iroha_wasm::entrypoint]
+/// fn trigger_entrypoint() {
+///     // do stuff
+/// }
+/// ```
+///
+/// Using only `authority` parameter:
+/// ```ignore
+/// use iroha_wasm::{data_model::prelude::*, dbg};
+///
+/// #[iroha_wasm::entrypoint(params = "[authority]")]
+/// fn trigger_entrypoint(authority: <Account as Identifiable>::Id) {
+///     dbg(&format!("Trigger authority: {authority}"));
+/// }
+/// ```
+///
+/// Using both `authority` and `triggering_event` parameters:
+/// ```ignore
+/// use iroha_wasm::{data_model::prelude::*, dbg};
+///
+/// #[iroha_wasm::entrypoint(params = "[authority, triggering_event]")]
+/// fn trigger_entrypoint(authority: <Account as Identifiable>::Id, event: DataEvent) {
+///     dbg(&format!(
+///         "Trigger authority: {authority};\n\
+///          Triggering event: {event:?}"
+///     ));
+/// }
+/// ```
 #[proc_macro_attribute]
-pub fn entrypoint(_: TokenStream, item: TokenStream) -> TokenStream {
-    let ItemFn {
-        attrs,
-        vis,
-        sig,
-        mut block,
-    } = parse_macro_input!(item);
-
-    verify_function_signature(&sig);
-    let fn_name = &sig.ident;
-
-    block.stmts.insert(
-        0,
-        parse_quote!(
-            use iroha_wasm::Execute as _;
-        ),
-    );
-
-    quote! {
-        // NOTE: The size of the `len` parameter is defined by the target architecture
-        // which is `wasm32-unknown-unknown` and therefore not dependent by the architecture
-        // smart contract is compiled on or the architecture smart contract is run on
-        /// Smart contract entry point
-        #[no_mangle]
-        pub unsafe extern "C" fn _iroha_wasm_main(ptr: *const u8, len: usize) {
-            #fn_name(iroha_wasm::_decode_from_raw::<<Account as Identifiable>::Id>(ptr, len))
-        }
-
-        #[allow(clippy::needless_pass_by_value)]
-        #(#attrs)*
-        #vis #sig
-        #block
-    }
-    .into()
+pub fn entrypoint(attr: TokenStream, item: TokenStream) -> TokenStream {
+    entrypoint::impl_entrypoint(attr, item)
 }
 
-fn verify_function_signature(sig: &Signature) {
-    if ReturnType::Default != sig.output {
-        abort!(sig.output, "Exported function must not have a return type");
-    }
-
-    if sig.inputs.len() != 1 {
-        abort!(
-            sig.inputs,
-            "Exported function must have exactly 1 input argument of type `Account::Id`"
-        );
-    }
-
-    if let Some(syn::FnArg::Typed(pat)) = sig.inputs.iter().next() {
-        if !type_is_account_id(&pat.ty) {
-            abort!(
-                pat.ty,
-                "Argument to the exported function must be of the `Account::Id` type"
-            );
-        }
-    }
-}
-
-fn type_is_account_id(account_id_ty: &Type) -> bool {
-    if *account_id_ty == parse_quote!(<Account as Identifiable>::Id) {
-        return true;
-    }
-
-    if let Type::Path(path) = account_id_ty {
-        let Path { segments, .. } = &path.path;
-
-        if let Some(type_name) = segments.last().map(|ty| &ty.ident) {
-            return *type_name == "AccountId";
-        }
-    }
-
-    false
+/// Annotate the user-defined function that starts the execution of a validator.
+///
+/// Annotated function should have one parameter of the type which implements
+/// `TryFrom<NeedsPermissionBox>`.
+///
+/// Validators are only checking if an operation is **invalid**, not its validness.
+/// A validator can either deny the operation or pass it to the next validator if there is one.
+///
+/// # Panics
+///
+/// - If the function does not have a return type
+///
+/// # Example
+///
+// `ignore` because this macro idiomatically should be imported from `iroha_wasm` crate.
+//
+/// ```ignore
+/// use iroha_wasm::validator::prelude::*;
+///
+/// #[entrypoint]
+/// pub fn validate(_: QueryBox) -> Verdict {
+///     Verdict::Deny("No queries are allowed".to_owned())
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn validator_entrypoint(attr: TokenStream, item: TokenStream) -> TokenStream {
+    validator::impl_entrypoint(attr, item)
 }

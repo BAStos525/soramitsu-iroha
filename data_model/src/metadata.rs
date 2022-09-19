@@ -2,14 +2,13 @@
 //! transactions and assets.
 
 #[cfg(not(feature = "std"))]
-use alloc::{collections::btree_map, fmt, format, string::String, vec::Vec};
+use alloc::{alloc::alloc, boxed::Box, collections::btree_map, format, string::String, vec::Vec};
 use core::borrow::Borrow;
 #[cfg(feature = "std")]
-use std::{collections::btree_map, fmt};
+use std::{alloc::alloc, collections::btree_map};
 
 use derive_more::Display;
-#[cfg(feature = "ffi")]
-use iroha_ffi::ffi_bindgen;
+use iroha_ffi::{IntoFfi, TryFromReprC};
 use iroha_schema::IntoSchema;
 use parity_scale_codec::{Decode, Encode};
 use serde::{Deserialize, Serialize};
@@ -20,18 +19,13 @@ use crate::{Name, Value};
 pub type UnlimitedMetadata = btree_map::BTreeMap<Name, Value>;
 
 /// Limits for [`Metadata`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, Deserialize, Serialize)]
+#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, Decode, Encode, Deserialize, Serialize)]
+#[display(fmt = "{max_len}L, {max_entry_byte_size}B")]
 pub struct Limits {
     /// Maximum number of entries
     pub max_len: u32,
     /// Maximum length of entry
     pub max_entry_byte_size: u32,
-}
-
-impl fmt::Display for Limits {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(self, f)
-    }
 }
 
 /// Metadata related errors.
@@ -80,6 +74,7 @@ impl Limits {
 /// Collection of parameters by their names with checked insertion.
 #[derive(
     Debug,
+    Display,
     Clone,
     Default,
     PartialEq,
@@ -90,10 +85,13 @@ impl Limits {
     Encode,
     Deserialize,
     Serialize,
+    IntoFfi,
+    TryFromReprC,
     IntoSchema,
 )]
 #[serde(transparent)]
 #[allow(clippy::multiple_inherent_impl)]
+#[display(fmt = "Metadata")]
 pub struct Metadata {
     map: btree_map::BTreeMap<Name, Value>,
 }
@@ -101,7 +99,6 @@ pub struct Metadata {
 /// A path slice, composed of [`Name`]s.
 pub type Path = [Name];
 
-#[cfg_attr(feature = "ffi", ffi_bindgen)]
 impl Metadata {
     /// Constructor.
     #[inline]
@@ -133,13 +130,16 @@ impl Metadata {
         map.get(key)
     }
 
-    /// Returns iterator over key - value pairs stored in [`Metadata`]
+    /// Check if the internal map contains the given key.
+    pub fn contains(&self, key: &Name) -> bool {
+        self.map.contains_key(key)
+    }
+
+    /// Iterate over key/value pairs stored in the internal map.
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (&Name, &Value)> {
         self.map.iter()
     }
-}
 
-impl Metadata {
     /// Get the `Some(&Value)` associated to `key`. Return `None` if not found.
     #[inline]
     pub fn get<K: Ord + ?Sized>(&self, key: &K) -> Option<&Value>

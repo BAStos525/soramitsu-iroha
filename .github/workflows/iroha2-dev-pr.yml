@@ -4,107 +4,106 @@ on:
   pull_request:
     branches: [iroha2-dev]
     paths:
-      - "**.rs"
-      - "**.json"
-      - "**.toml"
-      - "**.yml"
+      - '**.rs'
+      - '**.json'
+      - '**.toml'
+      - '.github/workflows/**.yml'
 
       # Not part of the workspace
-      - "!wasm/**"
+      - '!wasm/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  checks:
+  check:
     runs-on: ubuntu-latest
     container:
-      image: 7272721/i2-ci:latest
+      image: 7272721/i2-ci:nightly
     steps:
-      - uses: actions/checkout@v2
-      - uses: Swatinem/rust-cache@v1
-      - name: Documentation check
+      - uses: actions/checkout@v3
+      - uses: Swatinem/rust-cache@v2
+      - name: Check config.md
         if: always()
-        run: |
-          cargo doc --no-deps --quiet
-          ./scripts/check.sh docs
-      - name: Check genesis
+        run: ./scripts/check.sh docs
+      - name: Check genesis.json
         if: always()
-        run: |
-          ./scripts/check.sh genesis
+        run: ./scripts/check.sh genesis
+      - name: Check schema.json
+        if: always()
+        run: ./scripts/check.sh schema
       - name: Wasm build check
         if: always()
-        env:
-          RUSTC_BOOTSTRAP: 1
         working-directory: wasm
-        run: mold --run cargo build --target wasm32-unknown-unknown --quiet
+        run: mold --run cargo +nightly-2022-08-15 build --target wasm32-unknown-unknown --quiet
 
-  # Coverage is both in PR and in push pipelines so that:
-  # 1. PR can get coverage report from bot.
-  # 2. Coverage bot can have results from `iroha2-dev` to report coverage changes.
-  tests_with_coverage:
-    runs-on: ubuntu-latest
+  with_coverage:
+    runs-on: [self-hosted, Linux]
     container:
-      image: 7272721/i2-ci:latest
+      image: 7272721/i2-ci:nightly
+    strategy:
+      matrix:
+        feature_flag: [all-features, no-default-features]
+    env:
+      # TODO Set NIGHTLY in the container #2606
+      NIGHTLY: nightly-2022-08-15
     steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-      - name: Find hash
-        id: hash
-        uses: theowenyoung/folder-hash@v2.0.1
-        with:
-          path: |
-            .
-      - name: Copy a file from s3
-        id: copy
-        uses: prewk/s3-cp-action@v2
-        continue-on-error: true
-        with:
-          aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          source: 's3://infra-prod-docs/hyperledger/iroha2/codecov/lcov-${{ steps.hash.outputs.hash }}.xml'
-          dest: 'lcov.xml'
-      - name: Check coverage file existence
-        id: check_files
-        uses: andstor/file-existence-action@v1
-        with:
-          files: "lcov.xml"
-        # TODO Remove these steps #2165 ??
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-          components: llvm-tools-preview
-      - uses: taiki-e/install-action@cargo-llvm-cov      
-      - uses: Swatinem/rust-cache@v1
-      - name: Run tests and generate lcov report
-        if: steps.check_files.outputs.files_exists == 'false'
-        run: mold --run cargo llvm-cov --all-features --workspace --lcov --output-path lcov.xml        
-      - name: Upload coverage to Codecov
+      - uses: actions/checkout@v3
+      # TODO Remove this step #2165
+      - name: Adjust toolchain
+        run: |
+          rustup component add llvm-tools-preview
+          rustup +$NIGHTLY component add llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - name: Run tests, with ${{ matrix.feature_flag }}
+        run: |
+          mold --run cargo llvm-cov clean --workspace
+          mold --run cargo +$NIGHTLY llvm-cov --doc --no-report --${{ matrix.feature_flag }} --workspace --no-fail-fast
+          mold --run cargo llvm-cov --no-report --${{ matrix.feature_flag }} --workspace --no-fail-fast
+      - name: Generate lcov report
+        if: matrix.feature_flag == 'all-features'
+        run: |
+          # generate report without tests
+          # https://github.com/taiki-e/cargo-llvm-cov#merge-coverages-generated-under-different-test-conditions
+          mold --run cargo +$NIGHTLY llvm-cov --doctests --no-run --${{ matrix.feature_flag }} --workspace --lcov --output-path lcov.info
+      - name: Upload coverage to codecov.io
+        if: matrix.feature_flag == 'all-features'
         uses: codecov/codecov-action@v3
         with:
-          file: lcov.xml
+          files: lcov.info
           fail_ci_if_error: true
-      - name: Copy a file to s3
-        uses: prewk/s3-cp-action@v2
+      - name: Upload codecov report artifact
+        uses: actions/upload-artifact@v3
         with:
-          aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          source: 'lcov.xml'
-          dest: 's3://infra-prod-docs/hyperledger/iroha2/codecov/lcov-${{ steps.hash.outputs.hash }}.xml'
+          name: lcov-${{ github.event.pull_request.head.sha }}.info
+          path: lcov.info
 
-
-  integration_tests:
+  integration:
     runs-on: ubuntu-latest
     container:
-      image: 7272721/i2-ci:latest
+      image: 7272721/i2-ci:nightly
+    timeout-minutes: 60
+    strategy:
+      matrix:
+        feature_flag: [all-features, no-default-features]
+    steps:
+      - uses: actions/checkout@v3
+      - uses: Swatinem/rust-cache@v2
+      - name: Run tests, with ${{ matrix.feature_flag }}
+        run: |
+          mold --run cargo test --test mod --${{ matrix.feature_flag }} -- \
+          integration:: --skip unstable_network
+  unstable:
+    runs-on: [self-hosted, Linux]
+    container:
+      image: 7272721/i2-ci:nightly
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v2
-      - uses: Swatinem/rust-cache@v1
+      - uses: actions/checkout@v3
+      - uses: Swatinem/rust-cache@v2
       - name: Run tests
-        if: always()
-        run: |
-          mold --run cargo test --test '*' --all-features -- \
-          integration:: \
-          --skip unstable_network
+        run: mold --run cargo test -p iroha_client --tests unstable_network --quiet

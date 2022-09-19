@@ -1,24 +1,30 @@
 //! This module contains data events
 
-use iroha_data_primitives::small::SmallVec;
+use iroha_data_model_derive::Filter;
+use iroha_primitives::small::SmallVec;
 
 use super::*;
-
-/// Trait for retrieving id from events
-pub trait IdTrait {
-    /// Type of id
-    type Id;
-
-    /// Get object id
-    fn id(&self) -> &Self::Id;
-}
 
 mod asset {
     //! This module contains `AssetEvent`, `AssetDefinitionEvent` and its impls
 
     use super::*;
 
-    #[derive(Clone, PartialEq, Eq, Debug, Decode, Encode, Deserialize, Serialize, IntoSchema)]
+    #[derive(
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Debug,
+        Hash,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoSchema,
+        Filter,
+    )]
     #[non_exhaustive]
     #[allow(missing_docs)]
     pub enum AssetEvent {
@@ -30,10 +36,10 @@ mod asset {
         MetadataRemoved(AssetId),
     }
 
-    impl IdTrait for AssetEvent {
-        type Id = AssetId;
+    impl HasOrigin for AssetEvent {
+        type Origin = Asset;
 
-        fn id(&self) -> &AssetId {
+        fn origin_id(&self) -> &<Asset as Identifiable>::Id {
             match self {
                 Self::Created(id)
                 | Self::Deleted(id)
@@ -45,7 +51,21 @@ mod asset {
         }
     }
 
-    #[derive(Clone, PartialEq, Eq, Debug, Decode, Encode, Deserialize, Serialize, IntoSchema)]
+    #[derive(
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Debug,
+        Hash,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoSchema,
+        Filter,
+    )]
     #[non_exhaustive]
     #[allow(missing_docs)]
     pub enum AssetDefinitionEvent {
@@ -59,10 +79,10 @@ mod asset {
     // AssetDefinitionEventFilter enum and its `impl Filter for
     // AssetDefinitionEventFilter`.
 
-    impl IdTrait for AssetDefinitionEvent {
-        type Id = AssetDefinitionId;
+    impl HasOrigin for AssetDefinitionEvent {
+        type Origin = AssetDefinition;
 
-        fn id(&self) -> &AssetDefinitionId {
+        fn origin_id(&self) -> &<AssetDefinition as Identifiable>::Id {
             match self {
                 Self::Created(id)
                 | Self::Deleted(id)
@@ -79,7 +99,21 @@ mod peer {
 
     use super::*;
 
-    #[derive(Clone, PartialEq, Eq, Debug, Decode, Encode, Deserialize, Serialize, IntoSchema)]
+    #[derive(
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Debug,
+        Hash,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoSchema,
+        Filter,
+    )]
     #[non_exhaustive]
     #[allow(missing_docs)]
     pub enum PeerEvent {
@@ -87,10 +121,10 @@ mod peer {
         Removed(PeerId),
     }
 
-    impl IdTrait for PeerEvent {
-        type Id = PeerId;
+    impl HasOrigin for PeerEvent {
+        type Origin = Peer;
 
-        fn id(&self) -> &PeerId {
+        fn origin_id(&self) -> &<Peer as Identifiable>::Id {
             match self {
                 Self::Added(id) | Self::Removed(id) => id,
             }
@@ -103,20 +137,133 @@ mod role {
 
     use super::*;
 
-    #[derive(Clone, PartialEq, Eq, Debug, Decode, Encode, Deserialize, Serialize, IntoSchema)]
+    #[derive(
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Debug,
+        Hash,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoSchema,
+        Filter,
+    )]
     #[non_exhaustive]
     #[allow(missing_docs)]
     pub enum RoleEvent {
         Created(RoleId),
         Deleted(RoleId),
+        /// [`PermissionToken`]s with particular [`Id`](crate::permission::token::Id) were
+        /// removed from the role.
+        PermissionRemoved(PermissionRemoved),
     }
 
-    impl IdTrait for RoleEvent {
-        type Id = RoleId;
+    /// Information about permissions removed from [`Role`]
+    #[derive(
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Debug,
+        Hash,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoSchema,
+    )]
+    pub struct PermissionRemoved {
+        /// Role id
+        pub role_id: RoleId,
+        /// [`PermissionTokenDefinition`] id. All [`PermissionToken`]s with this definition id were removed.
+        pub permission_definition_id: <PermissionTokenDefinition as Identifiable>::Id,
+    }
 
-        fn id(&self) -> &RoleId {
+    impl HasOrigin for RoleEvent {
+        type Origin = Role;
+
+        fn origin_id(&self) -> &<Role as Identifiable>::Id {
             match self {
-                Self::Created(id) | Self::Deleted(id) => id,
+                Self::Created(role_id)
+                | Self::Deleted(role_id)
+                | Self::PermissionRemoved(PermissionRemoved { role_id, .. }) => role_id,
+            }
+        }
+    }
+}
+
+mod permission {
+    //! This module contains [`PermissionTokenEvent`], [`PermissionValidatorEvent`] and their impls
+
+    use super::*;
+    use crate::permission::validator::{Id as ValidatorId, Validator};
+
+    #[derive(
+        Clone,
+        Hash,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Debug,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoSchema,
+        Filter,
+    )]
+    #[non_exhaustive]
+    #[allow(missing_docs)]
+    pub enum PermissionTokenEvent {
+        DefinitionCreated(PermissionTokenDefinition),
+        DefinitionDeleted(PermissionTokenDefinition),
+    }
+
+    impl HasOrigin for PermissionTokenEvent {
+        type Origin = PermissionTokenDefinition;
+
+        fn origin_id(&self) -> &<Self::Origin as Identifiable>::Id {
+            match self {
+                PermissionTokenEvent::DefinitionCreated(definition)
+                | PermissionTokenEvent::DefinitionDeleted(definition) => definition.id(),
+            }
+        }
+    }
+
+    #[derive(
+        Clone,
+        Hash,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Debug,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoSchema,
+        Filter,
+    )]
+    #[non_exhaustive]
+    #[allow(missing_docs)]
+    pub enum PermissionValidatorEvent {
+        Added(ValidatorId),
+        Removed(ValidatorId),
+    }
+
+    impl HasOrigin for PermissionValidatorEvent {
+        type Origin = Validator;
+
+        fn origin_id(&self) -> &<Self::Origin as Identifiable>::Id {
+            match self {
+                PermissionValidatorEvent::Added(id) | PermissionValidatorEvent::Removed(id) => id,
             }
         }
     }
@@ -128,7 +275,21 @@ mod account {
     use super::*;
 
     /// Account event
-    #[derive(Clone, PartialEq, Eq, Debug, Decode, Encode, Deserialize, Serialize, IntoSchema)]
+    #[derive(
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Debug,
+        Hash,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoSchema,
+        Filter,
+    )]
     #[non_exhaustive]
     #[allow(missing_docs)]
     pub enum AccountEvent {
@@ -139,22 +300,26 @@ mod account {
         AuthenticationRemoved(AccountId),
         PermissionAdded(AccountId),
         PermissionRemoved(AccountId),
+        RoleRevoked(AccountId),
+        RoleGranted(AccountId),
         MetadataInserted(AccountId),
         MetadataRemoved(AccountId),
     }
 
-    impl IdTrait for AccountEvent {
-        type Id = AccountId;
+    impl HasOrigin for AccountEvent {
+        type Origin = Account;
 
-        fn id(&self) -> &AccountId {
+        fn origin_id(&self) -> &<Account as Identifiable>::Id {
             match self {
-                Self::Asset(asset) => &asset.id().account_id,
+                Self::Asset(asset) => &asset.origin_id().account_id,
                 Self::Created(id)
                 | Self::Deleted(id)
                 | Self::AuthenticationAdded(id)
                 | Self::AuthenticationRemoved(id)
                 | Self::PermissionAdded(id)
                 | Self::PermissionRemoved(id)
+                | Self::RoleRevoked(id)
+                | Self::RoleGranted(id)
                 | Self::MetadataInserted(id)
                 | Self::MetadataRemoved(id) => id,
             }
@@ -168,7 +333,21 @@ mod domain {
     use super::*;
 
     /// Domain Event
-    #[derive(Clone, PartialEq, Eq, Debug, Decode, Encode, Deserialize, Serialize, IntoSchema)]
+    #[derive(
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Debug,
+        Hash,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoSchema,
+        Filter,
+    )]
     #[non_exhaustive]
     #[allow(missing_docs)]
     pub enum DomainEvent {
@@ -180,13 +359,13 @@ mod domain {
         MetadataRemoved(DomainId),
     }
 
-    impl IdTrait for DomainEvent {
-        type Id = DomainId;
+    impl HasOrigin for DomainEvent {
+        type Origin = Domain;
 
-        fn id(&self) -> &DomainId {
+        fn origin_id(&self) -> &<Domain as Identifiable>::Id {
             match self {
-                Self::Account(account) => &account.id().domain_id,
-                Self::AssetDefinition(asset_definition) => &asset_definition.id().domain_id,
+                Self::Account(account) => &account.origin_id().domain_id,
+                Self::AssetDefinition(asset_definition) => &asset_definition.origin_id().domain_id,
                 Self::Created(id)
                 | Self::Deleted(id)
                 | Self::MetadataInserted(id)
@@ -202,7 +381,21 @@ mod trigger {
     use super::*;
 
     /// Trigger Event
-    #[derive(Clone, PartialEq, Eq, Debug, Decode, Encode, Deserialize, Serialize, IntoSchema)]
+    #[derive(
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Debug,
+        Hash,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoSchema,
+        Filter,
+    )]
     #[non_exhaustive]
     #[allow(missing_docs)]
     pub enum TriggerEvent {
@@ -212,10 +405,10 @@ mod trigger {
         Shortened(TriggerId),
     }
 
-    impl IdTrait for TriggerEvent {
-        type Id = TriggerId;
+    impl HasOrigin for TriggerEvent {
+        type Origin = Trigger<FilterBox>;
 
-        fn id(&self) -> &TriggerId {
+        fn origin_id(&self) -> &<Trigger<FilterBox> as Identifiable>::Id {
             match self {
                 Self::Created(id)
                 | Self::Deleted(id)
@@ -226,11 +419,31 @@ mod trigger {
     }
 }
 
+/// Trait for events originating from [`HasOrigin::Origin`].
+pub trait HasOrigin {
+    /// Type of the origin.
+    type Origin: Identifiable;
+    /// Identification of the origin.
+    fn origin_id(&self) -> &<Self::Origin as Identifiable>::Id;
+}
+
 /// World event
 ///
 /// Does not participate in `Event`, but useful for events warranties when modifying `wsv`
 #[derive(
-    Clone, PartialEq, Eq, Debug, Decode, Encode, Deserialize, Serialize, FromVariant, IntoSchema,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Debug,
+    Hash,
+    Decode,
+    Encode,
+    Deserialize,
+    Serialize,
+    FromVariant,
+    IntoSchema,
 )]
 #[allow(missing_docs)]
 pub enum WorldEvent {
@@ -238,11 +451,25 @@ pub enum WorldEvent {
     Domain(domain::DomainEvent),
     Role(role::RoleEvent),
     Trigger(trigger::TriggerEvent),
+    PermissionToken(permission::PermissionTokenEvent),
+    PermissionValidator(permission::PermissionValidatorEvent),
 }
 
 /// Event
 #[derive(
-    Clone, PartialEq, Eq, Debug, Decode, Encode, Deserialize, Serialize, FromVariant, IntoSchema,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Debug,
+    Hash,
+    Decode,
+    Encode,
+    Deserialize,
+    Serialize,
+    FromVariant,
+    IntoSchema,
 )]
 pub enum Event {
     /// Peer event
@@ -259,6 +486,27 @@ pub enum Event {
     Trigger(trigger::TriggerEvent),
     /// Role event
     Role(role::RoleEvent),
+    /// Permission token event
+    PermissionToken(permission::PermissionTokenEvent),
+    /// Permission validator event
+    PermissionValidator(permission::PermissionValidatorEvent),
+}
+
+impl Event {
+    /// Return the domain id of [`Event`]
+    pub fn domain_id(&self) -> Option<&<Domain as Identifiable>::Id> {
+        match self {
+            Self::Domain(event) => Some(event.origin_id()),
+            Self::Account(event) => Some(&event.origin_id().domain_id),
+            Self::AssetDefinition(event) => Some(&event.origin_id().domain_id),
+            Self::Asset(event) => Some(&event.origin_id().definition_id.domain_id),
+            Self::Trigger(event) => event.origin_id().domain_id.as_ref(),
+            Self::Peer(_)
+            | Self::Role(_)
+            | Self::PermissionToken(_)
+            | Self::PermissionValidator(_) => None,
+        }
+    }
 }
 
 impl From<WorldEvent> for SmallVec<[Event; 3]> {
@@ -290,6 +538,12 @@ impl From<WorldEvent> for SmallVec<[Event; 3]> {
             WorldEvent::Trigger(trigger_event) => {
                 events.push(DataEvent::Trigger(trigger_event));
             }
+            WorldEvent::PermissionToken(token_event) => {
+                events.push(DataEvent::PermissionToken(token_event));
+            }
+            WorldEvent::PermissionValidator(validator_event) => {
+                events.push(DataEvent::PermissionValidator(validator_event));
+            }
         }
 
         events
@@ -298,12 +552,16 @@ impl From<WorldEvent> for SmallVec<[Event; 3]> {
 
 pub mod prelude {
     pub use super::{
-        account::AccountEvent,
-        asset::{AssetDefinitionEvent, AssetEvent},
-        domain::DomainEvent,
-        peer::PeerEvent,
-        role::RoleEvent,
-        trigger::TriggerEvent,
-        Event as DataEvent, IdTrait as DataEventsIdTrait, WorldEvent,
+        account::{AccountEvent, AccountEventFilter, AccountFilter},
+        asset::{
+            AssetDefinitionEvent, AssetDefinitionEventFilter, AssetDefinitionFilter, AssetEvent,
+            AssetEventFilter, AssetFilter,
+        },
+        domain::{DomainEvent, DomainEventFilter, DomainFilter},
+        peer::{PeerEvent, PeerEventFilter, PeerFilter},
+        permission::{PermissionTokenEvent, PermissionValidatorEvent},
+        role::{PermissionRemoved, RoleEvent, RoleEventFilter, RoleFilter},
+        trigger::{TriggerEvent, TriggerEventFilter, TriggerFilter},
+        Event as DataEvent, HasOrigin, WorldEvent,
     };
 }

@@ -1,14 +1,18 @@
 //! Query functionality. The common error type is also defined here,
 //! alongside functions for converting them into HTTP responses.
-
+#![allow(
+    clippy::arithmetic,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc
+)]
 use eyre::Result;
-use iroha_data_model::prelude::*;
+use iroha_data_model::{permission::validator::DenialReason, prelude::*};
 use iroha_schema::IntoSchema;
 use parity_scale_codec::{Decode, Encode};
 use thiserror::Error;
 
 use super::FindError;
-use crate::{prelude::ValidQuery, WorldStateView, WorldTrait};
+use crate::{prelude::ValidQuery, WorldStateView};
 
 /// Query Request statefully validated on the Iroha node side.
 #[derive(Debug, Decode, Encode)]
@@ -22,7 +26,7 @@ impl ValidQueryRequest {
     /// # Errors
     /// Forwards `self.query.execute` error.
     #[inline]
-    pub fn execute<W: WorldTrait>(&self, wsv: &WorldStateView<W>) -> Result<Value, Error> {
+    pub fn execute(&self, wsv: &WorldStateView) -> Result<Value, Error> {
         self.query.execute(wsv)
     }
 
@@ -33,39 +37,18 @@ impl ValidQueryRequest {
     }
 }
 
-/// Unsupported version error
-#[derive(Clone, Copy, Eq, PartialEq, Debug, Decode, Encode, IntoSchema, Error)]
-#[error(
-    "Unsupported version. Expected: {}, got: {version}",
-    Self::expected_version()
-)]
-pub struct UnsupportedVersionError {
-    /// Version that we got
-    pub version: u8,
-}
-
-impl UnsupportedVersionError {
-    /// Expected version
-    pub const fn expected_version() -> u8 {
-        1
-    }
-}
-
 /// Query errors.
-#[derive(Error, Debug, Clone, Decode, Encode, IntoSchema)]
+#[derive(Error, Debug, Decode, Encode, IntoSchema)]
 pub enum Error {
-    /// Query can not be decoded.
-    #[error("Query can not be decoded")]
+    /// Query cannot be decoded.
+    #[error("Query cannot be decoded")]
     Decode(#[from] Box<iroha_version::error::Error>),
-    /// Query has unsupported version.
-    #[error("Query has unsupported version")]
-    Version(#[from] UnsupportedVersionError),
     /// Query has wrong signature.
     #[error("Query has the wrong signature: {0}")]
     Signature(String),
     /// Query is not allowed.
     #[error("Query is not allowed: {0}")]
-    Permission(String),
+    Permission(DenialReason),
     /// Query has wrong expression.
     #[error("Query has a malformed expression: {0}")]
     Evaluate(String),
@@ -75,16 +58,19 @@ pub enum Error {
     /// Query found wrong type of asset.
     #[error("Query found wrong type of asset: {0}")]
     Conversion(String),
+    /// Query without account.
+    #[error("Unauthorized query: account not provided")]
+    Unauthorized,
 }
 
 impl From<FindError> for Error {
     fn from(err: FindError) -> Self {
-        Error::Find(Box::new(err))
+        Box::new(err).into()
     }
 }
 
-impl<W: WorldTrait> ValidQuery<W> for QueryBox {
-    fn execute(&self, wsv: &WorldStateView<W>) -> Result<Self::Output, Error> {
+impl ValidQuery for QueryBox {
+    fn execute(&self, wsv: &WorldStateView) -> Result<Self::Output, Error> {
         use QueryBox::*;
 
         match self {
@@ -110,14 +96,18 @@ impl<W: WorldTrait> ValidQuery<W> for QueryBox {
             FindAssetKeyValueByIdAndKey(query) => query.execute_into_value(wsv),
             FindAccountKeyValueByIdAndKey(query) => query.execute_into_value(wsv),
             FindAllBlocks(query) => query.execute_into_value(wsv),
+            FindAllBlockHeaders(query) => query.execute_into_value(wsv),
+            FindBlockHeaderByHash(query) => query.execute_into_value(wsv),
             FindAllTransactions(query) => query.execute_into_value(wsv),
             FindTransactionsByAccountId(query) => query.execute_into_value(wsv),
             FindTransactionByHash(query) => query.execute_into_value(wsv),
             FindPermissionTokensByAccountId(query) => query.execute_into_value(wsv),
+            FindAllPermissionTokenDefinitions(query) => query.execute_into_value(wsv),
             FindAssetDefinitionKeyValueByIdAndKey(query) => query.execute_into_value(wsv),
             FindAllActiveTriggerIds(query) => query.execute_into_value(wsv),
             FindTriggerById(query) => query.execute_into_value(wsv),
             FindTriggerKeyValueByIdAndKey(query) => query.execute_into_value(wsv),
+            FindTriggersByDomainId(query) => query.execute_into_value(wsv),
             FindAllRoles(query) => query.execute_into_value(wsv),
             FindAllRoleIds(query) => query.execute_into_value(wsv),
             FindRolesByAccountId(query) => query.execute_into_value(wsv),
@@ -210,6 +200,77 @@ mod tests {
         Ok(World::with([domain], PeersIds::new()))
     }
 
+    async fn wsv_with_test_blocks_and_transactions(
+        blocks: u64,
+        valid_tx_per_block: usize,
+        invalid_tx_per_block: usize,
+    ) -> Result<Arc<WorldStateView>> {
+        let wsv = Arc::new(WorldStateView::new(world_with_test_domains()));
+
+        let limits = TransactionLimits {
+            max_instruction_number: 1,
+            max_wasm_size_bytes: 0,
+        };
+        let huge_limits = TransactionLimits {
+            max_instruction_number: 1000,
+            max_wasm_size_bytes: 0,
+        };
+
+        let valid_tx = {
+            let tx = Transaction::new(ALICE_ID.clone(), Vec::<Instruction>::new().into(), 4000)
+                .sign(ALICE_KEYS.clone())?;
+            crate::VersionedAcceptedTransaction::from_transaction(tx, &limits)?
+        };
+        let invalid_tx = {
+            let isi = Instruction::Fail(FailBox::new("fail"));
+            let tx = Transaction::new(ALICE_ID.clone(), vec![isi.clone(), isi].into(), 4000)
+                .sign(ALICE_KEYS.clone())?;
+            crate::VersionedAcceptedTransaction::from_transaction(tx, &huge_limits)?
+        };
+
+        let mut transactions = vec![valid_tx.clone(); valid_tx_per_block];
+        transactions.append(&mut vec![invalid_tx.clone(); invalid_tx_per_block]);
+
+        let first_block = PendingBlock::new(transactions.clone(), vec![])
+            .chain_first()
+            .validate(&TransactionValidator::new(
+                limits,
+                Arc::new(AllowAll::new()),
+                Arc::new(AllowAll::new()),
+                Arc::clone(&wsv),
+            ))
+            .sign(ALICE_KEYS.clone())
+            .expect("Failed to sign blocks.")
+            .commit();
+
+        let mut curr_hash = first_block.hash();
+
+        wsv.apply(first_block).await?;
+
+        for height in 1u64..blocks {
+            let block = PendingBlock::new(transactions.clone(), vec![])
+                .chain(
+                    height,
+                    curr_hash,
+                    crate::sumeragi::view_change::ProofChain::empty(),
+                    vec![],
+                )
+                .validate(&TransactionValidator::new(
+                    limits,
+                    Arc::new(AllowAll::new()),
+                    Arc::new(AllowAll::new()),
+                    Arc::clone(&wsv),
+                ))
+                .sign(ALICE_KEYS.clone())
+                .expect("Failed to sign blocks.")
+                .commit();
+            curr_hash = block.hash();
+            wsv.apply(block).await?;
+        }
+
+        Ok(wsv)
+    }
+
     #[test]
     fn asset_store() -> Result<()> {
         let wsv = WorldStateView::new(world_with_test_asset_with_metadata());
@@ -240,46 +301,9 @@ mod tests {
 
     #[tokio::test]
     async fn find_all_blocks() -> Result<()> {
-        let wsv = Arc::new(WorldStateView::new(world_with_test_domains()));
+        let num_blocks = 100;
 
-        let validator = TransactionValidator::new(
-            TransactionLimits {
-                max_instruction_number: 0,
-                max_wasm_size_bytes: 0,
-            },
-            AllowAll::new(),
-            AllowAll::new(),
-            Arc::clone(&wsv),
-        );
-
-        let first_block = PendingBlock::new(vec![], vec![])
-            .chain_first()
-            .validate(&validator)
-            .sign(ALICE_KEYS.clone())
-            .expect("Failed to sign blocks.")
-            .commit();
-
-        let mut curr_hash = first_block.hash();
-
-        wsv.apply(first_block).await?;
-
-        let num_blocks: u64 = 100;
-
-        for height in 1u64..num_blocks {
-            let block = PendingBlock::new(vec![], vec![])
-                .chain(
-                    height,
-                    curr_hash,
-                    crate::sumeragi::view_change::ProofChain::empty(),
-                    vec![],
-                )
-                .validate(&validator)
-                .sign(ALICE_KEYS.clone())
-                .expect("Failed to sign blocks.")
-                .commit();
-            curr_hash = block.hash();
-            wsv.apply(block).await?;
-        }
+        let wsv = wsv_with_test_blocks_and_transactions(num_blocks, 1, 1).await?;
 
         let blocks = FindAllBlocks::new().execute(&wsv)?;
 
@@ -290,80 +314,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn find_all_block_headers() -> Result<()> {
+        let num_blocks = 100;
+
+        let wsv = wsv_with_test_blocks_and_transactions(num_blocks, 1, 1).await?;
+
+        let block_headers = FindAllBlockHeaders::new().execute(&wsv)?;
+
+        assert_eq!(block_headers.len() as u64, num_blocks);
+        assert!(block_headers.windows(2).all(|wnd| wnd[0] >= wnd[1]));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn find_block_header_by_hash() -> Result<()> {
+        let wsv = wsv_with_test_blocks_and_transactions(1, 1, 1).await?;
+
+        let block = wsv.blocks().last().expect("WSV is empty");
+
+        assert_eq!(
+            FindBlockHeaderByHash::new(*block.hash()).execute(&wsv)?,
+            block.clone().into_value().header
+        );
+
+        assert!(FindBlockHeaderByHash::new(Hash::zeroed())
+            .execute(&wsv)
+            .is_err());
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn find_all_transactions() -> Result<()> {
-        let wsv = Arc::new(WorldStateView::new(world_with_test_domains()));
-        let limits = TransactionLimits {
-            max_instruction_number: 1,
-            max_wasm_size_bytes: 0,
-        };
-        let huge_limits = TransactionLimits {
-            max_instruction_number: 1000,
-            max_wasm_size_bytes: 0,
-        };
-        let valid_tx = {
-            let tx = Transaction::new(ALICE_ID.clone(), Vec::<Instruction>::new().into(), 4000)
-                .sign(ALICE_KEYS.clone())?;
-            crate::VersionedAcceptedTransaction::from_transaction(tx, &limits)?
-        };
+        let num_blocks = 100;
 
-        let invalid_tx = {
-            let isi = Instruction::Fail(FailBox::new("fail"));
-            let tx = Transaction::new(ALICE_ID.clone(), vec![isi.clone(), isi].into(), 4000)
-                .sign(ALICE_KEYS.clone())?;
-            crate::VersionedAcceptedTransaction::from_transaction(tx, &huge_limits)?
-        };
-
-        let first_block = PendingBlock::new(vec![], vec![])
-            .chain_first()
-            .validate(&TransactionValidator::new(
-                limits,
-                AllowAll::new(),
-                AllowAll::new(),
-                Arc::clone(&wsv),
-            ))
-            .sign(ALICE_KEYS.clone())
-            .expect("Failed to sign blocks.")
-            .commit();
-
-        let mut curr_hash = first_block.hash();
-
-        wsv.apply(first_block).await?;
-
-        let num_blocks: u64 = 100;
-
-        for height in 1u64..=num_blocks {
-            let block = PendingBlock::new(vec![valid_tx.clone(), invalid_tx.clone()], vec![])
-                .chain(
-                    height,
-                    curr_hash,
-                    crate::sumeragi::view_change::ProofChain::empty(),
-                    vec![],
-                )
-                .validate(&TransactionValidator::new(
-                    limits,
-                    AllowAll::new(),
-                    AllowAll::new(),
-                    Arc::clone(&wsv),
-                ))
-                .sign(ALICE_KEYS.clone())
-                .expect("Failed to sign blocks.")
-                .commit();
-            curr_hash = block.hash();
-            wsv.apply(block).await?;
-        }
+        let wsv = wsv_with_test_blocks_and_transactions(num_blocks, 1, 1).await?;
 
         let txs = FindAllTransactions::new().execute(&wsv)?;
 
         assert_eq!(txs.len() as u64, num_blocks * 2);
         assert_eq!(
             txs.iter()
-                .filter(|txn| matches!(txn, TransactionValue::RejectedTransaction(_)))
+                .filter(|txn| matches!(txn.tx_value, TransactionValue::RejectedTransaction(_)))
                 .count() as u64,
             num_blocks
         );
         assert_eq!(
             txs.iter()
-                .filter(|txn| matches!(txn, TransactionValue::Transaction(_)))
+                .filter(|txn| matches!(txn.tx_value, TransactionValue::Transaction(_)))
                 .count() as u64,
             num_blocks
         );
@@ -393,8 +392,8 @@ mod tests {
             .chain_first()
             .validate(&TransactionValidator::new(
                 tx_limits,
-                AllowAll::new(),
-                AllowAll::new(),
+                Arc::new(AllowAll::new()),
+                Arc::new(AllowAll::new()),
                 Arc::clone(&wsv),
             ))
             .sign(ALICE_KEYS.clone())

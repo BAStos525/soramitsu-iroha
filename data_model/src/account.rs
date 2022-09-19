@@ -1,32 +1,43 @@
 //! Structures, traits and impls related to `Account`s.
+#![allow(clippy::std_instead_of_alloc)]
 
 #[cfg(not(feature = "std"))]
 use alloc::{
+    alloc::alloc,
+    boxed::Box,
     collections::{btree_map, btree_set},
     format,
     string::String,
     vec::Vec,
 };
-use core::{fmt, str::FromStr};
+use core::str::FromStr;
 #[cfg(feature = "std")]
-use std::collections::{btree_map, btree_set};
+use std::{
+    alloc::alloc,
+    collections::{btree_map, btree_set},
+};
 
+use derive_more::Display;
 use getset::{Getters, MutGetters, Setters};
-#[cfg(feature = "ffi")]
-use iroha_ffi::ffi_bindgen;
+use iroha_data_model_derive::IdOrdEqHash;
+use iroha_ffi::{IntoFfi, TryFromReprC};
 use iroha_schema::IntoSchema;
 use parity_scale_codec::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "mutable_api")]
+use crate::Registrable;
 use crate::{
-    asset::{prelude::AssetId, AssetsMap},
+    asset::{
+        prelude::{Asset, AssetId},
+        AssetsMap,
+    },
     domain::prelude::*,
     expression::{ContainsAny, ContextValue, EvaluatesTo},
+    ffi::ffi_item,
     metadata::Metadata,
-    permissions::{PermissionToken, Permissions},
-    prelude::Asset,
     role::{prelude::RoleId, RoleIds},
-    Identifiable, Name, ParseError, PublicKey,
+    HasMetadata, Identifiable, Name, ParseError, PublicKey, Registered,
 };
 
 /// `AccountsMap` provides an API to work with collection of key (`Id`) - value
@@ -74,7 +85,20 @@ impl From<GenesisAccount> for Account {
 
 /// Condition which checks if the account has the right signatures.
 #[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, Deserialize, Serialize, IntoSchema,
+    Debug,
+    Display,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    Deserialize,
+    Serialize,
+    IntoFfi,
+    TryFromReprC,
+    IntoSchema,
 )]
 pub struct SignatureCheckCondition(pub EvaluatesTo<bool>);
 
@@ -87,6 +111,7 @@ impl SignatureCheckCondition {
     }
 }
 
+// TODO: derive
 impl From<EvaluatesTo<bool>> for SignatureCheckCondition {
     #[inline]
     fn from(condition: EvaluatesTo<bool>) -> Self {
@@ -94,43 +119,77 @@ impl From<EvaluatesTo<bool>> for SignatureCheckCondition {
     }
 }
 
-/// Default signature condition check for accounts. Returns true if any of the signatories have signed a transaction.
+/// Default signature condition check for accounts.
+/// Returns true if any of the signatories have signed the transaction.
 impl Default for SignatureCheckCondition {
     #[inline]
     fn default() -> Self {
         Self(
             ContainsAny::new(
-                ContextValue::new(TRANSACTION_SIGNATORIES_VALUE),
-                ContextValue::new(ACCOUNT_SIGNATORIES_VALUE),
+                EvaluatesTo::new_unchecked(ContextValue::new(TRANSACTION_SIGNATORIES_VALUE).into()),
+                EvaluatesTo::new_unchecked(ContextValue::new(ACCOUNT_SIGNATORIES_VALUE).into()),
             )
             .into(),
         )
     }
 }
 
-/// Builder which should be submitted in a transaction to create a new [`Account`]
-#[allow(clippy::multiple_inherent_impl)]
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, Deserialize, Serialize, IntoSchema)]
-pub struct NewAccount {
-    id: Id,
-    signatories: Signatories,
-    metadata: Metadata,
-}
-
-impl PartialOrd for NewAccount {
-    #[inline]
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        self.id.partial_cmp(&other.id)
+ffi_item! {
+    /// Builder which should be submitted in a transaction to create a new [`Account`]
+    #[derive(
+        Debug,
+        Display,
+        Clone,
+        IdOrdEqHash,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoFfi,
+        TryFromReprC,
+        IntoSchema,
+    )]
+    #[id(type = "<Account as Identifiable>::Id")]
+    #[display(fmt = "[{id}]")]
+    pub struct NewAccount {
+        /// Identification
+        id: <Account as Identifiable>::Id,
+        /// Signatories, i.e. signatures attached to this message.
+        signatories: Signatories,
+        /// Metadata that should be submitted with the builder
+        metadata: Metadata,
     }
 }
 
-impl Ord for NewAccount {
+#[cfg(feature = "mutable_api")]
+impl Registrable for NewAccount {
+    type Target = Account;
+
+    #[must_use]
     #[inline]
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.id.cmp(&other.id)
+    fn build(self) -> Self::Target {
+        Self::Target {
+            id: self.id,
+            signatories: self.signatories,
+            assets: AssetsMap::default(),
+            signature_check_condition: SignatureCheckCondition::default(),
+            metadata: self.metadata,
+            roles: RoleIds::default(),
+        }
     }
 }
 
+impl HasMetadata for NewAccount {
+    fn metadata(&self) -> &Metadata {
+        &self.metadata
+    }
+}
+
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    iroha_ffi::ffi_export
+)]
+#[cfg_attr(feature = "ffi_import", iroha_ffi::ffi_import)]
 impl NewAccount {
     fn new(
         id: <Account as Identifiable>::Id,
@@ -143,24 +202,11 @@ impl NewAccount {
         }
     }
 
-    /// Construct [`Account`]
-    #[must_use]
-    #[cfg(feature = "mutable_api")]
-    pub fn build(self) -> Account {
-        Account {
-            id: self.id,
-            signatories: self.signatories,
-            assets: AssetsMap::default(),
-            permission_tokens: Permissions::default(),
-            signature_check_condition: SignatureCheckCondition::default(),
-            metadata: self.metadata,
-            roles: RoleIds::default(),
-        }
+    /// Identification
+    pub(crate) fn id(&self) -> &<Account as Identifiable>::Id {
+        &self.id
     }
-}
 
-#[cfg_attr(feature = "ffi", ffi_bindgen)]
-impl NewAccount {
     /// Add [`Metadata`] to the account replacing previously defined
     #[must_use]
     pub fn with_metadata(mut self, metadata: Metadata) -> Self {
@@ -169,75 +215,69 @@ impl NewAccount {
     }
 }
 
-/// Account entity is an authority which is used to execute `Iroha Special Instructions`.
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Getters,
-    MutGetters,
-    Setters,
-    Decode,
-    Encode,
-    Deserialize,
-    Serialize,
-    IntoSchema,
+ffi_item! {
+    /// Account entity is an authority which is used to execute `Iroha Special Instructions`.
+    #[derive(
+        Debug,
+        Display,
+        Clone,
+        IdOrdEqHash,
+        Getters,
+        MutGetters,
+        Setters,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoFfi,
+        TryFromReprC,
+        IntoSchema,
+    )]
+    #[allow(clippy::multiple_inherent_impl)]
+    #[display(fmt = "({id})")] // TODO: Add more?
+    #[id(type = "Id")]
+    pub struct Account {
+        /// An Identification of the [`Account`].
+        id: <Self as Identifiable>::Id,
+        /// Assets in this [`Account`].
+        assets: AssetsMap,
+        /// [`Account`]'s signatories.
+        signatories: Signatories,
+        /// Condition which checks if the account has the right signatures.
+        #[getset(get = "pub")]
+        #[cfg_attr(feature = "mutable_api", getset(set = "pub"))]
+        signature_check_condition: SignatureCheckCondition,
+        /// Metadata of this account as a key-value store.
+        #[cfg_attr(feature = "mutable_api", getset(get_mut = "pub"))]
+        metadata: Metadata,
+        /// Roles of this account, they are tags for sets of permissions stored in `World`.
+        roles: RoleIds,
+    }
+}
+
+impl HasMetadata for Account {
+    fn metadata(&self) -> &Metadata {
+        &self.metadata
+    }
+}
+
+impl Registered for Account {
+    type With = NewAccount;
+}
+
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    iroha_ffi::ffi_export
 )]
-#[getset(get = "pub")]
-#[allow(clippy::multiple_inherent_impl)]
-#[cfg_attr(feature = "ffi", ffi_bindgen)]
-pub struct Account {
-    /// An Identification of the [`Account`].
-    id: <Self as Identifiable>::Id,
-    /// Asset's in this [`Account`].
-    #[getset(skip)]
-    assets: AssetsMap,
-    /// [`Account`]'s signatories.
-    #[getset(skip)]
-    signatories: Signatories,
-    /// Permissions tokens of this account
-    #[getset(skip)]
-    permission_tokens: Permissions,
-    /// Condition which checks if the account has the right signatures.
-    #[cfg_attr(feature = "mutable_api", getset(set = "pub"))]
-    signature_check_condition: SignatureCheckCondition,
-    /// Metadata of this account as a key-value store.
-    #[cfg_attr(feature = "mutable_api", getset(get_mut = "pub"))]
-    metadata: Metadata,
-    /// Roles of this account, they are tags for sets of permissions stored in `World`.
-    #[getset(skip)]
-    roles: RoleIds,
-}
-
-impl Identifiable for Account {
-    type Id = Id;
-    type RegisteredWith = NewAccount;
-}
-
-impl PartialOrd for Account {
-    #[inline]
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        self.id().partial_cmp(&other.id)
-    }
-}
-
-impl Ord for Account {
-    #[inline]
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.id().cmp(&other.id)
-    }
-}
-
-#[cfg_attr(feature = "ffi", ffi_bindgen)]
+#[cfg_attr(feature = "ffi_import", iroha_ffi::ffi_import)]
 impl Account {
     /// Construct builder for [`Account`] identifiable by [`Id`] containing the given signatories.
     #[must_use]
     pub fn new(
         id: <Self as Identifiable>::Id,
         signatories: impl IntoIterator<Item = PublicKey>,
-    ) -> <Self as Identifiable>::RegisteredWith {
-        <Self as Identifiable>::RegisteredWith::new(id, signatories)
+    ) -> <Self as Registered>::With {
+        <Self as Registered>::With::new(id, signatories)
     }
 
     /// Return `true` if the `Account` contains signatory
@@ -262,18 +302,6 @@ impl Account {
     #[inline]
     pub fn signatories(&self) -> impl ExactSizeIterator<Item = &PublicKey> {
         self.signatories.iter()
-    }
-
-    /// Return `true` if `Account` contains permission token
-    #[inline]
-    pub fn contains_permission(&self, token: &PermissionToken) -> bool {
-        self.permission_tokens.contains(token)
-    }
-
-    /// Get an iterator over [`permissions`](PermissionToken) of the `Account`
-    #[inline]
-    pub fn permissions(&self) -> impl ExactSizeIterator<Item = &PermissionToken> {
-        self.permission_tokens.iter()
     }
 
     /// Return `true` if `Account` contains role
@@ -324,21 +352,6 @@ impl Account {
         self.assets.remove(asset_id)
     }
 
-    /// Add [`permission`](PermissionToken) into the [`Account`].
-    ///
-    /// If `Account` did not have this permission present, `true` is returned.
-    /// If `Account` did have this permission present, `false` is returned.
-    #[inline]
-    pub fn add_permission(&mut self, token: PermissionToken) -> bool {
-        self.permission_tokens.insert(token)
-    }
-
-    /// Remove a permission from the `Account` and return whether the permission was present in the `Account`
-    #[inline]
-    pub fn remove_permission(&mut self, token: &PermissionToken) -> bool {
-        self.permission_tokens.remove(token)
-    }
-
     /// Add [`Role`](crate::role::Role) into the [`Account`].
     ///
     /// If `Account` did not have this role present, `true` is returned.
@@ -364,17 +377,18 @@ impl FromIterator<Account> for crate::Value {
     }
 }
 
-/// Identification of an Account. Consists of Account's name and Domain's name.
+/// Identification of an [`Account`]. Consists of Account's name and Domain's name.
 ///
-/// # Example
+/// # Examples
 ///
-/// ```
+/// ```rust
 /// use iroha_data_model::account::Id;
 ///
 /// let id = "user@company".parse::<Id>().expect("Valid");
 /// ```
 #[derive(
     Debug,
+    Display,
     Clone,
     PartialEq,
     Eq,
@@ -385,8 +399,11 @@ impl FromIterator<Account> for crate::Value {
     Encode,
     Deserialize,
     Serialize,
+    IntoFfi,
+    TryFromReprC,
     IntoSchema,
 )]
+#[display(fmt = "{name}@{domain_id}")]
 pub struct Id {
     /// [`Account`]'s name.
     pub name: Name,
@@ -395,18 +412,8 @@ pub struct Id {
 }
 
 impl Id {
-    pub(crate) const fn empty() -> Self {
-        Self {
-            name: Name::empty(),
-            domain_id: DomainId::empty(),
-        }
-    }
-
     /// Construct [`Id`] from an account `name` and a `domain_name` if
     /// these names are valid.
-    ///
-    /// # Errors
-    /// Fails if any sub-construction fails
     #[inline]
     pub const fn new(name: Name, domain_id: <Domain as Identifiable>::Id) -> Self {
         Self { name, domain_id }
@@ -430,7 +437,9 @@ impl FromStr for Id {
 
     fn from_str(string: &str) -> Result<Self, Self::Err> {
         if string.is_empty() {
-            return Ok(Self::empty());
+            return Err(ParseError {
+                reason: "`AccountId` cannot be empty",
+            });
         }
 
         let vector: Vec<&str> = string.split('@').collect();
@@ -444,12 +453,6 @@ impl FromStr for Id {
             name: Name::from_str(vector[0])?,
             domain_id: DomainId::from_str(vector[1])?,
         })
-    }
-}
-
-impl fmt::Display for Id {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}@{}", self.name, self.domain_id)
     }
 }
 

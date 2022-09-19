@@ -4,13 +4,13 @@ use std::{str::FromStr as _, thread};
 
 use iroha_client::client::transaction;
 use iroha_data_model::prelude::*;
-use test_network::{Peer as TestPeer, *};
+use test_network::*;
 
 use super::Configuration;
 
 #[test]
 fn client_has_rejected_and_acepted_txs_should_return_tx_history() {
-    let (_rt, _peer, iroha_client) = <TestPeer>::start_test_with_runtime();
+    let (_rt, _peer, iroha_client) = <PeerBuilder>::new().start_with_runtime();
     wait_for_genesis_committed(&vec![iroha_client.clone()], 0);
 
     let pipeline_time = Configuration::pipeline_time();
@@ -58,10 +58,7 @@ fn client_has_rejected_and_acepted_txs_should_return_tx_history() {
     let transactions = iroha_client
         .request_with_pagination(
             transaction::by_account_id(account_id.clone()),
-            Pagination {
-                start: Some(1),
-                limit: Some(50),
-            },
+            Pagination::new(Some(1), Some(50)),
         )
         .expect("Failed to get transaction history")
         .only_output();

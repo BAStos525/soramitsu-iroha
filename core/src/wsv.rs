@@ -1,30 +1,36 @@
 //! This module provides the [`WorldStateView`] - in-memory representations of the current blockchain
 //! state.
+#![allow(
+    clippy::new_without_default,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc,
+    clippy::arithmetic
+)]
 
-use std::{
-    convert::Infallible,
-    fmt::Debug,
-    ops::{Deref, DerefMut},
-    sync::Arc,
-    time::Duration,
-};
+use std::{convert::Infallible, fmt::Debug, sync::Arc, time::Duration};
 
-use config::Configuration;
 use dashmap::{
     mapref::one::{Ref as DashMapRef, RefMut as DashMapRefMut},
     DashSet,
 };
 use eyre::Result;
+use getset::Getters;
+use iroha_config::wsv::Configuration;
 use iroha_crypto::HashOf;
-use iroha_data_model::{prelude::*, small::SmallVec};
+use iroha_data_model::prelude::*;
 use iroha_logger::prelude::*;
+use iroha_primitives::small::SmallVec;
 use iroha_telemetry::metrics::Metrics;
-use tokio::task;
+use tokio::{sync::broadcast, task};
 
 use crate::{
     block::Chain,
     prelude::*,
-    smartcontracts::{isi::Error, wasm, Execute, FindError},
+    send_event,
+    smartcontracts::{
+        isi::{query::Error as QueryError, Error},
+        wasm, Execute, FindError,
+    },
     DomainsMap, EventsSender, PeersIds,
 };
 
@@ -33,75 +39,81 @@ pub type NewBlockNotificationSender = tokio::sync::watch::Sender<()>;
 /// Receiver type of the new block notification channel
 pub type NewBlockNotificationReceiver = tokio::sync::watch::Receiver<()>;
 
-/// World trait for mocking
-pub trait WorldTrait:
-    Deref<Target = World> + DerefMut + Send + Sync + 'static + Debug + Default + Sized + Clone
-{
-    /// Creates a [`World`] with these [`Domain`]s and trusted [`PeerId`]s.
-    fn with(
-        domains: impl IntoIterator<Item = Domain>,
-        trusted_peers_ids: impl IntoIterator<Item = PeerId>,
-    ) -> Self;
-}
-
 /// The global entity consisting of `domains`, `triggers` and etc.
 /// For example registration of domain, will have this as an ISI target.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Getters)]
 pub struct World {
     /// Iroha parameters.
-    pub parameters: Vec<Parameter>,
+    /// TODO: Use this field
+    _parameters: Vec<Parameter>,
     /// Identifications of discovered trusted peers.
-    pub trusted_peers_ids: PeersIds,
+    pub(crate) trusted_peers_ids: PeersIds,
     /// Registered domains.
-    pub domains: DomainsMap,
+    pub(crate) domains: DomainsMap,
     /// Roles. [`Role`] pairs.
-    pub roles: crate::RolesMap,
+    pub(crate) roles: crate::RolesMap,
+    /// Permission tokens of an account.
+    pub(crate) account_permission_tokens: crate::PermissionTokensMap,
+    /// Registered permission token ids.
+    pub(crate) permission_token_definitions: crate::PermissionTokenDefinitionsMap,
     /// Triggers
-    pub triggers: TriggerSet,
+    pub(crate) triggers: TriggerSet,
+    /// Chain of *runtime* validators
+    pub(crate) validators: crate::validator::Chain,
 }
 
-impl Deref for World {
-    type Target = Self;
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        self
+impl World {
+    /// Creates an empty `World`.
+    pub fn new() -> Self {
+        Self::default()
     }
-}
 
-impl DerefMut for World {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self
+    /// Creates a [`World`] with these [`Domain`]s and trusted [`PeerId`]s.
+    pub fn with<D, P>(domains: D, trusted_peers_ids: P) -> Self
+    where
+        D: IntoIterator<Item = Domain>,
+        P: IntoIterator<Item = PeerId>,
+    {
+        let domains = domains
+            .into_iter()
+            .map(|domain| (domain.id().clone(), domain))
+            .collect();
+        let trusted_peers_ids = trusted_peers_ids.into_iter().collect();
+        World {
+            domains,
+            trusted_peers_ids,
+            ..World::new()
+        }
     }
 }
 
 /// Current state of the blockchain aligned with `Iroha` module.
 #[derive(Debug)]
-pub struct WorldStateView<W: WorldTrait> {
+pub struct WorldStateView {
     /// The world - contains `domains`, `triggers`, etc..
-    pub world: W,
+    pub world: World,
     /// Configuration of World State View.
     pub config: Configuration,
     /// Blockchain.
     blocks: Arc<Chain>,
     /// Hashes of transactions
-    pub transactions: DashSet<HashOf<VersionedTransaction>>,
+    pub transactions: DashSet<HashOf<VersionedSignedTransaction>>,
     /// Metrics for prometheus endpoint.
     pub metrics: Arc<Metrics>,
     /// Notifies subscribers when new block is applied
     new_block_notifier: Arc<NewBlockNotificationSender>,
     /// Transmitter to broadcast [`WorldStateView`]-related events.
-    events_sender: Option<EventsSender>,
+    events_sender: EventsSender,
 }
 
-impl<W: WorldTrait + Default> Default for WorldStateView<W> {
+impl Default for WorldStateView {
     #[inline]
     fn default() -> Self {
-        Self::new(W::default())
+        Self::new(World::default())
     }
 }
 
-impl<W: WorldTrait + Clone> Clone for WorldStateView<W> {
+impl Clone for WorldStateView {
     #[allow(clippy::expect_used)]
     fn clone(&self) -> Self {
         Self {
@@ -116,62 +128,31 @@ impl<W: WorldTrait + Clone> Clone for WorldStateView<W> {
     }
 }
 
-impl World {
-    /// Creates an empty `World`.
-    #[inline]
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
-impl WorldTrait for World {
-    fn with(
-        domains: impl IntoIterator<Item = Domain>,
-        trusted_peers_ids: impl IntoIterator<Item = PeerId>,
-    ) -> Self {
-        let domains = domains
-            .into_iter()
-            .map(|domain| (domain.id().clone(), domain))
-            .collect();
-        let trusted_peers_ids = trusted_peers_ids.into_iter().collect();
-        World {
-            domains,
-            trusted_peers_ids,
-            ..World::new()
-        }
-    }
-}
-
 /// WARNING!!! INTERNAL USE ONLY!!!
-impl<W: WorldTrait> WorldStateView<W> {
+impl WorldStateView {
     /// Construct [`WorldStateView`] with given [`World`].
     #[must_use]
     #[inline]
-    pub fn new(world: W) -> Self {
-        Self::from_configuration(Configuration::default(), world)
-    }
-
-    /// Add the ability of emitting events to [`WorldStateView`].
-    #[must_use]
-    pub fn with_events(mut self, events_sender: EventsSender) -> Self {
-        self.events_sender = Some(events_sender);
-        self
+    pub fn new(world: World) -> Self {
+        // Added to remain backward compatible with other code primary in tests
+        let (events_sender, _) = broadcast::channel(1);
+        Self::from_configuration(Configuration::default(), world, events_sender)
     }
 
     /// Get `Account`'s `Asset`s
     ///
     /// # Errors
     /// Fails if there is no domain or account
-    pub fn account_assets(&self, id: &AccountId) -> Result<Vec<Asset>, FindError> {
+    pub fn account_assets(&self, id: &AccountId) -> Result<Vec<Asset>, QueryError> {
         self.map_account(id, |account| account.assets().cloned().collect())
     }
 
-    /// Returns a set of permission tokens granted to this account as part of roles and separately.
+    /// Return a set of all permission tokens granted to this account.
     #[allow(clippy::unused_self)]
     pub fn account_permission_tokens(&self, account: &Account) -> Vec<PermissionToken> {
         #[allow(unused_mut)]
-        let mut tokens: Vec<PermissionToken> = account.permissions().cloned().collect();
-
+        let mut tokens: Vec<PermissionToken> =
+            self.account_inherent_permission_tokens(account).collect();
         for role_id in account.roles() {
             if let Some(role) = self.world.roles.get(role_id) {
                 tokens.append(&mut role.permissions().cloned().collect());
@@ -180,21 +161,109 @@ impl<W: WorldTrait> WorldStateView<W> {
         tokens
     }
 
-    fn process_executable(&self, executable: &Executable, authority: &AccountId) -> Result<()> {
-        match executable {
+    /// Return a set of permission tokens granted to this account not as part of any role.
+    pub fn account_inherent_permission_tokens(
+        &self,
+        account: &Account,
+    ) -> impl ExactSizeIterator<Item = PermissionToken> {
+        self.world
+            .account_permission_tokens
+            .get(account.id())
+            .map_or_else(Default::default, |permissions_ref| {
+                permissions_ref.value().clone()
+            })
+            .into_iter()
+    }
+
+    /// Return `true` if [`Account`] contains a permission token not associated with any role.
+    #[inline]
+    pub fn account_contains_inherent_permission(
+        &self,
+        account: &<Account as Identifiable>::Id,
+        token: &PermissionToken,
+    ) -> bool {
+        self.world
+            .account_permission_tokens
+            .get_mut(account)
+            .map_or(false, |permissions| permissions.contains(token))
+    }
+
+    /// Add [`permission`](PermissionToken) to the [`Account`] if the account does not have this permission yet.
+    ///
+    /// Return a Boolean value indicating whether or not the  [`Account`] already had this permission.
+    pub fn add_account_permission(
+        &self,
+        account: &<Account as Identifiable>::Id,
+        token: PermissionToken,
+    ) -> bool {
+        // `match` here instead of `map_or_else` to avoid cloning token into each closure
+        match self.world.account_permission_tokens.get_mut(account) {
+            None => {
+                let mut permissions = Permissions::new();
+                permissions.insert(token);
+                self.world
+                    .account_permission_tokens
+                    .insert(account.clone(), permissions);
+                true
+            }
+            Some(mut permissions) => permissions.insert(token),
+        }
+    }
+
+    /// Remove a [`permission`](PermissionToken) from the [`Account`] if the account has this permission.
+    /// Return a Boolean value indicating whether the [`Account`] had this permission.
+    pub fn remove_account_permission(
+        &self,
+        account: &<Account as Identifiable>::Id,
+        token: &PermissionToken,
+    ) -> bool {
+        self.world
+            .account_permission_tokens
+            .get_mut(account)
+            .map_or(false, |mut permissions| permissions.remove(token))
+    }
+
+    fn process_trigger(&self, action: &dyn ActionTrait, event: Event) -> Result<()> {
+        let authority = action.technical_account();
+
+        match action.executable() {
             Executable::Instructions(instructions) => {
-                instructions.iter().cloned().try_for_each(|instruction| {
-                    instruction.execute(authority.clone(), self)?;
-                    Ok::<_, eyre::Report>(())
-                })?;
+                self.process_instructions(instructions.iter().cloned(), authority)
             }
             Executable::Wasm(bytes) => {
                 let mut wasm_runtime =
                     wasm::Runtime::from_configuration(self.config.wasm_runtime_config)?;
-                wasm_runtime.execute(self, authority, bytes)?;
+                wasm_runtime
+                    .execute_trigger(self, authority.clone(), bytes, event)
+                    .map_err(Into::into)
             }
         }
-        Ok(())
+    }
+
+    fn process_executable(&self, executable: &Executable, authority: AccountId) -> Result<()> {
+        match executable {
+            Executable::Instructions(instructions) => {
+                self.process_instructions(instructions.iter().cloned(), &authority)
+            }
+            Executable::Wasm(bytes) => {
+                let mut wasm_runtime =
+                    wasm::Runtime::from_configuration(self.config.wasm_runtime_config)?;
+                wasm_runtime
+                    .execute(self, authority, bytes)
+                    .map_err(Into::into)
+            }
+        }
+    }
+
+    fn process_instructions(
+        &self,
+        instructions: impl IntoIterator<Item = Instruction>,
+        authority: &AccountId,
+    ) -> Result<()> {
+        instructions.into_iter().try_for_each(|instruction| {
+            instruction.execute(authority.clone(), self)?;
+            Ok::<_, eyre::Report>(())
+        })
     }
 
     /// Apply `CommittedBlock` with changes in form of **Iroha Special
@@ -221,14 +290,12 @@ impl<W: WorldTrait> WorldStateView<W> {
 
         self.execute_transactions(block.as_v1()).await?;
 
-        self.world.triggers.handle_time_event(&time_event);
+        self.world.triggers.handle_time_event(time_event);
 
         let res = self
             .world
             .triggers
-            .inspect_matched(|action| -> Result<()> {
-                self.process_executable(action.executable(), action.technical_account())
-            })
+            .inspect_matched(|action, event| -> Result<()> { self.process_trigger(action, event) })
             .await;
 
         if let Err(errors) = res {
@@ -280,7 +347,10 @@ impl<W: WorldTrait> WorldStateView<W> {
     async fn execute_transactions(&self, block: &CommittedBlock) -> Result<()> {
         // TODO: Should this block panic instead?
         for tx in &block.transactions {
-            self.process_executable(&tx.as_v1().payload.instructions, &tx.payload().account_id)?;
+            self.process_executable(
+                &tx.as_v1().payload.instructions,
+                tx.payload().account_id.clone(),
+            )?;
             self.transactions.insert(tx.hash());
             task::yield_now().await;
         }
@@ -295,25 +365,20 @@ impl<W: WorldTrait> WorldStateView<W> {
     ///
     /// # Errors
     /// - No such [`Asset`]
-    /// - No [`Account`] to which the [`Asset`] is associated.
-    pub fn asset(&self, id: &<Asset as Identifiable>::Id) -> Result<Asset, FindError> {
-        self.map_account(&id.account_id, |account| -> Result<Asset, FindError> {
+    /// - The [`Account`] with which the [`Asset`] is associated doesn't exist.
+    /// - The [`Domain`] with which the [`Account`] is associated doesn't exist.
+    pub fn asset(&self, id: &<Asset as Identifiable>::Id) -> Result<Asset, QueryError> {
+        self.map_account(&id.account_id, |account| -> Result<Asset, QueryError> {
             account
                 .asset(id)
-                .ok_or_else(|| FindError::Asset(id.clone()))
+                .ok_or_else(|| QueryError::Find(Box::new(FindError::Asset(id.clone()))))
                 .map(Clone::clone)
         })?
     }
 
     /// Send [`Event`]s to known subscribers.
     fn produce_event(&self, event: impl Into<Event>) {
-        let events_sender = if let Some(sender) = &self.events_sender {
-            sender
-        } else {
-            return warn!("wsv does not equip an events sender");
-        };
-
-        drop(events_sender.send(event.into()))
+        send_event(&self.events_sender, event.into());
     }
 
     /// Tries to get asset or inserts new with `default_asset_value`.
@@ -420,7 +485,7 @@ impl<W: WorldTrait> WorldStateView<W> {
         let data_events: SmallVec<[DataEvent; 3]> = world_event.into();
 
         for event in data_events {
-            self.world.triggers.handle_data_event(&event);
+            self.world.triggers.handle_data_event(event.clone());
             self.produce_event(event);
         }
 
@@ -518,9 +583,25 @@ impl<W: WorldTrait> WorldStateView<W> {
         })
     }
 
+    /// Get all roles
+    #[inline]
+    pub fn roles(&self) -> &crate::RolesMap {
+        &self.world.roles
+    }
+
+    /// Get all permission token ids
+    #[inline]
+    pub fn permission_token_definitions(&self) -> &crate::PermissionTokenDefinitionsMap {
+        &self.world.permission_token_definitions
+    }
+
     /// Construct [`WorldStateView`] with specific [`Configuration`].
     #[inline]
-    pub fn from_configuration(config: Configuration, world: W) -> Self {
+    pub fn from_configuration(
+        config: Configuration,
+        world: World,
+        events_sender: EventsSender,
+    ) -> Self {
         let (new_block_notifier, _) = tokio::sync::watch::channel(());
 
         Self {
@@ -530,7 +611,7 @@ impl<W: WorldTrait> WorldStateView<W> {
             blocks: Arc::new(Chain::new()),
             metrics: Arc::new(Metrics::default()),
             new_block_notifier: Arc::new(new_block_notifier),
-            events_sender: None,
+            events_sender,
         }
     }
 
@@ -544,9 +625,9 @@ impl<W: WorldTrait> WorldStateView<W> {
             .map(|val| val.as_v1().header.timestamp)
     }
 
-    /// Check if this [`VersionedTransaction`] is already committed or rejected.
+    /// Check if this [`VersionedSignedTransaction`] is already committed or rejected.
     #[inline]
-    pub fn has_transaction(&self, hash: &HashOf<VersionedTransaction>) -> bool {
+    pub fn has_transaction(&self, hash: &HashOf<VersionedSignedTransaction>) -> bool {
         self.transactions.contains(hash)
     }
 
@@ -583,11 +664,9 @@ impl<W: WorldTrait> WorldStateView<W> {
         &self,
         id: &AccountId,
         f: impl FnOnce(&Account) -> T,
-    ) -> Result<T, FindError> {
+    ) -> Result<T, QueryError> {
         let domain = self.domain(&id.domain_id)?;
-        let account = domain
-            .account(id)
-            .ok_or_else(|| FindError::Account(id.clone()))?;
+        let account = domain.account(id).ok_or(QueryError::Unauthorized)?;
         Ok(f(account))
     }
 
@@ -655,7 +734,7 @@ impl<W: WorldTrait> WorldStateView<W> {
             .world
             .trusted_peers_ids
             .iter()
-            .map(|peer| Peer::new((&*peer).clone()))
+            .map(|peer| Peer::new((*peer).clone()))
             .collect::<Vec<Peer>>();
         vec.sort();
         vec
@@ -684,7 +763,7 @@ impl<W: WorldTrait> WorldStateView<W> {
     }
 
     /// Get all transactions
-    pub fn transaction_values(&self) -> Vec<TransactionValue> {
+    pub fn transaction_values(&self) -> Vec<TransactionQueryResult> {
         let mut txs = self
             .blocks()
             .flat_map(|block| {
@@ -694,15 +773,21 @@ impl<W: WorldTrait> WorldStateView<W> {
                     .iter()
                     .cloned()
                     .map(Box::new)
-                    .map(TransactionValue::RejectedTransaction)
+                    .map(|versioned_rejected_tx| TransactionQueryResult {
+                        tx_value: TransactionValue::RejectedTransaction(versioned_rejected_tx),
+                        block_hash: Hash::from(block.hash()),
+                    })
                     .chain(
                         block
                             .transactions
                             .iter()
                             .cloned()
-                            .map(VersionedTransaction::from)
+                            .map(VersionedSignedTransaction::from)
                             .map(Box::new)
-                            .map(TransactionValue::Transaction),
+                            .map(|versioned_tx| TransactionQueryResult {
+                                tx_value: TransactionValue::Transaction(versioned_tx),
+                                block_hash: Hash::from(block.hash()),
+                            }),
                     )
                     .collect::<Vec<_>>()
             })
@@ -711,10 +796,10 @@ impl<W: WorldTrait> WorldStateView<W> {
         txs
     }
 
-    /// Find a [`VersionedTransaction`] by hash.
+    /// Find a [`VersionedSignedTransaction`] by hash.
     pub fn transaction_value_by_hash(
         &self,
-        hash: &HashOf<VersionedTransaction>,
+        hash: &HashOf<VersionedSignedTransaction>,
     ) -> Option<TransactionValue> {
         self.blocks.iter().find_map(|b| {
             b.as_v1()
@@ -730,7 +815,7 @@ impl<W: WorldTrait> WorldStateView<W> {
                         .iter()
                         .find(|e| e.hash() == *hash)
                         .cloned()
-                        .map(VersionedTransaction::from)
+                        .map(VersionedSignedTransaction::from)
                         .map(Box::new)
                         .map(TransactionValue::Transaction)
                 })
@@ -768,7 +853,7 @@ impl<W: WorldTrait> WorldStateView<W> {
                             .iter()
                             .filter(|transaction| &transaction.payload().account_id == account_id)
                             .cloned()
-                            .map(VersionedTransaction::from)
+                            .map(VersionedSignedTransaction::from)
                             .map(Box::new)
                             .map(TransactionValue::Transaction),
                     )
@@ -782,16 +867,22 @@ impl<W: WorldTrait> WorldStateView<W> {
     /// Get an immutable view of the `World`.
     #[must_use]
     #[inline]
-    pub fn world(&self) -> &W {
+    pub fn world(&self) -> &World {
         &self.world
     }
 
-    /// Get triggers set and modify it with `f`
+    /// Returns reference for triggers
+    #[inline]
+    pub fn triggers(&self) -> &TriggerSet {
+        &self.world.triggers
+    }
+
+    /// Get trigger set and modify it with `f`
     ///
-    /// Produces trigger event from `f`
+    /// Produces [`TriggerEvent`] event from `f`
     ///
     /// # Errors
-    /// Throws up `f` errors
+    /// Throws `f` errors
     pub fn modify_triggers<F>(&self, f: F) -> Result<(), Error>
     where
         F: FnOnce(&TriggerSet) -> Result<TriggerEvent, Error>,
@@ -808,59 +899,32 @@ impl<W: WorldTrait> WorldStateView<W> {
     /// then *trigger* will be executed on the **current** block
     /// - If this method is called by ISI inside *trigger*,
     /// then *trigger* will be executed on the **next** block
-    ///
-    /// # Panics
-    /// (Rare) Panics if can't lock `self.events` for writing
-    #[allow(clippy::expect_used)]
     pub fn execute_trigger(&self, trigger_id: TriggerId, authority: AccountId) {
         let event = ExecuteTriggerEvent::new(trigger_id, authority);
-        self.world.triggers.handle_execute_trigger_event(&event);
+        self.world
+            .triggers
+            .handle_execute_trigger_event(event.clone());
         self.produce_event(event);
     }
-}
 
-/// This module contains all configuration related logic.
-pub mod config {
-    use iroha_config::derive::Configurable;
-    use iroha_data_model::{metadata::Limits as MetadataLimits, LengthLimits};
-    use serde::{Deserialize, Serialize};
-
-    use crate::smartcontracts::wasm;
-
-    const DEFAULT_METADATA_LIMITS: MetadataLimits =
-        MetadataLimits::new(2_u32.pow(20), 2_u32.pow(12));
-    const DEFAULT_IDENT_LENGTH_LIMITS: LengthLimits = LengthLimits::new(1, 2_u32.pow(7));
-
-    /// [`WorldStateView`](super::WorldStateView) configuration.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Configurable)]
-    #[config(env_prefix = "WSV_")]
-    #[serde(rename_all = "UPPERCASE", default)]
-    pub struct Configuration {
-        /// [`MetadataLimits`] for every asset with store.
-        pub asset_metadata_limits: MetadataLimits,
-        /// [`MetadataLimits`] of any asset definition's metadata.
-        pub asset_definition_metadata_limits: MetadataLimits,
-        /// [`MetadataLimits`] of any account's metadata.
-        pub account_metadata_limits: MetadataLimits,
-        /// [`MetadataLimits`] of any domain's metadata.
-        pub domain_metadata_limits: MetadataLimits,
-        /// [`LengthLimits`] for the number of chars in identifiers that can be stored in the WSV.
-        pub ident_length_limits: LengthLimits,
-        /// [`WASM Runtime`](wasm::Runtime) configuration
-        pub wasm_runtime_config: wasm::config::Configuration,
+    /// Get chain of validators and modify it with `f`
+    ///
+    /// Produces [`PermissionValidatorEvent`] from `f`
+    ///
+    /// # Errors
+    /// Throws `f` errors
+    pub fn modify_validators<F>(&self, f: F) -> Result<(), Error>
+    where
+        F: FnOnce(&crate::validator::Chain) -> Result<PermissionValidatorEvent, Error>,
+    {
+        self.modify_world(|world| f(&world.validators).map(WorldEvent::PermissionValidator))
     }
 
-    impl Default for Configuration {
-        fn default() -> Self {
-            Configuration {
-                asset_metadata_limits: DEFAULT_METADATA_LIMITS,
-                asset_definition_metadata_limits: DEFAULT_METADATA_LIMITS,
-                account_metadata_limits: DEFAULT_METADATA_LIMITS,
-                domain_metadata_limits: DEFAULT_METADATA_LIMITS,
-                ident_length_limits: DEFAULT_IDENT_LENGTH_LIMITS,
-                wasm_runtime_config: wasm::config::Configuration::default(),
-            }
-        }
+    /// Get constant view to the chain of validators.
+    ///
+    /// View guarantees that no interior-mutability can be performed.
+    pub fn validators_view(&self) -> crate::validator::ChainView {
+        self.world.validators.view()
     }
 }
 
@@ -875,7 +939,7 @@ mod tests {
         const BLOCK_CNT: usize = 10;
 
         let mut block = ValidBlock::new_dummy().commit();
-        let wsv = WorldStateView::<World>::default();
+        let wsv = WorldStateView::default();
 
         let mut block_hashes = vec![];
         for i in 1..=BLOCK_CNT {
@@ -899,7 +963,7 @@ mod tests {
         const BLOCK_CNT: usize = 10;
 
         let mut block = ValidBlock::new_dummy().commit();
-        let wsv = WorldStateView::<World>::default();
+        let wsv = WorldStateView::default();
 
         for i in 1..=BLOCK_CNT {
             block.header.height = i as u64;

@@ -1,5 +1,11 @@
 //! Contains message structures for p2p communication during consensus.
 #![allow(clippy::module_name_repetitions)]
+#![allow(
+    clippy::arithmetic,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc
+)]
+#![allow(clippy::significant_drop_in_scrutinee)]
 
 use std::time::Duration;
 
@@ -23,10 +29,8 @@ use super::{
 use crate::{
     block::BlockHeader,
     genesis::GenesisNetworkTrait,
-    kura::KuraTrait,
-    queue,
+    queue, send_event,
     sumeragi::{NetworkMessage, Role, Sumeragi, Topology, VotingBlock},
-    wsv::WorldTrait,
     VersionedAcceptedTransaction, VersionedCommittedBlock, VersionedValidBlock,
 };
 
@@ -84,14 +88,14 @@ pub struct CheckCommitTimeout {
 /// Reminder to check if block creation timeout happened.
 #[derive(Debug, Clone, iroha_actor::Message)]
 pub struct CheckCreationTimeout {
-    pub(crate) tx_hash: HashOf<VersionedTransaction>,
+    pub(crate) tx_hash: HashOf<VersionedSignedTransaction>,
     pub(crate) proof: Proof,
 }
 
 /// Reminder to check if transaction receipt timeout happened.
 #[derive(Debug, Clone, iroha_actor::Message)]
 pub struct CheckReceiptTimeout {
-    pub(crate) tx_hash: HashOf<VersionedTransaction>,
+    pub(crate) tx_hash: HashOf<VersionedSignedTransaction>,
     pub(crate) proof: Proof,
 }
 
@@ -162,10 +166,10 @@ impl VersionedMessage {
     /// # Errors
     /// Fails if message handling fails
     #[iroha_futures::telemetry_future]
-    pub async fn handle<G: GenesisNetworkTrait, K: KuraTrait, W: WorldTrait, F: FaultInjection>(
+    pub async fn handle<G: GenesisNetworkTrait, F: FaultInjection>(
         self,
-        sumeragi: &mut Sumeragi<G, K, W>,
-        ctx: &mut iroha_actor::Context<Sumeragi<G, K, W>>,
+        sumeragi: &mut Sumeragi<G>,
+        ctx: &mut iroha_actor::Context<Sumeragi<G>>,
     ) -> Result<()> {
         self.into_v1().handle(sumeragi, ctx).await
     }
@@ -197,10 +201,10 @@ impl Message {
     /// Fails if message handling fails
     #[log(skip(self, sumeragi, ctx))]
     #[iroha_futures::telemetry_future]
-    pub async fn handle<G: GenesisNetworkTrait, K: KuraTrait, W: WorldTrait, F: FaultInjection>(
+    pub async fn handle<G: GenesisNetworkTrait, F: FaultInjection>(
         self,
-        sumeragi: &mut SumeragiWithFault<G, K, W, F>,
-        ctx: &mut iroha_actor::Context<SumeragiWithFault<G, K, W, F>>,
+        sumeragi: &mut SumeragiWithFault<G, F>,
+        ctx: &mut iroha_actor::Context<SumeragiWithFault<G, F>>,
     ) -> Result<()> {
         let message = if let Some(message) = F::faulty_message(sumeragi, self) {
             message
@@ -248,11 +252,11 @@ impl ViewChangeSuggested {
     /// Handles this message as part of `Sumeragi` consensus.
     ///
     /// # Errors
-    /// Can fail during signing.
+    /// Fails if there is an issue with transaction signing.
     #[iroha_futures::telemetry_future]
-    pub async fn handle<G: GenesisNetworkTrait, K: KuraTrait, W: WorldTrait, F: FaultInjection>(
+    pub async fn handle<G: GenesisNetworkTrait, F: FaultInjection>(
         &self,
-        sumeragi: &mut SumeragiWithFault<G, K, W, F>,
+        sumeragi: &mut SumeragiWithFault<G, F>,
     ) -> Result<()> {
         use view_change::Reason::*;
         sumeragi.update_view_changes(self.chain.clone());
@@ -288,12 +292,12 @@ impl BlockCreated {
     /// Handles this message as part of `Sumeragi` consensus.
     ///
     /// # Errors
-    /// Can fail due to signing of block
+    /// Fails if there is an issue with block signing.
     #[iroha_futures::telemetry_future]
-    pub async fn handle<G: GenesisNetworkTrait, K: KuraTrait, W: WorldTrait, F: FaultInjection>(
+    pub async fn handle<G: GenesisNetworkTrait, F: FaultInjection>(
         &self,
-        sumeragi: &mut SumeragiWithFault<G, K, W, F>,
-        ctx: &mut iroha_actor::Context<SumeragiWithFault<G, K, W, F>>,
+        sumeragi: &mut SumeragiWithFault<G, F>,
+        ctx: &mut iroha_actor::Context<SumeragiWithFault<G, F>>,
     ) -> Result<()> {
         // There should be only one block in discussion during a round.
         if sumeragi.voting_block.is_some() {
@@ -302,7 +306,7 @@ impl BlockCreated {
 
         for event in Vec::<Event>::from(&self.block) {
             trace!(?event);
-            drop(sumeragi.events_sender.send(event));
+            send_event(&sumeragi.events_sender, event);
         }
         sumeragi.update_view_changes(self.block.header().view_change_proofs.clone());
         let network_topology = sumeragi.network_topology_current_or_genesis(self.block.header());
@@ -382,11 +386,11 @@ impl BlockSigned {
     /// Handles this message as part of `Sumeragi` consensus.
     ///
     /// # Errors
-    /// Can fail due to signing of block
+    /// Fails if there is an issue with block signing.
     #[iroha_futures::telemetry_future]
-    pub async fn handle<G: GenesisNetworkTrait, K: KuraTrait, W: WorldTrait, F: FaultInjection>(
+    pub async fn handle<G: GenesisNetworkTrait, F: FaultInjection>(
         &self,
-        sumeragi: &mut SumeragiWithFault<G, K, W, F>,
+        sumeragi: &mut SumeragiWithFault<G, F>,
     ) -> Result<()> {
         sumeragi.update_view_changes(self.block.header().view_change_proofs.clone());
         let network_topology = sumeragi.network_topology_current_or_genesis(self.block.header());
@@ -441,7 +445,7 @@ impl BlockSigned {
                 network_topology
                     .validating_peers()
                     .iter()
-                    .chain(std::iter::once(network_topology.leader()))
+                    .chain([network_topology.leader()])
                     .chain(network_topology.peers_set_b()),
             )
             .await;
@@ -468,13 +472,10 @@ pub struct BlockCommitted {
 
 impl BlockCommitted {
     /// Handles this message as part of `Sumeragi` consensus.
-    ///
-    /// # Errors
-    /// Actually infallible
     #[iroha_futures::telemetry_future]
-    pub async fn handle<G: GenesisNetworkTrait, K: KuraTrait, W: WorldTrait, F: FaultInjection>(
+    pub async fn handle<G: GenesisNetworkTrait, F: FaultInjection>(
         &self,
-        sumeragi: &mut SumeragiWithFault<G, K, W, F>,
+        sumeragi: &mut SumeragiWithFault<G, F>,
     ) -> Result<()> {
         let network_topology = sumeragi.network_topology_current_or_genesis(self.block.header());
         #[allow(clippy::expect_used)]
@@ -521,7 +522,7 @@ impl From<VersionedValidBlock> for BlockCommitted {
 #[non_exhaustive]
 pub struct TransactionForwarded {
     /// Transaction that is forwarded from a client by a peer to the leader
-    pub transaction: VersionedTransaction,
+    pub transaction: VersionedSignedTransaction,
     /// `PeerId` of the peer that forwarded this transaction to a leader.
     pub peer: PeerId,
 }
@@ -540,11 +541,11 @@ impl TransactionForwarded {
     /// Handles this message as part of `Sumeragi` consensus.
     ///
     /// # Errors
-    /// Can fail due to signing transaction
+    /// Fails if there is an issue with transaction signing.
     #[iroha_futures::telemetry_future]
-    pub async fn handle<G: GenesisNetworkTrait, K: KuraTrait, W: WorldTrait, F: FaultInjection>(
+    pub async fn handle<G: GenesisNetworkTrait, F: FaultInjection>(
         self,
-        sumeragi: &mut SumeragiWithFault<G, K, W, F>,
+        sumeragi: &mut SumeragiWithFault<G, F>,
     ) -> Result<()> {
         let transaction = VersionedAcceptedTransaction::from_transaction(
             self.transaction.clone().into_v1(),
@@ -569,10 +570,11 @@ impl TransactionForwarded {
 /// Message for gossiping batches of transactions.
 #[derive(Decode, Encode, Debug, Clone)]
 pub struct TransactionGossip {
-    txs: Vec<VersionedTransaction>,
+    txs: Vec<VersionedSignedTransaction>,
 }
 
 impl TransactionGossip {
+    #![allow(clippy::unused_async)]
     /// Constructor.
     pub fn new(txs: Vec<VersionedAcceptedTransaction>) -> Self {
         Self {
@@ -585,10 +587,10 @@ impl TransactionGossip {
     /// Handles this message as part of `Sumeragi` consensus.
     ///
     /// # Errors
-    /// Can fail during signing.
-    pub async fn handle<G: GenesisNetworkTrait, K: KuraTrait, W: WorldTrait, F: FaultInjection>(
+    /// Fails if there is an issue with transaction signing.
+    pub async fn handle<G: GenesisNetworkTrait, F: FaultInjection>(
         self,
-        sumeragi: &mut SumeragiWithFault<G, K, W, F>,
+        sumeragi: &mut SumeragiWithFault<G, F>,
     ) -> Result<()> {
         for transaction in self.txs {
             let tx = VersionedAcceptedTransaction::from_transaction(
@@ -611,11 +613,11 @@ impl TransactionGossip {
 #[non_exhaustive]
 pub struct TransactionReceipt {
     /// The hash of the transaction that the leader received.
-    pub hash: HashOf<VersionedTransaction>,
+    pub hash: HashOf<VersionedSignedTransaction>,
     /// The time at which the leader claims to have received this transaction.
     pub received_at: Duration,
     /// The signature of the leader.
-    pub signature: SignatureOf<VersionedTransaction>,
+    pub signature: SignatureOf<VersionedSignedTransaction>,
 }
 
 impl TransactionReceipt {
@@ -625,7 +627,7 @@ impl TransactionReceipt {
     /// Can fail creating new signature
     #[allow(clippy::expect_used, clippy::unwrap_in_result)]
     pub fn new(
-        transaction: &VersionedTransaction,
+        transaction: &VersionedSignedTransaction,
         key_pair: &KeyPair,
     ) -> Result<TransactionReceipt> {
         let hash = transaction.hash();
@@ -652,12 +654,12 @@ impl TransactionReceipt {
     /// Handles this message as part of `Sumeragi` consensus.
     ///
     /// # Errors
-    /// Can fail due to signing of block
+    /// Fails if there is an issue with block signing.
     #[iroha_futures::telemetry_future]
-    pub async fn handle<G: GenesisNetworkTrait, K: KuraTrait, W: WorldTrait, F: FaultInjection>(
+    pub async fn handle<G: GenesisNetworkTrait, F: FaultInjection>(
         &self,
-        sumeragi: &mut SumeragiWithFault<G, K, W, F>,
-        ctx: &mut iroha_actor::Context<SumeragiWithFault<G, K, W, F>>,
+        sumeragi: &mut SumeragiWithFault<G, F>,
+        ctx: &mut iroha_actor::Context<SumeragiWithFault<G, F>>,
     ) -> Result<()> {
         let now = current_time();
 

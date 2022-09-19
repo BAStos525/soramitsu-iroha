@@ -10,11 +10,14 @@ use iroha_telemetry::metrics;
 /// - TODO: technical accounts.
 /// - TODO: technical account permissions.
 pub mod isi {
-    use iroha_data_model::trigger::{self, prelude::*};
+    use iroha_data_model::{
+        events::Filter,
+        trigger::{self, prelude::*},
+    };
 
     use super::{super::prelude::*, *};
 
-    impl<W: WorldTrait> Execute<W> for Register<Trigger<FilterBox>> {
+    impl Execute for Register<Trigger<FilterBox>> {
         type Error = Error;
 
         #[metrics(+"register_trigger")]
@@ -22,7 +25,7 @@ pub mod isi {
         fn execute(
             self,
             _authority: <Account as Identifiable>::Id,
-            wsv: &WorldStateView<W>,
+            wsv: &WorldStateView,
         ) -> Result<(), Self::Error> {
             let new_trigger = self.object;
 
@@ -30,7 +33,7 @@ pub mod isi {
                 match &new_trigger.action.repeats {
                     Repeats::Exactly(action) if action.get() == 1 => (),
                     _ => {
-                        return Err(Error::Math(MathError::Overflow));
+                        return Err(MathError::Overflow.into());
                     }
                 }
             }
@@ -71,16 +74,17 @@ pub mod isi {
         }
     }
 
-    impl<W: WorldTrait> Execute<W> for Unregister<Trigger<FilterBox>> {
+    impl Execute for Unregister<Trigger<FilterBox>> {
         type Error = Error;
 
         #[metrics(+"unregister_trigger")]
         fn execute(
             self,
             _authority: <Account as Identifiable>::Id,
-            wsv: &WorldStateView<W>,
+            wsv: &WorldStateView,
         ) -> Result<(), Self::Error> {
             let trigger_id = self.object_id.clone();
+
             wsv.modify_triggers(|triggers| {
                 if triggers.remove(&trigger_id) {
                     Ok(TriggerEvent::Deleted(self.object_id))
@@ -94,20 +98,20 @@ pub mod isi {
         }
     }
 
-    impl<W: WorldTrait> Execute<W> for Mint<Trigger<FilterBox>, u32> {
+    impl Execute for Mint<Trigger<FilterBox>, u32> {
         type Error = Error;
 
         #[metrics(+"mint_trigger_repetitions")]
         fn execute(
             self,
             _authority: <Account as Identifiable>::Id,
-            wsv: &WorldStateView<W>,
+            wsv: &WorldStateView,
         ) -> Result<(), Self::Error> {
             let id = self.destination_id;
 
             wsv.modify_triggers(|triggers| {
                 triggers
-                    .inspect(&id, |action| -> Result<(), Self::Error> {
+                    .inspect_by_id(&id, |action| -> Result<(), Self::Error> {
                         if action.mintable() {
                             Ok(())
                         } else {
@@ -125,14 +129,14 @@ pub mod isi {
         }
     }
 
-    impl<W: WorldTrait> Execute<W> for Burn<Trigger<FilterBox>, u32> {
+    impl Execute for Burn<Trigger<FilterBox>, u32> {
         type Error = Error;
 
         #[metrics(+"burn_trigger_repetitions")]
         fn execute(
             self,
             _authority: <Account as Identifiable>::Id,
-            wsv: &WorldStateView<W>,
+            wsv: &WorldStateView,
         ) -> Result<(), Self::Error> {
             let trigger = self.destination_id;
             wsv.modify_triggers(|triggers| {
@@ -147,17 +151,34 @@ pub mod isi {
         }
     }
 
-    impl<W: WorldTrait> Execute<W> for ExecuteTriggerBox {
+    impl Execute for ExecuteTriggerBox {
         type Error = Error;
 
         #[metrics(+"execute_trigger")]
         fn execute(
             self,
             authority: <Account as Identifiable>::Id,
-            wsv: &WorldStateView<W>,
+            wsv: &WorldStateView,
         ) -> Result<(), Self::Error> {
-            wsv.execute_trigger(self.trigger_id, authority);
-            Ok(())
+            let id = self.trigger_id;
+
+            wsv.triggers()
+                .inspect_by_id(&id, |action| -> Result<(), Self::Error> {
+                    let allow_execute =
+                        if let FilterBox::ExecuteTrigger(filter) = action.clone_and_box().filter {
+                            let event = ExecuteTriggerEvent::new(id.clone(), authority.clone());
+                            filter.matches(&event) || action.technical_account() == &authority
+                        } else {
+                            false
+                        };
+                    if allow_execute {
+                        wsv.execute_trigger(id.clone(), authority.clone());
+                        Ok(())
+                    } else {
+                        Err(ValidationError::new("Unauthorized trigger execution").into())
+                    }
+                })
+                .ok_or_else(|| Error::Find(Box::new(FindError::Trigger(id))))?
         }
     }
 }
@@ -168,19 +189,19 @@ pub mod query {
     use super::*;
     use crate::{
         prelude::*,
-        smartcontracts::{isi::prelude::WorldTrait, query::Error, Evaluate as _, FindError},
+        smartcontracts::{query::Error, Evaluate as _, FindError},
     };
 
-    impl<W: WorldTrait> ValidQuery<W> for FindAllActiveTriggerIds {
+    impl ValidQuery for FindAllActiveTriggerIds {
         #[metrics(+"find_all_active_triggers")]
-        fn execute(&self, wsv: &WorldStateView<W>) -> Result<Self::Output, Error> {
-            Ok(wsv.world.triggers.clone().ids())
+        fn execute(&self, wsv: &WorldStateView) -> Result<Self::Output, Error> {
+            Ok(wsv.triggers().ids())
         }
     }
 
-    impl<W: WorldTrait> ValidQuery<W> for FindTriggerById {
+    impl ValidQuery for FindTriggerById {
         #[metrics(+"find_trigger_by_id")]
-        fn execute(&self, wsv: &WorldStateView<W>) -> Result<Self::Output, Error> {
+        fn execute(&self, wsv: &WorldStateView) -> Result<Self::Output, Error> {
             let id = self
                 .id
                 .evaluate(wsv, &Context::new())
@@ -189,9 +210,8 @@ pub mod query {
             // Can't use just `ActionTrait::clone_and_box` cause this will trigger lifetime mismatch
             #[allow(clippy::redundant_closure_for_method_calls)]
             let action = wsv
-                .world
-                .triggers
-                .inspect(&id, |action| action.clone_and_box())
+                .triggers()
+                .inspect_by_id(&id, |action| action.clone_and_box())
                 .ok_or_else(|| Error::Find(Box::new(FindError::Trigger(id.clone()))))?;
 
             // TODO: Should we redact the metadata if the account is not the technical account/owner?
@@ -199,9 +219,9 @@ pub mod query {
         }
     }
 
-    impl<W: WorldTrait> ValidQuery<W> for FindTriggerKeyValueByIdAndKey {
+    impl ValidQuery for FindTriggerKeyValueByIdAndKey {
         #[metrics(+"find_trigger_key_value_by_id_and_key")]
-        fn execute(&self, wsv: &WorldStateView<W>) -> Result<Self::Output, Error> {
+        fn execute(&self, wsv: &WorldStateView) -> Result<Self::Output, Error> {
             let id = self
                 .id
                 .evaluate(wsv, &Context::new())
@@ -211,9 +231,8 @@ pub mod query {
                 .evaluate(wsv, &Context::new())
                 .map_err(|e| Error::Evaluate(format!("Failed to evaluate key. {}", e)))?;
             iroha_logger::trace!(%id, %key);
-            wsv.world
-                .triggers
-                .inspect(&id, |action| {
+            wsv.triggers()
+                .inspect_by_id(&id, |action| {
                     action
                         .metadata()
                         .get(&key)
@@ -221,6 +240,24 @@ pub mod query {
                         .ok_or_else(|| FindError::MetadataKey(key.clone()).into())
                 })
                 .ok_or_else(|| Error::Find(Box::new(FindError::Trigger(id))))?
+        }
+    }
+
+    impl ValidQuery for FindTriggersByDomainId {
+        #[metrics(+"find_triggers_by_domain_id")]
+        fn execute(&self, wsv: &WorldStateView) -> eyre::Result<Self::Output, Error> {
+            let domain_id = &self
+                .domain_id
+                .evaluate(wsv, &Context::new())
+                .map_err(|e| Error::Evaluate(format!("Failed to evaluate domain id. {}", e)))?;
+
+            let triggers = wsv
+                .triggers()
+                .inspect_by_domain_id(domain_id, |trigger_id, action| {
+                    Trigger::<FilterBox>::new(trigger_id.clone(), action.clone_and_box())
+                });
+
+            Ok(triggers)
         }
     }
 }

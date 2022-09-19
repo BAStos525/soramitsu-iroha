@@ -1,6 +1,7 @@
 use std::convert::Infallible;
 
-use iroha_version::scale::DecodeVersioned;
+use iroha_cli_derive::generate_endpoints;
+use iroha_version::prelude::*;
 use parity_scale_codec::Encode;
 use warp::{hyper::body::Bytes, reply::Response, Filter, Rejection, Reply};
 
@@ -38,6 +39,7 @@ macro_rules! add_state {
 pub mod body {
     use iroha_core::smartcontracts::query::Error as QueryError;
     use iroha_data_model::query::VersionedSignedQueryRequest;
+    use iroha_logger::warn;
 
     use super::*;
 
@@ -56,8 +58,8 @@ pub mod body {
         type Error = WarpQueryError;
 
         fn try_from(body: &Bytes) -> Result<Self, Self::Error> {
-            let query = VersionedSignedQueryRequest::decode_versioned(body.as_ref())
-                .map_err(|e| WarpQueryError(QueryError::Decode(Box::new(e))))?;
+            let res = try_decode_all_or_just_decode!(VersionedSignedQueryRequest, body.as_ref());
+            let query = res.map_err(|e| WarpQueryError(Box::new(e).into()))?;
             let VersionedSignedQueryRequest::V1(query) = query;
             Ok(Self::try_from(query)?)
         }
@@ -73,7 +75,7 @@ pub mod body {
     pub fn versioned<T: DecodeVersioned>() -> impl Filter<Extract = (T,), Error = Rejection> + Copy
     {
         warp::body::bytes().and_then(|body: Bytes| async move {
-            DecodeVersioned::decode_versioned(body.as_ref()).map_err(warp::reject::custom)
+            try_decode_all_or_just_decode!(T as "Body", body.as_ref()).map_err(warp::reject::custom)
         })
     }
 }
@@ -90,27 +92,4 @@ impl<O: Reply, E: Reply> Reply for WarpResult<O, E> {
     }
 }
 
-macro_rules! impl_custom_and_then {
-    ( $name:ident ( $($arg_name:ident : $arg_gen:ident),* $(,)? ) ) => {
-        /// Maps filter to handler with `n` arguments (`n` is suffix of function)
-        pub fn $name<O, E, F, Fut, Fil, $($arg_gen,)*>(f: F, router: Fil)
-            -> impl Filter<Extract = (WarpResult<O, E>,), Error = Rejection> + Clone
-        where
-            Fil: Filter<Extract = ($($arg_gen,)*), Error = Rejection> + Clone,
-            F: Fn($($arg_gen,)*) -> Fut + Copy + Send + Sync + 'static,
-            Fut: std::future::Future<Output = Result<O, E>> + Send,
-            $($arg_gen: Send,)*
-        {
-            router.and_then(move |$($arg_name,)*|
-                async move {
-                    Ok::<_, Infallible>(WarpResult(f($($arg_name,)*).await))
-                }
-            )
-        }
-    }
-}
-
-// impl_custom_and_then!(endpoint1(a: A));
-impl_custom_and_then!(endpoint2(a: A, b: B));
-impl_custom_and_then!(endpoint3(a: A, b: B, c: C));
-impl_custom_and_then!(endpoint4(a: A, b: B, c: C, d: D));
+generate_endpoints!(2, 3, 4, 5);

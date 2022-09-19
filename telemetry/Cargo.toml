@@ -1,6 +1,6 @@
 [package]
 name = "iroha_telemetry"
-version = "2.0.0-pre-rc.4"
+version = "2.0.0-pre-rc.8"
 authors = ["Iroha 2 team <https://github.com/orgs/soramitsu/teams/iroha2>"]
 edition = "2021"
 build = "build.rs"
@@ -13,26 +13,26 @@ dev-telemetry = []
 metric-instrumentation = []
 
 [dependencies]
-iroha_config = { version = "=2.0.0-pre-rc.4", path = "../config" }
-iroha_logger = { version = "=2.0.0-pre-rc.4", path = "../logger" }
-iroha_futures = { version = "=2.0.0-pre-rc.4", path = "../futures", features = ["telemetry"] }
-iroha_telemetry_derive = { version = "=2.0.0-pre-rc.4", path = "derive" }
+iroha_config = { version = "=2.0.0-pre-rc.8", path = "../config" }
+iroha_logger = { version = "=2.0.0-pre-rc.8", path = "../logger" }
+iroha_futures = { version = "=2.0.0-pre-rc.8", path = "../futures", features = ["telemetry"] }
+iroha_telemetry_derive = { version = "=2.0.0-pre-rc.8", path = "derive" }
 
 
-async-trait = "0.1"
-chrono = "0.4"
-eyre = "0.6.5"
-futures = { version = "0.3.17", default-features = false, features = ["std", "async-await"] }
-serde_json = "1"
-streaming-stats = "0.2"
-serde = { version = "1", features = ["derive"] }
-tokio = { version = "1.6.0", features = ["rt", "rt-multi-thread", "macros"]}
-tokio-stream = { version = "0.1.6", features = ["fs"]}
-tokio-tungstenite = { version = "0.16" }
+async-trait = "0.1.57"
+chrono = "0.4.22"
+eyre = "0.6.8"
+futures = { version = "0.3.21", default-features = false, features = ["std", "async-await"] }
+serde_json = "1.0.83"
+streaming-stats = "0.2.3"
+serde = { version = "1.0.142", features = ["derive"] }
+tokio = { version = "1.20.1", features = ["rt", "rt-multi-thread", "macros"] }
+tokio-stream = { version = "0.1.9", features = ["fs"] }
+tokio-tungstenite = "0.17.2"
 url = { version = "2.2.2", features = ["serde"] }
-prometheus = { version = "0.13.0", default-features = false }
+prometheus = { version = "0.13.1", default-features = false }
 
 
 [build-dependencies]
-anyhow = "1.0"
-vergen = { version = "5", default-features = false, features = ["cargo", "git"] }
+anyhow = "1.0.60"
+vergen = { version = "7.3.2", default-features = false, features = ["cargo", "git"] }

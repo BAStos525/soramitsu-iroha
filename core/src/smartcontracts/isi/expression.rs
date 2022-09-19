@@ -1,5 +1,10 @@
 //! Implementations for Expression evaluation for different expressions.
-
+#![allow(
+    clippy::module_name_repetitions,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc,
+    clippy::arithmetic
+)]
 use eyre::Result;
 use iroha_data_model::{
     expression::{prelude::*, Expression},
@@ -7,12 +12,9 @@ use iroha_data_model::{
 };
 
 use super::{Error, Evaluate, FindError, MathError};
-use crate::{
-    prelude::ValidQuery,
-    wsv::{WorldStateView, WorldTrait},
-};
+use crate::{prelude::ValidQuery, wsv::WorldStateView};
 
-impl<V: TryFrom<Value>, W: WorldTrait> Evaluate<W> for EvaluatesTo<V>
+impl<V: TryFrom<Value>> Evaluate for EvaluatesTo<V>
 where
     <V as TryFrom<Value>>::Error: Into<eyre::Error>,
 {
@@ -21,7 +23,7 @@ where
 
     fn evaluate(
         &self,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
         context: &Context,
     ) -> Result<Self::Value, Self::Error> {
         let expr = self.expression.evaluate(wsv, context)?;
@@ -32,13 +34,13 @@ where
     }
 }
 
-impl<W: WorldTrait> Evaluate<W> for Expression {
+impl Evaluate for Expression {
     type Value = Value;
     type Error = Error;
 
     fn evaluate(
         &self,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
         context: &Context,
     ) -> Result<Self::Value, Self::Error> {
         use Expression::*;
@@ -68,29 +70,29 @@ impl<W: WorldTrait> Evaluate<W> for Expression {
     }
 }
 
-impl<W: WorldTrait> Evaluate<W> for ContextValue {
+impl Evaluate for ContextValue {
     type Value = Value;
     type Error = Error;
 
     fn evaluate(
         &self,
-        _wsv: &WorldStateView<W>,
+        _wsv: &WorldStateView,
         context: &Context,
     ) -> Result<Self::Value, Self::Error> {
         context
             .get(&self.value_name)
-            .ok_or_else(|| Error::Find(Box::new(FindError::Context(self.value_name.clone()))))
+            .ok_or_else(|| FindError::Context(self.value_name.clone()).into())
             .map(ToOwned::to_owned)
     }
 }
 
-impl<W: WorldTrait> Evaluate<W> for Add {
+impl Evaluate for Add {
     type Value = Value;
     type Error = Error;
 
     fn evaluate(
         &self,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
         context: &Context,
     ) -> Result<Self::Value, Self::Error> {
         let left = self.left.evaluate(wsv, context)?;
@@ -99,13 +101,13 @@ impl<W: WorldTrait> Evaluate<W> for Add {
     }
 }
 
-impl<W: WorldTrait> Evaluate<W> for Subtract {
+impl Evaluate for Subtract {
     type Value = Value;
     type Error = Error;
 
     fn evaluate(
         &self,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
         context: &Context,
     ) -> Result<Self::Value, Self::Error> {
         let left = self.left.evaluate(wsv, context)?;
@@ -114,13 +116,13 @@ impl<W: WorldTrait> Evaluate<W> for Subtract {
     }
 }
 
-impl<W: WorldTrait> Evaluate<W> for Greater {
+impl Evaluate for Greater {
     type Value = Value;
     type Error = Error;
 
     fn evaluate(
         &self,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
         context: &Context,
     ) -> Result<Self::Value, Self::Error> {
         let left = self.left.evaluate(wsv, context)?;
@@ -129,13 +131,13 @@ impl<W: WorldTrait> Evaluate<W> for Greater {
     }
 }
 
-impl<W: WorldTrait> Evaluate<W> for Less {
+impl Evaluate for Less {
     type Value = Value;
     type Error = Error;
 
     fn evaluate(
         &self,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
         context: &Context,
     ) -> Result<Self::Value, Self::Error> {
         let left = self.left.evaluate(wsv, context)?;
@@ -144,13 +146,13 @@ impl<W: WorldTrait> Evaluate<W> for Less {
     }
 }
 
-impl<W: WorldTrait> Evaluate<W> for Not {
+impl Evaluate for Not {
     type Value = Value;
     type Error = Error;
 
     fn evaluate(
         &self,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
         context: &Context,
     ) -> Result<Self::Value, Self::Error> {
         let expression = self.expression.evaluate(wsv, context)?;
@@ -158,13 +160,13 @@ impl<W: WorldTrait> Evaluate<W> for Not {
     }
 }
 
-impl<W: WorldTrait> Evaluate<W> for And {
+impl Evaluate for And {
     type Value = Value;
     type Error = Error;
 
     fn evaluate(
         &self,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
         context: &Context,
     ) -> Result<Self::Value, Self::Error> {
         let left = self.left.evaluate(wsv, context)?;
@@ -173,13 +175,13 @@ impl<W: WorldTrait> Evaluate<W> for And {
     }
 }
 
-impl<W: WorldTrait> Evaluate<W> for Or {
+impl Evaluate for Or {
     type Value = Value;
     type Error = Error;
 
     fn evaluate(
         &self,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
         context: &Context,
     ) -> Result<Self::Value, Self::Error> {
         let left = self.left.evaluate(wsv, context)?;
@@ -188,13 +190,13 @@ impl<W: WorldTrait> Evaluate<W> for Or {
     }
 }
 
-impl<W: WorldTrait> Evaluate<W> for IfExpression {
+impl Evaluate for IfExpression {
     type Value = Value;
     type Error = Error;
 
     fn evaluate(
         &self,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
         context: &Context,
     ) -> Result<Self::Value, Self::Error> {
         let condition = self.condition.evaluate(wsv, context)?;
@@ -206,13 +208,13 @@ impl<W: WorldTrait> Evaluate<W> for IfExpression {
     }
 }
 
-impl<W: WorldTrait> Evaluate<W> for Contains {
+impl Evaluate for Contains {
     type Value = Value;
     type Error = Error;
 
     fn evaluate(
         &self,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
         context: &Context,
     ) -> Result<Self::Value, Self::Error> {
         let collection = self.collection.evaluate(wsv, context)?;
@@ -221,13 +223,13 @@ impl<W: WorldTrait> Evaluate<W> for Contains {
     }
 }
 
-impl<W: WorldTrait> Evaluate<W> for ContainsAll {
+impl Evaluate for ContainsAll {
     type Error = Error;
     type Value = Value;
 
     fn evaluate(
         &self,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
         context: &Context,
     ) -> Result<Self::Value, Self::Error> {
         let collection = self.collection.evaluate(wsv, context)?;
@@ -239,13 +241,13 @@ impl<W: WorldTrait> Evaluate<W> for ContainsAll {
     }
 }
 
-impl<W: WorldTrait> Evaluate<W> for ContainsAny {
+impl Evaluate for ContainsAny {
     type Error = Error;
     type Value = Value;
 
     fn evaluate(
         &self,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
         context: &Context,
     ) -> Result<Self::Value, Self::Error> {
         let collection = self.collection.evaluate(wsv, context)?;
@@ -257,13 +259,13 @@ impl<W: WorldTrait> Evaluate<W> for ContainsAny {
     }
 }
 
-impl<W: WorldTrait> Evaluate<W> for Equal {
+impl Evaluate for Equal {
     type Error = Error;
     type Value = Value;
 
     fn evaluate(
         &self,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
         context: &Context,
     ) -> Result<Self::Value, Self::Error> {
         let left = self.left.evaluate(wsv, context)?;
@@ -272,13 +274,13 @@ impl<W: WorldTrait> Evaluate<W> for Equal {
     }
 }
 
-impl<W: WorldTrait> Evaluate<W> for Where {
+impl Evaluate for Where {
     type Error = Error;
     type Value = Value;
 
     fn evaluate(
         &self,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
         context: &Context,
     ) -> Result<Self::Value, Self::Error> {
         let additional_context: Result<Context, Self::Error> = self
@@ -302,13 +304,13 @@ impl<W: WorldTrait> Evaluate<W> for Where {
     }
 }
 
-impl<W: WorldTrait> Evaluate<W> for Multiply {
+impl Evaluate for Multiply {
     type Value = Value;
     type Error = Error;
 
     fn evaluate(
         &self,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
         context: &Context,
     ) -> Result<Self::Value, Self::Error> {
         let left = self.left.evaluate(wsv, context)?;
@@ -317,13 +319,13 @@ impl<W: WorldTrait> Evaluate<W> for Multiply {
     }
 }
 
-impl<W: WorldTrait> Evaluate<W> for RaiseTo {
+impl Evaluate for RaiseTo {
     type Value = Value;
     type Error = Error;
 
     fn evaluate(
         &self,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
         context: &Context,
     ) -> Result<Self::Value, Self::Error> {
         let left = self.left.evaluate(wsv, context)?;
@@ -332,30 +334,30 @@ impl<W: WorldTrait> Evaluate<W> for RaiseTo {
     }
 }
 
-impl<W: WorldTrait> Evaluate<W> for Divide {
+impl Evaluate for Divide {
     type Value = Value;
     type Error = Error;
 
     fn evaluate(
         &self,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
         context: &Context,
     ) -> Result<Self::Value, Self::Error> {
         let left: u32 = self.left.evaluate(wsv, context)?;
         let right: u32 = self.right.evaluate(wsv, context)?;
         left.checked_div(right)
             .map(Value::U32)
-            .ok_or(Error::Math(MathError::DivideByZero))
+            .ok_or_else(|| MathError::DivideByZero.into())
     }
 }
 
-impl<W: WorldTrait> Evaluate<W> for Mod {
+impl Evaluate for Mod {
     type Value = Value;
     type Error = Error;
 
     fn evaluate(
         &self,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
         context: &Context,
     ) -> Result<Self::Value, Self::Error> {
         let left = self.left.evaluate(wsv, context)?;
@@ -372,6 +374,7 @@ mod tests {
 
     use eyre::Result;
     use iroha_crypto::KeyPair;
+    use iroha_data_model::val_vec;
     use iroha_macro::error::ErrorTryFromEnum;
     use parity_scale_codec::{Decode, Encode};
 
@@ -386,65 +389,83 @@ mod tests {
         let (public_key_teller_1, _) = KeyPair::generate()?.into();
         let (public_key_teller_2, _) = KeyPair::generate()?.into();
         let (manager_public_key, _) = KeyPair::generate()?.into();
-        let teller_signatory_set = Value::Vec(vec![
+        let teller_signatory_set = vec![
             Value::PublicKey(public_key_teller_1.clone()),
             Value::PublicKey(public_key_teller_2),
-        ]);
+        ];
         let one_teller_set = Value::Vec(vec![Value::PublicKey(public_key_teller_1)]);
         let manager_signatory = Value::PublicKey(manager_public_key);
         let manager_signatory_set = Value::Vec(vec![manager_signatory.clone()]);
-        let condition: ExpressionBox = IfBuilder::condition(And::new(
-            Greater::new(ContextValue::new("usd_quantity"), 500_u32),
-            Less::new(ContextValue::new("usd_quantity"), 1000_u32),
-        ))
-        .then_expression(Or::new(
-            ContainsAll::new(
-                ContextValue::new("signatories"),
-                teller_signatory_set.clone(),
+        let condition = IfBuilder::condition(And::new(
+            Greater::new(
+                EvaluatesTo::new_unchecked(ContextValue::new("usd_quantity").into()),
+                500_u32,
             ),
-            Contains::new(ContextValue::new("signatories"), manager_signatory),
+            Less::new(
+                EvaluatesTo::new_unchecked(ContextValue::new("usd_quantity").into()),
+                1000_u32,
+            ),
+        ))
+        .then_expression(EvaluatesTo::new_evaluates_to_value(
+            Or::new(
+                ContainsAll::new(
+                    EvaluatesTo::new_unchecked(ContextValue::new("signatories").into()),
+                    teller_signatory_set.clone(),
+                ),
+                Contains::new(
+                    EvaluatesTo::new_unchecked(ContextValue::new("signatories").into()),
+                    manager_signatory,
+                ),
+            )
+            .into(),
         ))
         .else_expression(true)
         .build()
-        .unwrap()
-        .into();
+        .unwrap();
         // Signed by all tellers
-        let expression = WhereBuilder::evaluate(condition.clone())
-            .with_value(
-                //TODO: use query to get the actual quantity of an asset from WSV
-                "usd_quantity".to_owned(),
-                asset_quantity_high.clone(),
-            )
-            .with_value("signatories".to_owned(), teller_signatory_set)
-            .build();
-        let wsv = WorldStateView::<World>::new(World::new());
+        let expression = WhereBuilder::evaluate(EvaluatesTo::new_evaluates_to_value(
+            condition.clone().into(),
+        ))
+        .with_value(
+            //TODO: use query to get the actual quantity of an asset from WSV
+            "usd_quantity".to_owned(),
+            asset_quantity_high.clone(),
+        )
+        .with_value("signatories".to_owned(), teller_signatory_set)
+        .build();
+        let wsv = WorldStateView::new(World::new());
         assert_eq!(
             expression.evaluate(&wsv, &Context::new())?,
             Value::Bool(true)
         );
         // Signed by manager
-        let expression = WhereBuilder::evaluate(condition.clone())
-            .with_value("usd_quantity".to_owned(), asset_quantity_high.clone())
-            .with_value("signatories".to_owned(), manager_signatory_set)
-            .build();
+        let expression = WhereBuilder::evaluate(EvaluatesTo::new_evaluates_to_value(
+            condition.clone().into(),
+        ))
+        .with_value("usd_quantity".to_owned(), asset_quantity_high.clone())
+        .with_value("signatories".to_owned(), manager_signatory_set)
+        .build();
         assert_eq!(
             expression.evaluate(&wsv, &Context::new())?,
             Value::Bool(true)
         );
         // Signed by one teller
-        let expression = WhereBuilder::evaluate(condition.clone())
-            .with_value("usd_quantity".to_owned(), asset_quantity_high)
-            .with_value("signatories".to_owned(), one_teller_set.clone())
-            .build();
+        let expression = WhereBuilder::evaluate(EvaluatesTo::new_evaluates_to_value(
+            condition.clone().into(),
+        ))
+        .with_value("usd_quantity".to_owned(), asset_quantity_high)
+        .with_value("signatories".to_owned(), one_teller_set.clone())
+        .build();
         assert_eq!(
             expression.evaluate(&wsv, &Context::new())?,
             Value::Bool(false)
         );
         // Signed by one teller with less value
-        let expression = WhereBuilder::evaluate(condition)
-            .with_value("usd_quantity".to_owned(), asset_quantity_low)
-            .with_value("signatories".to_owned(), one_teller_set)
-            .build();
+        let expression =
+            WhereBuilder::evaluate(EvaluatesTo::new_evaluates_to_value(condition.into()))
+                .with_value("usd_quantity".to_owned(), asset_quantity_low)
+                .with_value("signatories".to_owned(), one_teller_set)
+                .build();
         assert_eq!(
             expression.evaluate(&wsv, &Context::new())?,
             Value::Bool(true)
@@ -455,10 +476,15 @@ mod tests {
     #[test]
     fn where_expression() -> Result<()> {
         assert_eq!(
-            WhereBuilder::evaluate(ContextValue::new("test_value"))
-                .with_value("test_value".to_owned(), Add::new(2_u32, 3_u32))
-                .build()
-                .evaluate(&WorldStateView::<World>::new(World::new()), &Context::new())?,
+            WhereBuilder::evaluate(EvaluatesTo::new_unchecked(
+                ContextValue::new("test_value").into()
+            ))
+            .with_value(
+                "test_value".to_owned(),
+                EvaluatesTo::new_evaluates_to_value(Add::new(2_u32, 3_u32).into())
+            )
+            .build()
+            .evaluate(&WorldStateView::new(World::new()), &Context::new())?,
             Value::U32(5)
         );
         Ok(())
@@ -466,17 +492,23 @@ mod tests {
 
     #[test]
     fn nested_where_expression() -> Result<()> {
-        let expression = WhereBuilder::evaluate(ContextValue::new("a"))
-            .with_value("a".to_owned(), 2_u32)
-            .build();
+        let expression =
+            WhereBuilder::evaluate(EvaluatesTo::new_unchecked(ContextValue::new("a").into()))
+                .with_value("a".to_owned(), 2_u32)
+                .build();
         let outer_expression: ExpressionBox =
-            WhereBuilder::evaluate(Add::new(expression, ContextValue::new("b")))
-                .with_value("b".to_owned(), 4_u32)
-                .build()
-                .into();
+            WhereBuilder::evaluate(EvaluatesTo::new_evaluates_to_value(
+                Add::new(
+                    EvaluatesTo::new_unchecked(expression.into()),
+                    EvaluatesTo::new_unchecked(ContextValue::new("b").into()),
+                )
+                .into(),
+            ))
+            .with_value("b".to_owned(), 4_u32)
+            .build()
+            .into();
         assert_eq!(
-            outer_expression
-                .evaluate(&WorldStateView::<World>::new(World::new()), &Context::new())?,
+            outer_expression.evaluate(&WorldStateView::new(World::new()), &Context::new())?,
             Value::U32(6)
         );
         Ok(())
@@ -501,7 +533,7 @@ mod tests {
 
     #[test]
     fn if_condition_branches_correctly() -> Result<()> {
-        let wsv = WorldStateView::<World>::new(World::new());
+        let wsv = WorldStateView::new(World::new());
         assert_eq!(
             IfExpression::new(true, 1_u32, 2_u32).evaluate(&wsv, &Context::new())?,
             Value::U32(1)
@@ -518,7 +550,7 @@ mod tests {
     fn incorrect_types_are_caught() -> Result<()> {
         fn assert_eval<I, E>(inst: &I, err_msg: &str)
         where
-            I: Evaluate<World> + Debug,
+            I: Evaluate + Debug,
             I::Value: Debug,
             E: StdError + Eq + Default + Send + Sync + 'static,
         {
@@ -536,23 +568,35 @@ mod tests {
             "Should not be possible to subtract int and bool.",
         );
         assert_eval::<_, ErrorTryFromEnum<Value, bool>>(
-            &And::new(1_u32, Vec::<Value>::new()),
+            &And::new(
+                EvaluatesTo::new_unchecked(1_u32.into()),
+                EvaluatesTo::new_unchecked(Vec::<Value>::new().into()),
+            ),
             "Should not be possible to apply logical and to int and vec.",
         );
         assert_eval::<_, ErrorTryFromEnum<Value, bool>>(
-            &Or::new(1_u32, Vec::<Value>::new()),
+            &Or::new(
+                EvaluatesTo::new_unchecked(1_u32.into()),
+                EvaluatesTo::new_unchecked(Vec::<Value>::new().into()),
+            ),
             "Should not be possible to apply logical or to int and vec.",
         );
         assert_eval::<_, ErrorTryFromEnum<Value, u32>>(
-            &Greater::new(1_u32, Vec::<Value>::new()),
+            &Greater::new(
+                EvaluatesTo::new_unchecked(1_u32.into()),
+                EvaluatesTo::new_unchecked(Vec::<Value>::new().into()),
+            ),
             "Should not be possible to apply greater sign to int and vec.",
         );
         assert_eval::<_, ErrorTryFromEnum<Value, u32>>(
-            &Less::new(1_u32, Vec::<Value>::new()),
+            &Less::new(
+                EvaluatesTo::new_unchecked(1_u32.into()),
+                EvaluatesTo::new_unchecked(Vec::<Value>::new().into()),
+            ),
             "Should not be possible to apply greater sign to int and vec.",
         );
         assert_eval::<_, ErrorTryFromEnum<Value, bool>>(
-            &IfExpression::new(1_u32, 2_u32, 3_u32),
+            &IfExpression::new(EvaluatesTo::new_unchecked(1_u32.into()), 2_u32, 3_u32),
             "If condition should be bool",
         );
         Ok(())
@@ -560,7 +604,7 @@ mod tests {
 
     #[test]
     fn operations_are_correctly_calculated() -> Result<()> {
-        let wsv = WorldStateView::<World>::new(World::new());
+        let wsv = WorldStateView::new(World::new());
         assert_eq!(
             Add::new(1_u32, 2_u32).evaluate(&wsv, &Context::new())?,
             Value::U32(3)
@@ -595,20 +639,20 @@ mod tests {
             Value::Bool(true)
         );
         assert_eq!(
-            Contains::new(vec![1_u32, 3_u32, 5_u32], 3_u32).evaluate(&wsv, &Context::new())?,
+            Contains::new(val_vec![1_u32, 3_u32, 5_u32], 3_u32).evaluate(&wsv, &Context::new())?,
             Value::Bool(true)
         );
         assert_eq!(
-            Contains::new(vec![1_u32, 3_u32, 5_u32], 7_u32).evaluate(&wsv, &Context::new())?,
+            Contains::new(val_vec![1_u32, 3_u32, 5_u32], 7_u32).evaluate(&wsv, &Context::new())?,
             Value::Bool(false)
         );
         assert_eq!(
-            ContainsAll::new(vec![1_u32, 3_u32, 5_u32], vec![1_u32, 5_u32])
+            ContainsAll::new(val_vec![1_u32, 3_u32, 5_u32], val_vec![1_u32, 5_u32])
                 .evaluate(&wsv, &Context::new())?,
             Value::Bool(true)
         );
         assert_eq!(
-            ContainsAll::new(vec![1_u32, 3_u32, 5_u32], vec![1_u32, 5_u32, 7_u32])
+            ContainsAll::new(val_vec![1_u32, 3_u32, 5_u32], val_vec![1_u32, 5_u32, 7_u32])
                 .evaluate(&wsv, &Context::new())?,
             Value::Bool(false)
         );
@@ -622,7 +666,7 @@ mod tests {
             serde_json::to_string(&expression).expect("Failed to serialize.");
         let deserialized_expression: ExpressionBox =
             serde_json::from_str(&serialized_expression).expect("Failed to de-serialize.");
-        let wsv = WorldStateView::<World>::new(World::new());
+        let wsv = WorldStateView::new(World::new());
         assert_eq!(
             expression
                 .evaluate(&wsv, &Context::new())
@@ -639,7 +683,7 @@ mod tests {
         let serialized_expression: Vec<u8> = expression.encode();
         let deserialized_expression = ExpressionBox::decode(&mut serialized_expression.as_slice())
             .expect("Failed to decode.");
-        let wsv = WorldStateView::<World>::new(World::new());
+        let wsv = WorldStateView::new(World::new());
         assert_eq!(
             expression
                 .evaluate(&wsv, &Context::new())

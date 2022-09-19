@@ -1,5 +1,5 @@
 //! Telemetry sent to a server
-
+#![allow(clippy::std_instead_of_core, clippy::std_instead_of_alloc)]
 use std::time::Duration;
 
 use chrono::Local;
@@ -35,7 +35,7 @@ pub async fn start(config: &crate::Configuration, telemetry: Receiver<Telemetry>
             name.clone(),
             write,
             WebsocketSinkFactory::new(url.clone()),
-            RetryPeriod::new(config.min_period, config.max_exponent),
+            RetryPeriod::new(config.min_retry_period, config.max_retry_delay_exponent),
             internal_sender,
         );
         tokio::task::spawn(async move {
@@ -175,7 +175,7 @@ fn prepare_message(name: &str, telemetry: Telemetry) -> Result<(Message, Option<
     let fields = telemetry.fields.0;
     let msg_kind = fields
         .iter()
-        .find_map(|(this_name, map)| (*this_name == "msg").then(|| map))
+        .find_map(|(this_name, map)| (*this_name == "msg").then_some(map))
         .and_then(|v| {
             v.as_str().map(|val| match val {
                 "system.connected" => Some(MessageKind::Initialization),
@@ -360,11 +360,10 @@ mod tests {
         fail_factory_create: Arc<AtomicBool>,
         telemetry_sender: tokio::sync::mpsc::Sender<Telemetry>,
         message_receiver: futures::channel::mpsc::Receiver<Message>,
-        run_handle: JoinHandle<()>,
     }
 
     impl Suite {
-        pub fn new() -> Self {
+        pub fn new() -> (Self, JoinHandle<()>) {
             let (telemetry_sender, telemetry_receiver) = tokio::sync::mpsc::channel(100);
             let (message_sender, message_receiver) = futures::channel::mpsc::channel(100);
             let fail_send = Arc::new(AtomicBool::new(false));
@@ -395,13 +394,13 @@ mod tests {
                     client.run(telemetry_receiver, internal_receiver).await;
                 })
             };
-            Self {
+            let me = Self {
                 fail_send,
                 fail_factory_create,
                 telemetry_sender,
                 message_receiver,
-                run_handle,
-            }
+            };
+            (me, run_handle)
         }
     }
 
@@ -428,18 +427,14 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn send_succeeds() {
-        iroha_logger::init(&iroha_logger::Configuration::default()).unwrap();
-
+    async fn send_succeeds_with_suite(suite: Suite) {
         let Suite {
             telemetry_sender,
             mut message_receiver,
-            run_handle,
             ..
-        } = Suite::new();
+        } = suite;
 
-        // The first message is initialization
+        // The first message is `initialization`
         telemetry_sender
             .send(system_connected_telemetry())
             .await
@@ -475,7 +470,7 @@ mod tests {
             assert!(payload.contains_key("network_id"));
         }
 
-        // The second message is update
+        // The second message is `update`
         telemetry_sender
             .send(system_interval_telemetry(2))
             .await
@@ -499,22 +494,15 @@ mod tests {
             );
             assert_eq!(payload.get("peers"), Some(&Value::Number(2_i32.into())));
         }
-
-        drop(telemetry_sender);
-        run_handle.await.unwrap();
     }
 
-    #[tokio::test]
-    async fn reconnect_fails() {
-        iroha_logger::init(&iroha_logger::Configuration::default()).unwrap();
-
+    async fn reconnect_fails_with_suite(suite: Suite) {
         let Suite {
             fail_send,
             fail_factory_create,
             telemetry_sender,
             mut message_receiver,
-            run_handle,
-        } = Suite::new();
+        } = suite;
 
         // Fail sending the first message
         fail_send.store(true, Ordering::Release);
@@ -522,7 +510,7 @@ mod tests {
             .send(system_connected_telemetry())
             .await
             .unwrap();
-        assert!(message_receiver.try_next().is_err());
+        message_receiver.try_next().unwrap_err();
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // The second message is not sent because the sink is reset
@@ -531,7 +519,7 @@ mod tests {
             .send(system_interval_telemetry(1))
             .await
             .unwrap();
-        assert!(message_receiver.try_next().is_err());
+        message_receiver.try_next().unwrap_err();
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Fail the reconnection
@@ -543,23 +531,16 @@ mod tests {
             .send(system_interval_telemetry(1))
             .await
             .unwrap();
-        assert!(message_receiver.try_next().is_err());
-
-        drop(telemetry_sender);
-        run_handle.await.unwrap();
+        message_receiver.try_next().unwrap_err();
     }
 
-    #[tokio::test]
-    async fn send_after_reconnect_fails() {
-        iroha_logger::init(&iroha_logger::Configuration::default()).unwrap();
-
+    async fn send_after_reconnect_fails_with_suite(suite: Suite) {
         let Suite {
             fail_send,
             telemetry_sender,
             mut message_receiver,
-            run_handle,
             ..
-        } = Suite::new();
+        } = suite;
 
         // Fail sending the first message
         fail_send.store(true, Ordering::Release);
@@ -567,7 +548,7 @@ mod tests {
             .send(system_connected_telemetry())
             .await
             .unwrap();
-        assert!(message_receiver.try_next().is_err());
+        message_receiver.try_next().unwrap_err();
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // The second message is not sent because the sink is reset
@@ -576,20 +557,36 @@ mod tests {
             .send(system_interval_telemetry(1))
             .await
             .unwrap();
-        assert!(message_receiver.try_next().is_err());
+        message_receiver.try_next().unwrap_err();
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Fail sending the first message after reconnect
         fail_send.store(true, Ordering::Release);
         tokio::time::sleep(Duration::from_secs(1)).await;
-        assert!(message_receiver.try_next().is_err());
+        message_receiver.try_next().unwrap_err();
 
         // The message is sent
         fail_send.store(false, Ordering::Release);
         tokio::time::sleep(Duration::from_secs(1)).await;
-        assert!(message_receiver.try_next().is_ok());
-
-        drop(telemetry_sender);
-        run_handle.await.unwrap();
+        message_receiver.try_next().unwrap();
     }
+
+    macro_rules! test_with_suite {
+        ($ident:ident, $future:ident) => {
+            #[tokio::test]
+            async fn $ident() {
+                iroha_logger::init(&iroha_logger::Configuration::default()).unwrap();
+                let (suite, run_handle) = Suite::new();
+                $future(suite).await;
+                run_handle.await.unwrap();
+            }
+        };
+    }
+
+    test_with_suite!(send_succeeds, send_succeeds_with_suite);
+    test_with_suite!(reconnect_fails, reconnect_fails_with_suite);
+    test_with_suite!(
+        send_after_reconnect_fails,
+        send_after_reconnect_fails_with_suite
+    );
 }

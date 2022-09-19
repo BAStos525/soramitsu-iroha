@@ -1,10 +1,15 @@
 //! Structs related to topology of the network - order and predefined roles of peers.
-
+#![allow(
+    clippy::new_without_default,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc,
+    clippy::arithmetic
+)]
 use std::{collections::HashSet, iter};
 
 use eyre::{eyre, Context, Result};
 use iroha_crypto::{Hash, HashOf, SignatureOf};
-use iroha_data_model::{prelude::PeerId, transaction::VersionedTransaction};
+use iroha_data_model::{prelude::PeerId, transaction::VersionedSignedTransaction};
 use iroha_schema::IntoSchema;
 use parity_scale_codec::{Decode, Encode};
 use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
@@ -320,9 +325,9 @@ impl Topology {
     /// Fails if there are no such peer with this key and if signature verification fails
     pub fn verify_signature_with_role(
         &self,
-        signature: &SignatureOf<VersionedTransaction>,
+        signature: &SignatureOf<VersionedSignedTransaction>,
         role: Role,
-        tx: &HashOf<VersionedTransaction>,
+        tx: &HashOf<VersionedSignedTransaction>,
     ) -> Result<()> {
         if role
             .peers(self)
@@ -361,7 +366,7 @@ impl Topology {
 
     /// Sorted peers that this topology has.
     pub fn sorted_peers(&self) -> &[PeerId] {
-        &*self.sorted_peers
+        &self.sorted_peers
     }
 
     /// Block hash on which this topology is based.

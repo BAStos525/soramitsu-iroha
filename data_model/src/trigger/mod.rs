@@ -2,27 +2,48 @@
 
 #[cfg(not(feature = "std"))]
 use alloc::{format, string::String, vec::Vec};
-use core::{cmp, fmt, str::FromStr};
+use core::{cmp, str::FromStr};
 
+use derive_more::Display;
 use iroha_schema::IntoSchema;
 use parity_scale_codec::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    events::prelude::*, metadata::Metadata, transaction::Executable, Identifiable, Name, ParseError,
+    events::prelude::*, metadata::Metadata, prelude::Domain, transaction::Executable, Identifiable,
+    Name, ParseError, Registered,
 };
 
 pub mod set;
 
 /// Type which is used for registering a `Trigger`.
 #[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, Deserialize, Serialize, IntoSchema,
+    Debug, Display, Clone, PartialEq, Eq, Decode, Encode, Deserialize, Serialize, IntoSchema,
 )]
+#[display(fmt = "@@{id}")]
 pub struct Trigger<F: Filter> {
     /// [`Id`] of the [`Trigger`].
     pub id: <Trigger<FilterBox> as Identifiable>::Id,
     /// Action to be performed when the trigger matches.
     pub action: action::Action<F>,
+}
+
+impl Registered for Trigger<FilterBox> {
+    type With = Self;
+}
+
+impl<F: Filter + PartialEq> PartialOrd for Trigger<F> {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.id.cmp(&other.id))
+    }
+}
+
+impl<F: Filter + Eq> Ord for Trigger<F> {
+    #[inline]
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.id.cmp(&other.id)
+    }
 }
 
 impl<F: Filter> Trigger<F> {
@@ -118,7 +139,10 @@ impl TryFrom<Trigger<FilterBox>> for Trigger<ExecuteTriggerEventFilter> {
 
 impl Identifiable for Trigger<FilterBox> {
     type Id = Id;
-    type RegisteredWith = Self;
+
+    fn id(&self) -> &Self::Id {
+        &self.id
+    }
 }
 
 /// Identification of a `Trigger`.
@@ -139,36 +163,62 @@ impl Identifiable for Trigger<FilterBox> {
 pub struct Id {
     /// Name given to trigger by its creator.
     pub name: Name,
-}
-
-impl fmt::Display for Id {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.name.fmt(f)
-    }
+    /// DomainId of domain of the trigger.
+    pub domain_id: Option<<Domain as Identifiable>::Id>,
 }
 
 impl Id {
-    /// Construct [`Id`]
-    pub fn new(name: Name) -> Self {
-        Self { name }
+    /// Constructs a new [`Id`].
+    #[inline]
+    pub const fn new(name: Name, domain_id: <Domain as Identifiable>::Id) -> Self {
+        Self {
+            name,
+            domain_id: Some(domain_id),
+        }
+    }
+}
+
+impl core::fmt::Display for Id {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if let Some(ref domain_id) = self.domain_id {
+            write!(f, "{}${}", self.name, domain_id)
+        } else {
+            write!(f, "{}", self.name)
+        }
     }
 }
 
 impl FromStr for Id {
     type Err = ParseError;
 
-    fn from_str(name: &str) -> Result<Self, Self::Err> {
-        Ok(Self {
-            name: Name::from_str(name)?,
-        })
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut split = s.split('$');
+        match (split.next(), split.next(), split.next()) {
+            (Some(""), _, _) => Err(ParseError {
+                reason: "Trigger ID cannot be empty",
+            }),
+            (Some(name), None, _) => Ok(Self {
+                name: Name::from_str(name)?,
+                domain_id: None,
+            }),
+            (Some(name), Some(domain_id), None) if !domain_id.is_empty() => Ok(Self {
+                name: Name::from_str(name)?,
+                domain_id: Some(<Domain as Identifiable>::Id::from_str(domain_id)?),
+            }),
+            _ => Err(ParseError {
+                reason: "Trigger ID should have format `name` or `name$domain_id`",
+            }),
+        }
     }
 }
+
 pub mod action {
     //! Contains trigger action and common trait for all actions
 
-    use iroha_data_primitives::atomic::AtomicU32;
+    use iroha_primitives::atomic::AtomicU32;
 
     use super::*;
+    use crate::HasMetadata;
 
     /// Trait for common methods for all [`Action`]'s
     pub trait ActionTrait {
@@ -225,6 +275,12 @@ pub mod action {
         pub filter: F,
         /// Metadata used as persistent storage for trigger data.
         pub metadata: Metadata,
+    }
+
+    impl<F: Filter> HasMetadata for Action<F> {
+        fn metadata(&self) -> &crate::metadata::Metadata {
+            &self.metadata
+        }
     }
 
     impl<F: Filter> Action<F> {
@@ -319,7 +375,7 @@ pub mod action {
     }
 
     /// Enumeration of possible repetitions schemes.
-    #[derive(Debug, Clone, Encode, Decode, Serialize, Deserialize, IntoSchema)]
+    #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, Serialize, Deserialize, IntoSchema)]
     pub enum Repeats {
         /// Repeat indefinitely, until the trigger is unregistered.
         Indefinitely,
@@ -343,17 +399,6 @@ pub mod action {
             }
         }
     }
-
-    impl PartialEq for Repeats {
-        fn eq(&self, other: &Self) -> bool {
-            match (self, other) {
-                (Self::Exactly(l0), Self::Exactly(r0)) => l0 == r0,
-                _ => false,
-            }
-        }
-    }
-
-    impl Eq for Repeats {}
 
     impl From<u32> for Repeats {
         fn from(num: u32) -> Self {

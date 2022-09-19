@@ -9,8 +9,8 @@ use iroha_core::{
     prelude::*,
 };
 use iroha_data_model::{prelude::*, ParseError};
-use small::SmallStr;
-use test_network::{Peer as TestPeer, TestRuntime};
+use iroha_primitives::small::SmallStr;
+use test_network::{prepare_test_for_nextest, Peer as TestPeer, PeerBuilder, TestRuntime};
 use tokio::runtime::Runtime;
 
 fn asset_id_new(
@@ -36,26 +36,32 @@ fn find_rate_and_make_exchange_isi_should_be_valid() {
     let _instruction = Pair::new(
         TransferBox::new(
             IdBox::AssetId(asset_id_new("btc", "crypto", "seller", "company")),
-            Expression::Query(
-                FindAssetQuantityById::new(asset_id_new(
-                    "btc2eth_rate",
-                    "exchange",
-                    "dex",
-                    "exchange",
-                ))
+            EvaluatesTo::new_evaluates_to_value(
+                Expression::Query(
+                    FindAssetQuantityById::new(asset_id_new(
+                        "btc2eth_rate",
+                        "exchange",
+                        "dex",
+                        "exchange",
+                    ))
+                    .into(),
+                )
                 .into(),
             ),
             IdBox::AssetId(asset_id_new("btc", "crypto", "buyer", "company")),
         ),
         TransferBox::new(
             IdBox::AssetId(asset_id_new("btc", "crypto", "buyer", "company")),
-            Expression::Query(
-                FindAssetQuantityById::new(asset_id_new(
-                    "btc2eth_rate",
-                    "exchange",
-                    "dex",
-                    "exchange",
-                ))
+            EvaluatesTo::new_evaluates_to_value(
+                Expression::Query(
+                    FindAssetQuantityById::new(asset_id_new(
+                        "btc2eth_rate",
+                        "exchange",
+                        "dex",
+                        "exchange",
+                    ))
+                    .into(),
+                )
                 .into(),
             ),
             IdBox::AssetId(asset_id_new("btc", "crypto", "seller", "company")),
@@ -67,12 +73,15 @@ fn find_rate_and_make_exchange_isi_should_be_valid() {
 fn find_rate_and_check_it_greater_than_value_isi_should_be_valid() {
     let _instruction = IfInstruction::new(
         Not::new(Greater::new(
-            QueryBox::from(FindAssetQuantityById::new(asset_id_new(
-                "btc2eth_rate",
-                "exchange",
-                "dex",
-                "exchange",
-            ))),
+            EvaluatesTo::new_unchecked(
+                QueryBox::from(FindAssetQuantityById::new(asset_id_new(
+                    "btc2eth_rate",
+                    "exchange",
+                    "dex",
+                    "exchange",
+                )))
+                .into(),
+            ),
             10_u32,
         )),
         FailBox::new("rate is less or equal to value"),
@@ -97,12 +106,15 @@ impl FindRateAndCheckItGreaterThanValue {
     pub fn into_isi(self) -> IfInstruction {
         IfInstruction::new(
             Not::new(Greater::new(
-                QueryBox::from(FindAssetQuantityById::new(AssetId::new(
-                    format!("{}2{}_rate#exchange", self.from_currency, self.to_currency)
-                        .parse()
-                        .expect("Valid"),
-                    AccountId::from_str("dex@exchange").expect("Valid"),
-                ))),
+                EvaluatesTo::new_unchecked(
+                    QueryBox::from(FindAssetQuantityById::new(AssetId::new(
+                        format!("{}2{}_rate#exchange", self.from_currency, self.to_currency)
+                            .parse()
+                            .expect("Valid"),
+                        AccountId::from_str("dex@exchange").expect("Valid"),
+                    )))
+                    .into(),
+                ),
                 self.value,
             )),
             FailBox::new("rate is less or equal to value"),
@@ -143,6 +155,7 @@ mod register {
 #[allow(unused_must_use)]
 #[test]
 fn find_rate_and_make_exchange_isi_should_succeed() {
+    prepare_test_for_nextest!();
     let kp = KeyPair::new(
         PublicKey::from_str(
             r#"ed01207233bfc89dcbd68c19fde6ce6158225298ec1131b6a130d1aeb454c1ab5183c0"#,
@@ -165,14 +178,20 @@ fn find_rate_and_make_exchange_isi_should_succeed() {
             "wonderland".parse().expect("Valid"),
             kp.public_key().clone(),
         ),
-        &configuration.genesis,
+        Some(&configuration.genesis),
         &configuration.sumeragi.transaction_limits,
     )
+    .unwrap()
     .unwrap();
     let rt = Runtime::test();
     let mut client_configuration = get_client_config(&configuration.sumeragi.key_pair);
 
-    rt.block_on(peer.start_with_config_permissions(configuration, genesis, AllowAll, AllowAll));
+    let builder = PeerBuilder::new()
+        .with_configuration(configuration)
+        .with_instruction_judge(Box::new(AllowAll::new()))
+        .with_genesis(genesis);
+
+    rt.block_on(builder.start_with_peer(&mut peer));
     thread::sleep(pipeline_time);
 
     client_configuration.torii_api_url =
@@ -207,26 +226,32 @@ fn find_rate_and_make_exchange_isi_should_succeed() {
             Pair::new(
                 TransferBox::new(
                     IdBox::AssetId(asset_id_new("btc", "crypto", "seller", "company")),
-                    Expression::Query(
-                        FindAssetQuantityById::new(asset_id_new(
-                            "btc2eth_rate",
-                            "exchange",
-                            "dex",
-                            "exchange",
-                        ))
+                    EvaluatesTo::new_evaluates_to_value(
+                        Expression::Query(
+                            FindAssetQuantityById::new(asset_id_new(
+                                "btc2eth_rate",
+                                "exchange",
+                                "dex",
+                                "exchange",
+                            ))
+                            .into(),
+                        )
                         .into(),
                     ),
                     IdBox::AssetId(asset_id_new("btc", "crypto", "buyer", "company")),
                 ),
                 TransferBox::new(
                     IdBox::AssetId(asset_id_new("eth", "crypto", "buyer", "company")),
-                    Expression::Query(
-                        FindAssetQuantityById::new(asset_id_new(
-                            "btc2eth_rate",
-                            "exchange",
-                            "dex",
-                            "exchange",
-                        ))
+                    EvaluatesTo::new_evaluates_to_value(
+                        Expression::Query(
+                            FindAssetQuantityById::new(asset_id_new(
+                                "btc2eth_rate",
+                                "exchange",
+                                "dex",
+                                "exchange",
+                            ))
+                            .into(),
+                        )
                         .into(),
                     ),
                     IdBox::AssetId(asset_id_new("eth", "crypto", "seller", "company")),

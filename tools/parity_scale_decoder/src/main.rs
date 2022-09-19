@@ -1,5 +1,9 @@
 //! Parity Scale decoder tool for Iroha data types. For usage run with `--help`
-
+#![allow(
+    clippy::arithmetic,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc
+)]
 #![allow(clippy::print_stdout, clippy::use_debug, clippy::unnecessary_wraps)]
 
 use std::{collections::BTreeMap, fmt::Debug, fs, io, path::PathBuf};
@@ -34,7 +38,7 @@ struct DecodeArgs {
 
 /// Function pointer to [`DumpDecoded::dump_decoded()`]
 ///
-/// Function pointer is used cause trait object can not be used
+/// Function pointer is used cause trait object cannot be used
 /// due to [`Sized`] bound in [`Decode`] trait
 pub type DumpDecodedPtr = fn(&[u8], &mut dyn io::Write) -> Result<(), eyre::Error>;
 
@@ -49,7 +53,7 @@ pub trait DumpDecoded: Debug + Decode {
     /// # Errors
     /// - If decoding from *Parity Scale Codec* fails
     /// - If writing into `w` fails
-    fn dump_decoded(mut input: &[u8], w: &mut dyn io::Write) -> Result<(), eyre::Error> {
+    fn dump_decoded(mut input: &[u8], w: &mut dyn io::Write) -> Result<()> {
         let obj = <Self as Decode>::decode(&mut input)?;
         #[allow(clippy::use_debug)]
         writeln!(w, "{:#?}", obj)?;
@@ -119,12 +123,9 @@ impl<'map> Decoder<'map> {
             .iter()
             .filter_map(|(type_name, dump_decoded)| {
                 let mut buf = Vec::new();
-                dump_decoded(bytes, &mut buf)
-                    .ok()
-                    .and_then(|_| String::from_utf8(buf).ok())
-                    .and_then(|formatted| {
-                        writeln!(writer, "{}:\n{}", type_name.italic().cyan(), formatted).ok()
-                    })
+                dump_decoded(bytes, &mut buf).ok()?;
+                let formatted = String::from_utf8(buf).ok()?;
+                writeln!(writer, "{}:\n{}", type_name.italic().cyan(), formatted).ok()
             })
             .count();
         match count {

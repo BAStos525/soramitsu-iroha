@@ -1,6 +1,11 @@
 //! Iroha schema generation support library. Contains the
 //! `build_schemas` `fn`, which is the function which decides which
 //! types are included in the schema.
+#![allow(
+    clippy::arithmetic,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc
+)]
 
 use iroha_core::{
     block::{stream::prelude::*, VersionedValidBlock},
@@ -13,7 +18,7 @@ macro_rules! schemas {
     ($($t:ty),* $(,)?) => {{
         let mut out = MetaMap::new();
         $(<$t as IntoSchema>::schema(&mut out);)*
-            out
+        out
     }};
 }
 
@@ -34,14 +39,14 @@ pub fn build_schemas() -> MetaMap {
         VersionedEventSubscriberMessage,
         VersionedPaginatedQueryResult,
         VersionedSignedQueryRequest,
-        VersionedTransaction,
+        VersionedSignedTransaction,
         QueryError,
 
         RegistrableBox,
 
         // Even though these schemas are not exchanged between server and client,
         // they can be useful to the client to generate and validate their hashes
-        MerkleTree<VersionedTransaction>,
+        MerkleTree<VersionedSignedTransaction>,
         VersionedValidBlock,
     }
 }

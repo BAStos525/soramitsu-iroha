@@ -1,8 +1,8 @@
-name: I2::Dev::Deploy
+name: I2::Dev::Publish
 
 on:
   push:
-    branches: [feature/DOPS-1788/M1-build]
+    branches: [iroha2-dev]
 
 env:
   CARGO_TERM_COLOR: always
@@ -11,207 +11,146 @@ env:
 # no point in burning our AWS self-hosted runners' time. Hence
 # `ubuntu-latest` and not `[self-hosted, Linux]`.
 jobs:
-  deploy:
-    runs-on: [self-hosted,macOS,ARM64,mac-common-1,iroha]
-    # container:
-    #   image: 7272721/i2-ci:latest
+  dockerhub:
+    runs-on: ubuntu-latest
+    container:
+      image: 7272721/i2-ci:nightly
     steps:
-      - uses: actions/checkout@v2
-      - uses: Swatinem/rust-cache@v1
-      - name: set up buildx
-        uses: docker/setup-buildx-action@v1
-        id: buildx
-        with:
-          install: true
- #         driver: docker
-
-      # - name: Build iroha2:env container
-      #   uses: docker/build-push-action@v3
-      #   with:
-      #     load: true
-      #     tags: iroha2:env
-      #     context: .
-      #     file: Dockerfile.ci        
-
-      # - name: Build iroha2:build docker image
-      #   uses: docker/build-push-action@v3
-      #   with:
-      #     load: true
-      #     tags: iroha2:build
-      #     context: .
-      #     file: Dockerfile.build
-
-      # - name: build iroha2:dev docker image
-      #   run: |
-      #     docker build -f Dockerfile -t bastos525/iroha2:m1 .
-      # - name: list docker images
-      #   run: |
-      #     docker images
-      - name: Login to DockerHub
-        uses: docker/login-action@v1
+      - uses: actions/checkout@v3
+      - uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      # - name: push iroha2:dev docker image
-      #   run: |
-      #     docker push bastos525/iroha2:m1
-
-
-      - name: Build iroha2:m1 docker image
+      - name: Build and push iroha2-base image
+        # TODO Add `if` condition #2732
         uses: docker/build-push-action@v3
         with:
           push: true
-          tags: bastos525/iroha2:m1
+          tags: hyperledger/iroha2-base:dev
+          labels: commit=${{ github.sha }}
+          file: Dockerfile.base
+      - name: Build and push iroha2:dev image
+        uses: docker/build-push-action@v3
+        with:
+          push: true
+          tags: hyperledger/iroha2:dev
+          labels: commit=${{ github.sha }}
+          build-args: TAG=dev
+          # This context specification is required
           context: .
-          file: Dockerfile
 
-      # - name: Build and push docker image (load-rs:dev)
-      #   run: |
-      #     sleep 10s
-      #     echo "wait to other workflow"
-      # - uses: convictional/trigger-workflow-and-wait@v1.6.2
-      #   with:
-      #     owner: soramitsu
-      #     repo: iroha2-longevity-load-rs
-      #     github_token: ${{ secrets.G_ACCESS_TOKEN }}
-      #     workflow_file_name: load-rs-push-from-dev.yaml
-      #     ref: dev
+  load-rs:
+    runs-on: ubuntu-latest
+    container:
+      image: 7272721/i2-ci:nightly
+    steps:
+      - name: Check and merge Cargo dependencies (load-rs:dev)
+        run: |
+          sleep 10s
+          echo "wait to other workflow"
+      - uses: convictional/trigger-workflow-and-wait@v1.6.2
+        with:
+          owner: soramitsu
+          repo: iroha2-longevity-load-rs
+          github_token: ${{ secrets.G_ACCESS_TOKEN }}
+          workflow_file_name: update-dependencies.yaml
+          ref: iroha2-dev
 
+      - name: Build and push docker image (load-rs:dev)
+        run: |
+          sleep 10s
+          echo "wait to other workflow"
+      - uses: convictional/trigger-workflow-and-wait@v1.6.2
+        with:
+          owner: soramitsu
+          repo: iroha2-longevity-load-rs
+          github_token: ${{ secrets.G_ACCESS_TOKEN }}
+          workflow_file_name: load-rs-push-from-dev.yaml
+          ref: iroha2-dev
 
-  # archive-and-publish-schema:
-  #   runs-on: ubuntu-latest
-  #   container:
-  #     image: 7272721/i2-ci:latest
-  #   steps:
-  #     - uses: actions/checkout@v2
-  #     - uses: Swatinem/rust-cache@v1
-  #     - name: Build
-  #       run: mold --run cargo build --release --verbose
-  #     - name: Archive build
-  #       uses: actions/upload-artifact@v2
-  #       with:
-  #         name: cargo-build-release
-  #         path: target/release/iroha
-  #     - name: Archive Client CLI build
-  #       uses: actions/upload-artifact@v2
-  #       with:
-  #         name: cargo-client-cli-build-release
-  #         path: target/release/iroha_client_cli
-  #     - name: Archive Crypto CLI build
-  #       uses: actions/upload-artifact@v2
-  #       with:
-  #         name: cargo-crypto-cli-build-release
-  #         path: target/release/kagami
-  #     - name: Run schema generation
-  #       run: |
-  #         mkdir -p target/schema
-  #         cargo run --bin kagami -- schema >target/schema/schema.json
-  #     - name: Upload schema
-  #       uses: actions/upload-artifact@v2
-  #       with:
-  #         name: schema
-  #         path: target/schema
+  archive_binaries_and_schema:
+    runs-on: ubuntu-latest
+    container:
+      image: 7272721/i2-ci:nightly
+    steps:
+      - uses: actions/checkout@v3
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: mold --run cargo build --release --verbose
+      - name: Archive iroha
+        uses: actions/upload-artifact@v3
+        with:
+          name: cargo-build-release
+          path: target/release/iroha
+      - name: Archive iroha_client_cli
+        uses: actions/upload-artifact@v3
+        with:
+          name: cargo-client-cli-build-release
+          path: target/release/iroha_client_cli
+      - name: Archive kagami
+        uses: actions/upload-artifact@v3
+        with:
+          name: cargo-crypto-cli-build-release
+          path: target/release/kagami
+      - name: Generate schema
+        run: |
+          mkdir -p target/schema
+          cargo run --bin kagami -- schema >target/schema/schema.json
+      - name: Archive schema
+        uses: actions/upload-artifact@v3
+        with:
+          name: schema
+          path: target/schema
 
-  # print-telemetry:
-  #   runs-on: ubuntu-latest
-  #   container:
-  #     image: 7272721/i2-ci:latest
-  #   steps:
-  #     - uses: actions/checkout@v2
-  #     - uses: Swatinem/rust-cache@v1
-  #     - name: Run debug tests and save telemetry
-  #       env:
-  #         TELEMETRY_FILE: ../target/telemetry/debug.json.lz4
-  #       run: |
-  #         mkdir -p target/telemetry
-  #         cargo test -p iroha_client --all-features -- unstable_network || true
-  #     - name: Run release tests and save telemetry
-  #       env:
-  #         TELEMETRY_FILE: ../target/telemetry/release.json.lz4
-  #       run: mold --run cargo test -p iroha_client --all-features --release -- unstable_network || true
-  #     - name: Install script dependencies
-  #       run: |
-  #         apt-get update
-  #         apt-get install -y --no-install-recommends lz4 jq
-  #     - name: Print debug telemetry info
-  #       run: |
-  #         ./scripts/analyze_telemetry.sh target/telemetry/debug.json.lz4 >target/telemetry/debug.md
-  #     - name: Print release telemetry info
-  #       run: ./scripts/analyze_telemetry.sh target/telemetry/release.json.lz4 >target/telemetry/release.md
-  #     - name: Print debug telemetry info
-  #       run: |
-  #         echo '## Debug build'
-  #         cat target/telemetry/debug.md
-  #     - name: Print release telemetry info
-  #       run: |
-  #         echo '## Release build'
-  #         cat target/telemetry/release.md
-  #     - name: Create telemetry comment
-  #       uses: actions-ecosystem/action-create-comment@v1
-  #       with:
-  #         body: |
-  #           \# Telemetry info
-  #           \## Debug build
-  #           ${{ steps.debug-telemetry.outputs.body }}
-  #           \## Release build
-  #           ${{ steps.release-telemetry.outputs.body }}
-  #         github_token: ${{ secrets.github_token }}
-  #       continue-on-error: true
-  #     - name: Archive telemetry
-  #       uses: actions/upload-artifact@v2
-  #       with:
-  #         name: telemetry
-  #         path: target/telemetry
-
-  # # Coverage is both in PR and in push pipelines so that:
-  # # 1. PR can get coverage report from bot.
-  # # 2. Coverage bot can have results from `iroha2-dev` to report coverage changes.
-  # coverage:
-  #   runs-on: ubuntu-latest
-  #   container:
-  #     image: 7272721/i2-ci:latest
-  #   steps:
-  #     - name: Checkout
-  #       uses: actions/checkout@v2
-  #     - name: Find hash
-  #       id: hash
-  #       uses: theowenyoung/folder-hash@v2.0.1
-  #       with:
-  #         path: |
-  #           .
-  #     - name: Copy a file from s3
-  #       id: copy
-  #       uses: prewk/s3-cp-action@v2
-  #       continue-on-error: true
-  #       with:
-  #         aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-  #         aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-  #         source: 's3://infra-prod-docs/hyperledger/iroha2/codecov/lcov-${{ steps.hash.outputs.hash }}.xml'
-  #         dest: 'lcov.xml'
-  #     - name: Check coverage file existence
-  #       id: check_files
-  #       uses: andstor/file-existence-action@v1
-  #       with:
-  #         files: "lcov.xml"
-  #       # TODO Remove these steps #2165 ??
-  #     - uses: actions-rs/toolchain@v1
-  #       with:
-  #         toolchain: stable
-  #         override: true
-  #         components: llvm-tools-preview
-  #     - uses: taiki-e/install-action@cargo-llvm-cov      
-  #     - uses: Swatinem/rust-cache@v1
-  #     - name: Run tests and generate lcov report
-  #       if: steps.check_files.outputs.files_exists == 'false'
-  #       run: mold --run cargo llvm-cov --all-features --workspace --lcov --output-path lcov.xml        
-  #     - name: Upload coverage to Codecov
-  #       uses: codecov/codecov-action@v3
-  #       with:
-  #         file: lcov.xml
-  #     - name: Copy a file to s3
-  #       uses: prewk/s3-cp-action@v2
-  #       with:
-  #         aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-  #         aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-  #         source: 'lcov.xml'
-  #         dest: 's3://infra-prod-docs/hyperledger/iroha2/codecov/lcov-${{ steps.hash.outputs.hash }}.xml'
+  telemetry:
+    # FIXME #2646
+    if: false
+    runs-on: ubuntu-latest
+    container:
+      image: 7272721/i2-ci:nightly
+    steps:
+      - uses: actions/checkout@v3
+      - uses: Swatinem/rust-cache@v2
+      - name: Run debug tests and save telemetry
+        env:
+          TELEMETRY_FILE: ../target/telemetry/debug.json.lz4
+        run: |
+          mkdir -p target/telemetry
+          mold --run cargo test -p iroha_client --all-features -- unstable_network || true
+      - name: Run release tests and save telemetry
+        env:
+          TELEMETRY_FILE: ../target/telemetry/release.json.lz4
+        run: mold --run cargo test -p iroha_client --all-features --release -- unstable_network || true
+      - name: Install script dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends lz4 jq
+      - name: Print debug telemetry info
+        run: |
+          ./scripts/analyze_telemetry.sh target/telemetry/debug.json.lz4 >target/telemetry/debug.md
+      - name: Print release telemetry info
+        run: ./scripts/analyze_telemetry.sh target/telemetry/release.json.lz4 >target/telemetry/release.md
+      - name: Print debug telemetry info
+        run: |
+          echo '## Debug build'
+          cat target/telemetry/debug.md
+      - name: Print release telemetry info
+        run: |
+          echo '## Release build'
+          cat target/telemetry/release.md
+      - name: Create telemetry comment
+        uses: actions-ecosystem/action-create-comment@v1
+        with:
+          body: |
+            \# Telemetry info
+            \## Debug build
+            ${{ steps.debug-telemetry.outputs.body }}
+            \## Release build
+            ${{ steps.release-telemetry.outputs.body }}
+          github_token: ${{ secrets.github_token }}
+        continue-on-error: true
+      - name: Archive telemetry
+        uses: actions/upload-artifact@v3
+        with:
+          name: telemetry
+          path: target/telemetry

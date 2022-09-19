@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::restriction)]
 
 use std::{
     fmt::Debug,
@@ -11,7 +11,6 @@ use std::{
 
 use futures::{prelude::*, stream::FuturesUnordered};
 use iroha_actor::{broker::*, prelude::*};
-use iroha_config::logger;
 use iroha_crypto::{KeyPair, PublicKey};
 use iroha_logger::{prelude::*, Configuration, Level};
 use iroha_p2p::{
@@ -20,6 +19,7 @@ use iroha_p2p::{
     *,
 };
 use parity_scale_codec::{Decode, Encode};
+use test_network::{prepare_test_for_nextest, unique_port};
 use tokio::time::Duration;
 
 #[derive(iroha_actor::Message, Clone, Debug, Decode, Encode)]
@@ -34,7 +34,7 @@ static INIT: Once = Once::new();
 fn setup_logger() {
     INIT.call_once(|| {
         let log_config = Configuration {
-            max_log_level: Level(logger::Level::TRACE).into(),
+            max_log_level: Level::TRACE.into(),
             compact_mode: false,
             ..Configuration::default()
         };
@@ -48,6 +48,7 @@ fn setup_logger() {
 /// are properly sent and received using encryption and serialization/deserialization.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn network_create() {
+    prepare_test_for_nextest!();
     let delay = Duration::from_millis(200);
     setup_logger();
     info!("Starting network tests...");
@@ -114,6 +115,7 @@ impl Handler<TestMessage> for TestActor {
 /// This peer connects to our second network, emulating some distant peer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_networks() {
+    prepare_test_for_nextest!();
     let delay = Duration::from_millis(200);
     setup_logger();
     let public_key1 = iroha_crypto::PublicKey::from_str(
@@ -197,12 +199,17 @@ async fn two_networks() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn multiple_networks() {
+    prepare_test_for_nextest!();
     let log_config = Configuration {
-        max_log_level: Level(logger::Level::TRACE).into(),
+        max_log_level: Level::TRACE.into(),
         compact_mode: false,
         ..Configuration::default()
     };
-    drop(iroha_logger::init(&log_config));
+    // Can't use logger because it's failed to initialize.
+    #[allow(clippy::print_stderr)]
+    if let Err(err) = iroha_logger::init(&log_config) {
+        eprintln!("Failed to initialize logger: {err}");
+    }
     info!("Starting...");
 
     let delay = Duration::from_millis(200);
@@ -265,7 +272,7 @@ async fn start_network(
         broker: broker.clone(),
         messages,
     };
-    drop(actor.start().await);
+    actor.start().await;
 
     let network = Network::<TestMessage>::new(
         broker.clone(),

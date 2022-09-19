@@ -1,29 +1,30 @@
 //! Contains the end-point querying logic.  This is where you need to
 //! add any custom end-point related logic.
+#![allow(
+    clippy::arithmetic,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc
+)]
 use std::{
-    collections::HashMap,
-    fmt::{self, Debug, Formatter},
-    marker::PhantomData,
-    sync::mpsc,
-    thread,
-    time::Duration,
+    collections::HashMap, fmt::Debug, marker::PhantomData, sync::mpsc, thread, time::Duration,
 };
 
+use derive_more::{DebugCustom, Display};
 use eyre::{eyre, Result, WrapErr};
 use http_default::WebSocketStream;
-use iroha_config::{GetConfiguration, PostConfiguration};
+use iroha_config::{client::Configuration, torii::uri, GetConfiguration, PostConfiguration};
 use iroha_core::smartcontracts::isi::query::Error as QueryError;
 use iroha_crypto::{HashOf, KeyPair};
-use iroha_data_model::{prelude::*, query::SignedQueryRequest};
+use iroha_data_model::{predicate::PredicateBox, prelude::*, query::SignedQueryRequest};
 use iroha_logger::prelude::*;
+use iroha_primitives::small::SmallStr;
 use iroha_telemetry::metrics::Status;
 use iroha_version::prelude::*;
+use parity_scale_codec::DecodeAll;
 use rand::Rng;
 use serde::de::DeserializeOwned;
-use small::SmallStr;
 
 use crate::{
-    config::Configuration,
     http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
     http_default::{self, DefaultRequestBuilder, WebSocketError, WebSocketMessage},
 };
@@ -66,15 +67,25 @@ where
             resp: &Response<Vec<u8>>,
         ) -> QueryHandlerResult<VersionedPaginatedQueryResult> {
             match resp.status() {
-                StatusCode::OK => VersionedPaginatedQueryResult::decode_versioned(resp.body())
-                    .wrap_err("Failed to decode response body as VersionedPaginatedQueryResult")
-                    .map_err(Into::into),
+                StatusCode::OK => {
+                    let res =
+                        try_decode_all_or_just_decode!(VersionedPaginatedQueryResult, resp.body());
+                    res.wrap_err(
+                        "Failed to decode the whole response body as `VersionedPaginatedQueryResult`",
+                    )
+                    .map_err(Into::into)
+                }
                 StatusCode::BAD_REQUEST
                 | StatusCode::UNAUTHORIZED
                 | StatusCode::FORBIDDEN
                 | StatusCode::NOT_FOUND => {
-                    let err = QueryError::decode(&mut resp.body().as_ref())
-                        .wrap_err("Failed to decode response body as QueryError")?;
+                    let mut res = QueryError::decode_all(&mut resp.body().as_ref());
+                    if res.is_err() {
+                        warn!("Can't decode query error, not all bytes were consumed");
+                        res = QueryError::decode(&mut resp.body().as_ref());
+                    }
+                    let err =
+                        res.wrap_err("Failed to decode the whole response body as `QueryError`")?;
                     Err(ClientQueryError::QueryError(err))
                 }
                 _ => Err(ResponseReport::with_msg("Unexpected query response", resp).into()),
@@ -181,6 +192,8 @@ where
 {
     /// Query output
     pub output: R::Output,
+    /// The filter that was applied to the output.
+    pub filter: PredicateBox,
     /// See [`iroha_data_model::prelude::PaginatedQueryResult`]
     pub pagination: Pagination,
     /// See [`iroha_data_model::prelude::PaginatedQueryResult`]
@@ -210,6 +223,7 @@ where
             result,
             pagination,
             total,
+            filter,
         }: PaginatedQueryResult,
     ) -> Result<Self> {
         let QueryResult(result) = result;
@@ -221,18 +235,24 @@ where
             output,
             pagination,
             total,
+            filter,
         })
     }
 }
 
 /// Iroha client
-#[derive(Clone)]
+#[derive(Clone, DebugCustom, Display)]
+#[debug(
+    fmt = "Client {{ torii: {torii_url}, telemetry_url: {telemetry_url}, public_key: {} }}",
+    "key_pair.public_key()"
+)]
+#[display(fmt = "{}@{torii_url}", "key_pair.public_key()")]
 pub struct Client {
     /// Url for accessing iroha node
     torii_url: SmallStr,
     /// Url to report status for administration
     telemetry_url: SmallStr,
-    /// Limits to which transactions must adhere to
+    /// The limits to which transactions must adhere to
     transaction_limits: TransactionLimits,
     /// Accounts keypair
     key_pair: KeyPair,
@@ -255,6 +275,7 @@ impl Client {
     ///
     /// # Errors
     /// If configuration isn't valid (e.g public/private keys don't match)
+    #[inline]
     pub fn new(configuration: &Configuration) -> Result<Self> {
         Self::with_headers(configuration, HashMap::new())
     }
@@ -265,6 +286,7 @@ impl Client {
     ///
     /// # Errors
     /// If configuration isn't valid (e.g public/private keys don't match)
+    #[inline]
     pub fn with_headers(
         configuration: &Configuration,
         mut headers: HashMap<String, String>,
@@ -301,7 +323,7 @@ impl Client {
         &self,
         instructions: Executable,
         metadata: UnlimitedMetadata,
-    ) -> Result<Transaction> {
+    ) -> Result<SignedTransaction> {
         let transaction = Transaction::new(
             self.account_id.clone(),
             instructions,
@@ -323,7 +345,7 @@ impl Client {
     ///
     /// # Errors
     /// Fails if generating signature fails
-    pub fn sign_transaction(&self, transaction: Transaction) -> Result<Transaction> {
+    pub fn sign_transaction<Tx: Sign>(&self, transaction: Tx) -> Result<SignedTransaction> {
         transaction
             .sign(self.key_pair.clone())
             .wrap_err("Failed to sign transaction")
@@ -347,7 +369,7 @@ impl Client {
     pub fn submit(
         &self,
         instruction: impl Into<Instruction> + Debug,
-    ) -> Result<HashOf<VersionedTransaction>> {
+    ) -> Result<HashOf<VersionedSignedTransaction>> {
         let isi = instruction.into();
         self.submit_all([isi])
     }
@@ -360,7 +382,7 @@ impl Client {
     pub fn submit_all(
         &self,
         instructions: impl IntoIterator<Item = Instruction>,
-    ) -> Result<HashOf<VersionedTransaction>> {
+    ) -> Result<HashOf<VersionedSignedTransaction>> {
         self.submit_all_with_metadata(instructions, UnlimitedMetadata::new())
     }
 
@@ -374,7 +396,7 @@ impl Client {
         &self,
         instruction: Instruction,
         metadata: UnlimitedMetadata,
-    ) -> Result<HashOf<VersionedTransaction>> {
+    ) -> Result<HashOf<VersionedSignedTransaction>> {
         self.submit_all_with_metadata([instruction], metadata)
     }
 
@@ -388,7 +410,7 @@ impl Client {
         &self,
         instructions: impl IntoIterator<Item = Instruction>,
         metadata: UnlimitedMetadata,
-    ) -> Result<HashOf<VersionedTransaction>> {
+    ) -> Result<HashOf<VersionedSignedTransaction>> {
         self.submit_transaction(self.build_transaction(instructions.into(), metadata)?)
     }
 
@@ -399,8 +421,8 @@ impl Client {
     /// Fails if sending transaction to peer fails or if it response with error
     pub fn submit_transaction(
         &self,
-        transaction: Transaction,
-    ) -> Result<HashOf<VersionedTransaction>> {
+        transaction: SignedTransaction,
+    ) -> Result<HashOf<VersionedSignedTransaction>> {
         iroha_logger::trace!(tx=?transaction);
         let (req, hash, resp_handler) =
             self.prepare_transaction_request::<DefaultRequestBuilder>(transaction)?;
@@ -410,6 +432,75 @@ impl Client {
             .wrap_err_with(|| format!("Failed to send transaction with hash {:?}", hash))?;
         resp_handler.handle(response)?;
         Ok(hash)
+    }
+
+    /// Submit the prebuilt transaction and wait until it is either rejected or committed.
+    /// If rejected, return the rejection reason.
+    ///
+    /// # Errors
+    /// Fails if sending a transaction to a peer fails or there is an error in the response
+    pub fn submit_transaction_blocking(
+        &self,
+        transaction: SignedTransaction,
+    ) -> Result<HashOf<VersionedSignedTransaction>> {
+        let client = self.clone();
+        let (init_sender, init_receiver) = mpsc::channel();
+        let hash = transaction.hash();
+
+        // TODO: use `std::thread::scope()` after update to Rust 1.63
+        let scope_res = crossbeam::scope(|spawner| {
+            let submitter_handle = spawner.spawn(move |_| -> Result<()> {
+                init_receiver
+                    .recv()
+                    .wrap_err("Failed to receive init message.")?;
+
+                self.submit_transaction(transaction)?;
+                Ok(())
+            });
+
+            let confirmation_res = client.listen_for_tx_confirmation(hash, &init_sender);
+
+            match submitter_handle.join() {
+                Ok(Ok(())) => confirmation_res,
+                Ok(Err(e)) => Err(e).wrap_err("Transaction submitter thread exited with error"),
+                Err(_) => Err(eyre!("Transaction submitter thread panicked")),
+            }
+        });
+
+        match scope_res {
+            Ok(res) => res,
+            Err(_) => Err(eyre!("Transaction submitter thread panicked")),
+        }
+    }
+
+    // TODO: introduce timeout
+    fn listen_for_tx_confirmation(
+        &self,
+        hash: HashOf<SignedTransaction>,
+        init_sender: &mpsc::Sender<()>,
+    ) -> Result<HashOf<VersionedSignedTransaction>> {
+        let event_iterator = self
+            .listen_for_events(PipelineEventFilter::new().hash(hash.into()).into())
+            .wrap_err("Failed to establish event listener connection")?;
+
+        init_sender
+            .send(())
+            .wrap_err("Failed to send init message through init channel")?;
+
+        for event in event_iterator.flatten() {
+            if let Event::Pipeline(this_event) = event {
+                match this_event.status {
+                    PipelineStatus::Validating => {}
+                    PipelineStatus::Rejected(reason) => {
+                        return Err(reason).wrap_err("Transaction rejected");
+                    }
+                    PipelineStatus::Committed => return Ok(hash.transmute()),
+                }
+            }
+        }
+        Err(eyre!(
+            "Connection dropped without `Committed` or `Rejected` event"
+        ))
     }
 
     /// Lower-level Instructions API entry point.
@@ -424,10 +515,14 @@ impl Client {
     /// Fails if transaction check fails
     pub fn prepare_transaction_request<B: RequestBuilder>(
         &self,
-        transaction: Transaction,
-    ) -> Result<(B, HashOf<VersionedTransaction>, TransactionResponseHandler)> {
+        transaction: SignedTransaction,
+    ) -> Result<(
+        B,
+        HashOf<VersionedSignedTransaction>,
+        TransactionResponseHandler,
+    )> {
         transaction.check_limits(&self.transaction_limits)?;
-        let transaction: VersionedTransaction = transaction.into();
+        let transaction: VersionedSignedTransaction = transaction.into();
         let hash = transaction.hash();
         let transaction_bytes: Vec<u8> = transaction.encode_versioned();
 
@@ -451,7 +546,7 @@ impl Client {
     pub fn submit_blocking(
         &self,
         instruction: impl Into<Instruction>,
-    ) -> Result<HashOf<VersionedTransaction>> {
+    ) -> Result<HashOf<VersionedSignedTransaction>> {
         self.submit_all_blocking(vec![instruction.into()])
     }
 
@@ -463,7 +558,7 @@ impl Client {
     pub fn submit_all_blocking(
         &self,
         instructions: impl IntoIterator<Item = Instruction>,
-    ) -> Result<HashOf<VersionedTransaction>> {
+    ) -> Result<HashOf<VersionedSignedTransaction>> {
         self.submit_all_blocking_with_metadata(instructions, UnlimitedMetadata::new())
     }
 
@@ -477,7 +572,7 @@ impl Client {
         &self,
         instruction: impl Into<Instruction>,
         metadata: UnlimitedMetadata,
-    ) -> Result<HashOf<VersionedTransaction>> {
+    ) -> Result<HashOf<VersionedSignedTransaction>> {
         self.submit_all_blocking_with_metadata(vec![instruction.into()], metadata)
     }
 
@@ -491,46 +586,9 @@ impl Client {
         &self,
         instructions: impl IntoIterator<Item = Instruction>,
         metadata: UnlimitedMetadata,
-    ) -> Result<HashOf<VersionedTransaction>> {
-        struct EventListenerInitialized;
-
-        let client = self.clone();
-        let (event_sender, event_receiver) = mpsc::channel();
-        let (init_sender, init_receiver) = mpsc::channel();
+    ) -> Result<HashOf<VersionedSignedTransaction>> {
         let transaction = self.build_transaction(instructions.into(), metadata)?;
-        let hash = transaction.hash();
-        let _handle = thread::spawn(move || -> eyre::Result<()> {
-            let event_iterator = client
-                .listen_for_events(PipelineEventFilter::new().hash(hash.into()).into())
-                .wrap_err("Failed to establish event listener connection.")?;
-            init_sender
-                .send(EventListenerInitialized)
-                .wrap_err("Failed to send through init channel.")?;
-            for event in event_iterator.flatten() {
-                if let Event::Pipeline(this_event) = event {
-                    match this_event.status {
-                        PipelineStatus::Validating => {}
-                        PipelineStatus::Rejected(reason) => event_sender
-                            .send(Err(reason))
-                            .wrap_err("Failed to send through event channel.")?,
-                        PipelineStatus::Committed => event_sender
-                            .send(Ok(hash.transmute()))
-                            .wrap_err("Failed to send through event channel.")?,
-                    }
-                }
-            }
-            Ok(())
-        });
-        init_receiver
-            .recv()
-            .wrap_err("Failed to receive init message.")?;
-        self.submit_transaction(transaction)?;
-        event_receiver
-            .recv_timeout(self.transaction_status_timeout)
-            .map_or_else(
-                |err| Err(err).wrap_err("Timeout waiting for transaction status"),
-                |result| Ok(result?),
-            )
+        self.submit_transaction_blocking(transaction)
     }
 
     /// Lower-level Query API entry point. Prepares an http-request and returns it with an http-response handler.
@@ -540,25 +598,39 @@ impl Client {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```ignore
     /// use eyre::Result;
     /// use iroha_client::{
     ///     client::{Client, ResponseHandler},
-    ///     http::{RequestBuilder, Response},
+    ///     http::{RequestBuilder, Response, Method},
     /// };
-    /// use iroha_data_model::prelude::{Account, FindAllAccounts, Pagination};
+    /// use iroha_data_model::{predicate::PredicateBox, prelude::{Account, FindAllAccounts, Pagination}};
     ///
     /// struct YourAsyncRequest;
     ///
     /// impl YourAsyncRequest {
     ///     async fn send(self) -> Response<Vec<u8>> {
-    ///         // do the stuff
+    ///         todo!()
     ///     }
     /// }
     ///
     /// // Implement builder for this request
     /// impl RequestBuilder for YourAsyncRequest {
-    ///     // ...
+    ///     fn new(_: Method, url: impl AsRef<str>) -> Self {
+    ///          todo!()
+    ///     }
+    ///
+    ///     fn param<K: AsRef<str>, V: ToString>(self, _: K, _: V) -> Self  {
+    ///          todo!()
+    ///     }
+    ///
+    ///     fn header<N: AsRef<str>, V: ToString>(self, _: N, _: V) -> Self {
+    ///          todo!()
+    ///     }
+    ///
+    ///     fn body(self, data: Vec<u8>) -> Self {
+    ///          todo!()
+    ///     }
     /// }
     ///
     /// async fn fetch_accounts(client: &Client) -> Result<Vec<Account>> {
@@ -567,6 +639,7 @@ impl Client {
     ///     let (req, resp_handler) = client.prepare_query_request::<_, YourAsyncRequest>(
     ///         FindAllAccounts::new(),
     ///         Pagination::default(),
+    ///         PredicateBox::default(),
     ///     )?;
     ///
     ///     // Do what you need to send the request and to get the response
@@ -582,6 +655,8 @@ impl Client {
         &self,
         request: R,
         pagination: Pagination,
+        sorting: Sorting,
+        filter: PredicateBox,
     ) -> Result<(B, QueryResponseHandler<R>)>
     where
         R: Query + Into<QueryBox> + Debug,
@@ -589,7 +664,8 @@ impl Client {
         B: RequestBuilder,
     {
         let pagination: Vec<_> = pagination.into();
-        let request = QueryRequest::new(request.into(), self.account_id.clone());
+        let sorting: Vec<_> = sorting.into();
+        let request = QueryRequest::new(request.into(), self.account_id.clone(), filter);
         let request: VersionedSignedQueryRequest = self.sign_query(request)?.into();
 
         Ok((
@@ -598,10 +674,78 @@ impl Client {
                 format!("{}/{}", &self.torii_url, uri::QUERY),
             )
             .params(pagination)
+            .params(sorting)
             .headers(self.headers.clone())
             .body(request.encode_versioned()),
             QueryResponseHandler::default(),
         ))
+    }
+
+    /// Create a request with pagination, sorting and add the filter.
+    ///
+    /// # Errors
+    /// Fails if sending request fails
+    pub fn request_with_pagination_and_filter_and_sorting<R>(
+        &self,
+        request: R,
+        pagination: Pagination,
+        sorting: Sorting,
+        filter: PredicateBox,
+    ) -> QueryHandlerResult<ClientQueryOutput<R>>
+    where
+        R: Query + Into<QueryBox> + Debug,
+        <R::Output as TryFrom<Value>>::Error: Into<eyre::Error>, // Seems redundant
+    {
+        iroha_logger::trace!(?request, %pagination, ?sorting, ?filter);
+        let (req, resp_handler) = self.prepare_query_request::<R, DefaultRequestBuilder>(
+            request, pagination, sorting, filter,
+        )?;
+        let response = req.build()?.send()?;
+        resp_handler.handle(response)
+    }
+
+    /// Create a request with pagination and sorting.
+    ///
+    /// # Errors
+    /// Fails if sending request fails
+    pub fn request_with_pagination_and_sorting<R>(
+        &self,
+        request: R,
+        pagination: Pagination,
+        sorting: Sorting,
+    ) -> QueryHandlerResult<ClientQueryOutput<R>>
+    where
+        R: Query + Into<QueryBox> + Debug,
+        <R::Output as TryFrom<Value>>::Error: Into<eyre::Error>,
+    {
+        self.request_with_pagination_and_filter_and_sorting(
+            request,
+            pagination,
+            sorting,
+            PredicateBox::default(),
+        )
+    }
+
+    /// Create a request with pagination, sorting, and the given filter.
+    ///
+    /// # Errors
+    /// Fails if sending request fails
+    pub fn request_with_pagination_and_filter<R>(
+        &self,
+        request: R,
+        pagination: Pagination,
+        filter: PredicateBox,
+    ) -> QueryHandlerResult<ClientQueryOutput<R>>
+    where
+        R: Query + Into<QueryBox> + Debug,
+        <R::Output as TryFrom<Value>>::Error: Into<eyre::Error>, // Seems redundant
+    {
+        self.request_with_pagination_and_filter_and_sorting(
+            request,
+            pagination,
+            Sorting::default(),
+            filter,
+        )
     }
 
     /// Query API entry point. Requests queries from `Iroha` peers with pagination.
@@ -620,11 +764,23 @@ impl Client {
         R: Query + Into<QueryBox> + Debug,
         <R::Output as TryFrom<Value>>::Error: Into<eyre::Error>,
     {
-        iroha_logger::trace!(?request, %pagination);
-        let (req, resp_handler) =
-            self.prepare_query_request::<R, DefaultRequestBuilder>(request, pagination)?;
-        let response = req.build()?.send()?;
-        resp_handler.handle(response)
+        self.request_with_pagination_and_filter(request, pagination, PredicateBox::default())
+    }
+
+    /// Query API entry point. Requests queries from `Iroha` peers with sorting.
+    ///
+    /// # Errors
+    /// Fails if sending request fails
+    pub fn request_with_sorting<R>(
+        &self,
+        request: R,
+        sorting: Sorting,
+    ) -> QueryHandlerResult<ClientQueryOutput<R>>
+    where
+        R: Query + Into<QueryBox> + Debug,
+        <R::Output as TryFrom<Value>>::Error: Into<eyre::Error>,
+    {
+        self.request_with_pagination_and_sorting(request, Pagination::default(), sorting)
     }
 
     /// Query API entry point. Requests queries from `Iroha` peers.
@@ -673,11 +829,11 @@ impl Client {
     /// Fails if subscribing to websocket fails
     pub fn get_original_transaction_with_pagination(
         &self,
-        transaction: &Transaction,
+        transaction: &SignedTransaction,
         retry_count: u32,
         retry_in: Duration,
         pagination: Pagination,
-    ) -> Result<Option<Transaction>> {
+    ) -> Result<Option<SignedTransaction>> {
         let pagination: Vec<_> = pagination.into();
         for _ in 0..retry_count {
             let response = DefaultRequestBuilder::new(
@@ -691,7 +847,7 @@ impl Client {
 
             if response.status() == StatusCode::OK {
                 let pending_transactions =
-                    VersionedPendingTransactions::decode_versioned(response.body())?;
+                    try_decode_all_or_just_decode!(VersionedPendingTransactions, response.body())?;
                 let VersionedPendingTransactions::V1(pending_transactions) = pending_transactions;
                 let transaction = pending_transactions
                     .into_iter()
@@ -722,10 +878,10 @@ impl Client {
     /// Fails if sending request fails
     pub fn get_original_transaction(
         &self,
-        transaction: &Transaction,
+        transaction: &SignedTransaction,
         retry_count: u32,
         retry_in: Duration,
-    ) -> Result<Option<Transaction>> {
+    ) -> Result<Option<SignedTransaction>> {
         self.get_original_transaction_with_pagination(
             transaction,
             retry_count,
@@ -829,16 +985,6 @@ impl Client {
     }
 }
 
-impl Debug for Client {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Client")
-            .field("public_key", self.key_pair.public_key())
-            .field("torii_url", &self.torii_url)
-            .field("telemetry_url", &self.telemetry_url)
-            .finish()
-    }
-}
-
 /// Logic related to Events API client implementation.
 pub mod events_api {
     use super::*;
@@ -916,11 +1062,13 @@ pub mod events_api {
                 Self::Next: FlowEvents,
             {
                 if let EventPublisherMessage::SubscriptionAccepted =
-                    VersionedEventPublisherMessage::decode_versioned(&message)?.into_v1()
+                    try_decode_all_or_just_decode!(VersionedEventPublisherMessage, &message)?
+                        .into_v1()
                 {
-                    return Ok(Events);
+                    Ok(Events)
+                } else {
+                    Err(eyre!("Expected `SubscriptionAccepted`."))
                 }
-                return Err(eyre!("Expected `SubscriptionAccepted`."));
             }
         }
 
@@ -933,9 +1081,8 @@ pub mod events_api {
 
             fn message(&self, message: Vec<u8>) -> Result<EventData<Self::Event>> {
                 let event_socket_message =
-                    VersionedEventPublisherMessage::decode_versioned(&message)
-                        .map(iroha_data_model::events::VersionedEventPublisherMessage::into_v1)
-                        .map_err(Into::<eyre::Error>::into)?;
+                    try_decode_all_or_just_decode!(VersionedEventPublisherMessage, &message)?
+                        .into_v1();
                 let event = match event_socket_message {
                     EventPublisherMessage::Event(event) => event,
                     msg => return Err(eyre!("Expected Event but got {:?}", msg)),
@@ -962,6 +1109,7 @@ pub mod events_api {
         /// # Errors
         /// Fails if connecting and sending subscription to web socket fails
         pub fn new(handler: flow::Init) -> Result<Self> {
+            debug!("Creating `EventIterator`");
             let InitData {
                 first_message,
                 req,
@@ -972,7 +1120,9 @@ pub mod events_api {
             stream.write_message(WebSocketMessage::Binary(first_message))?;
 
             let handler = loop {
-                match stream.read_message() {
+                let mes = stream.read_message();
+                debug!(?mes, "Received message");
+                match mes {
                     Ok(WebSocketMessage::Binary(message)) => break handler.message(message)?,
                     Ok(_) => continue,
                     Err(WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed) => {
@@ -981,6 +1131,7 @@ pub mod events_api {
                     Err(err) => return Err(err.into()),
                 }
             };
+            debug!("`EventIterator` created successfully");
             Ok(Self { stream, handler })
         }
     }
@@ -1024,7 +1175,9 @@ pub mod events_api {
                 Ok(())
             };
 
-            let _ = close().map_err(|e| warn!(%e));
+            debug!("Closing WebSocket connection");
+            let _ = close().map_err(|e| error!(%e));
+            debug!("WebSocket connection closed");
         }
     }
 }
@@ -1033,17 +1186,17 @@ pub mod account {
     //! Module with queries for account
     use super::*;
 
-    /// Get query to get all accounts
+    /// Construct a query to get all accounts
     pub const fn all() -> FindAllAccounts {
         FindAllAccounts::new()
     }
 
-    /// Get query to get account by id
+    /// Construct a query to get account by id
     pub fn by_id(account_id: impl Into<EvaluatesTo<AccountId>>) -> FindAccountById {
         FindAccountById::new(account_id)
     }
 
-    /// Get query to get all accounts containing specified asset
+    /// Construct a query to get all accounts containing specified asset
     pub fn all_with_asset(
         asset_definition_id: impl Into<EvaluatesTo<AssetDefinitionId>>,
     ) -> FindAccountsWithAsset {
@@ -1055,31 +1208,53 @@ pub mod asset {
     //! Module with queries for assets
     use super::*;
 
-    /// Get query to get all assets
+    /// Construct a query to get all assets
     pub const fn all() -> FindAllAssets {
         FindAllAssets::new()
     }
 
-    /// Get query to get all asset definitions
+    /// Construct a query to get all asset definitions
     pub const fn all_definitions() -> FindAllAssetsDefinitions {
         FindAllAssetsDefinitions::new()
     }
 
-    /// Get query to get asset definition by its id
+    /// Construct a query to get asset definition by its id
     pub fn definition_by_id(
         asset_definition_id: impl Into<EvaluatesTo<AssetDefinitionId>>,
     ) -> FindAssetDefinitionById {
         FindAssetDefinitionById::new(asset_definition_id)
     }
 
-    /// Get query to get all assets by account id
+    /// Construct a query to get all assets by account id
     pub fn by_account_id(account_id: impl Into<EvaluatesTo<AccountId>>) -> FindAssetsByAccountId {
         FindAssetsByAccountId::new(account_id)
     }
 
-    /// Get query to get all assets by account id
+    /// Construct a query to get an asset by its id
     pub fn by_id(asset_id: impl Into<EvaluatesTo<<Asset as Identifiable>::Id>>) -> FindAssetById {
         FindAssetById::new(asset_id)
+    }
+}
+
+pub mod block {
+    //! Module with queries related to blocks
+    use iroha_crypto::Hash;
+
+    use super::*;
+
+    /// Construct a query to find all blocks
+    pub const fn all() -> FindAllBlocks {
+        FindAllBlocks::new()
+    }
+
+    /// Construct a query to find all block headers
+    pub const fn all_headers() -> FindAllBlockHeaders {
+        FindAllBlockHeaders::new()
+    }
+
+    /// Construct a query to find block header by hash
+    pub fn header_by_hash(hash: impl Into<EvaluatesTo<Hash>>) -> FindBlockHeaderByHash {
+        FindBlockHeaderByHash::new(hash)
     }
 }
 
@@ -1087,12 +1262,12 @@ pub mod domain {
     //! Module with queries for domains
     use super::*;
 
-    /// Get query to get all domains
+    /// Construct a query to get all domains
     pub const fn all() -> FindAllDomains {
         FindAllDomains::new()
     }
 
-    /// Get query to get all domain by id
+    /// Construct a query to get all domain by id
     pub fn by_id(domain_id: impl Into<EvaluatesTo<DomainId>>) -> FindDomainById {
         FindDomainById::new(domain_id)
     }
@@ -1104,21 +1279,76 @@ pub mod transaction {
 
     use super::*;
 
-    /// Get query to find all transactions
+    /// Construct a query to find all transactions
     pub fn all() -> FindAllTransactions {
         FindAllTransactions::new()
     }
 
-    /// Get query to retrieve transactions for account
+    /// Construct a query to retrieve transactions for account
     pub fn by_account_id(
         account_id: impl Into<EvaluatesTo<AccountId>>,
     ) -> FindTransactionsByAccountId {
         FindTransactionsByAccountId::new(account_id)
     }
 
-    /// Get query to retrieve transaction by hash
+    /// Construct a query to retrieve transaction by hash
     pub fn by_hash(hash: impl Into<EvaluatesTo<Hash>>) -> FindTransactionByHash {
         FindTransactionByHash::new(hash)
+    }
+}
+
+pub mod trigger {
+    //! Module with queries for triggers
+    use super::*;
+
+    /// Construct a query to get triggers by domain id
+    pub fn by_domain_id(domain_id: impl Into<EvaluatesTo<DomainId>>) -> FindTriggersByDomainId {
+        FindTriggersByDomainId::new(domain_id)
+    }
+}
+
+pub mod permissions {
+    //! Module with queries for permission tokens
+    use super::*;
+
+    /// Construct a query to get all registered [`PermissionTokenDefinition`]s
+    pub const fn all_definitions() -> FindAllPermissionTokenDefinitions {
+        FindAllPermissionTokenDefinitions {}
+    }
+
+    /// Construct a query to get all [`PermissionToken`] granted
+    /// to account with given [`Id`][AccountId]
+    pub fn by_account_id(
+        account_id: impl Into<EvaluatesTo<AccountId>>,
+    ) -> FindPermissionTokensByAccountId {
+        FindPermissionTokensByAccountId {
+            id: account_id.into(),
+        }
+    }
+}
+
+pub mod role {
+    //! Module with queries for roles
+    use super::*;
+
+    /// Construct a query to retrieve all roles
+    pub const fn all() -> FindAllRoles {
+        FindAllRoles::new()
+    }
+
+    /// Construct a query to retrieve all role ids
+    pub const fn all_ids() -> FindAllRoleIds {
+        FindAllRoleIds::new()
+    }
+
+    /// Construct a query to retrieve a role by its id
+    pub fn by_id(role_id: impl Into<EvaluatesTo<RoleId>>) -> FindRoleByRoleId {
+        FindRoleByRoleId::new(role_id)
+    }
+
+    /// Construct a query to retrieve all roles for an account
+    pub fn by_account_id(account_id: impl Into<EvaluatesTo<AccountId>>) -> FindRolesByAccountId {
+        FindRolesByAccountId::new(account_id)
     }
 }
 
@@ -1127,8 +1357,9 @@ mod tests {
     #![allow(clippy::restriction)]
     use std::str::FromStr;
 
+    use iroha_config::client::{BasicAuth, WebLogin};
+
     use super::*;
-    use crate::config::{BasicAuth, WebLogin};
 
     const LOGIN: &str = "mad_hatter";
     const PASSWORD: &str = "ilovetea";
@@ -1185,7 +1416,6 @@ mod tests {
     #[cfg(test)]
     mod query_errors_handling {
         use http::Response;
-        use iroha_core::smartcontracts::isi::query::UnsupportedVersionError;
 
         use super::*;
 
@@ -1193,10 +1423,6 @@ mod tests {
         fn certain_errors() -> Result<()> {
             let sut = QueryResponseHandler::<FindAllAssets>::default();
             let responses = vec![
-                (
-                    StatusCode::BAD_REQUEST,
-                    QueryError::Version(UnsupportedVersionError { version: 19 }),
-                ),
                 (
                     StatusCode::UNAUTHORIZED,
                     QueryError::Signature("whatever".to_owned()),
@@ -1213,9 +1439,7 @@ mod tests {
             ];
 
             for (status_code, err) in responses {
-                let resp = Response::builder()
-                    .status(status_code)
-                    .body(err.clone().encode())?;
+                let resp = Response::builder().status(status_code).body(err.encode())?;
 
                 match sut.handle(resp) {
                     Err(ClientQueryError::QueryError(actual)) => {

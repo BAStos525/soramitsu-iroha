@@ -1,99 +1,53 @@
 //! Out of box implementations for common permission checks.
-
+#![allow(
+    clippy::arithmetic,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc
+)]
 use std::collections::BTreeMap;
 
+use derive_more::Display;
 use iroha_core::{
     prelude::*,
     smartcontracts::{
         permissions::{
-            prelude::*, HasToken, IsAllowed, IsInstructionAllowedBoxed, IsQueryAllowedBoxed,
-            ValidatorApplyOr, ValidatorBuilder,
+            judge::{InstructionJudgeBoxed, QueryJudgeBoxed},
+            HasToken, PermissionTokenTrait as _,
+            ValidatorVerdict::*,
         },
         Evaluate,
     },
-    wsv::WorldTrait,
 };
 use iroha_data_model::{isi::*, prelude::*};
-use iroha_macro::error::ErrorTryFromEnum;
-use once_cell::sync::Lazy;
+use serde::Serialize;
 
-macro_rules! impl_from_item_for_instruction_validator_box {
-    ( $ty:ty ) => {
-        impl<W: WorldTrait> From<$ty> for IsInstructionAllowedBoxed<W> {
-            fn from(validator: $ty) -> Self {
-                Box::new(validator)
-            }
+macro_rules! try_evaluate_or_deny {
+    ($e:expr, $wsv:ident) => {
+        match $e.evaluate($wsv, &Context::new()) {
+            Ok(value) => value,
+            Err(err) => return ValidatorVerdict::Deny(err.to_string()),
         }
     };
 }
 
-macro_rules! impl_from_item_for_query_validator_box {
-    ( $ty:ty ) => {
-        impl<W: WorldTrait> From<$ty> for IsQueryAllowedBoxed<W> {
-            fn from(validator: $ty) -> Self {
-                Box::new(validator)
-            }
+// TODO: Use [`FromResidual`](https://doc.rust-lang.org/std/ops/trait.FromResidual.html)
+// once it becomes stable
+macro_rules! ok_or_deny {
+    ($r:expr) => {
+        match $r {
+            Ok(value) => value,
+            Err(err) => return ValidatorVerdict::Deny(err),
         }
     };
 }
 
-macro_rules! impl_from_item_for_granted_token_validator_box {
-    ( $ty:ty ) => {
-        impl<W: WorldTrait> From<$ty> for HasTokenBoxed<W> {
-            fn from(validator: $ty) -> Self {
-                Box::new(validator)
-            }
-        }
-
-        impl<W: WorldTrait> From<$ty> for IsInstructionAllowedBoxed<W> {
-            fn from(validator: $ty) -> Self {
-                let validator: HasTokenBoxed<W> = validator.into();
-                Box::new(validator)
-            }
-        }
-    };
-}
-
-macro_rules! impl_from_item_for_grant_instruction_validator_box {
-    ( $ty:ty ) => {
-        impl<W: WorldTrait> From<$ty> for IsGrantAllowedBoxed<W> {
-            fn from(validator: $ty) -> Self {
-                Box::new(validator)
-            }
-        }
-
-        impl<W: WorldTrait> From<$ty> for IsInstructionAllowedBoxed<W> {
-            fn from(validator: $ty) -> Self {
-                let validator: IsGrantAllowedBoxed<W> = validator.into();
-                Box::new(validator)
-            }
-        }
-    };
-}
-
-macro_rules! impl_from_item_for_revoke_instruction_validator_box {
-    ( $ty:ty ) => {
-        impl<W: WorldTrait> From<$ty> for IsRevokeAllowedBoxed<W> {
-            fn from(validator: $ty) -> Self {
-                Box::new(validator)
-            }
-        }
-
-        impl<W: WorldTrait> From<$ty> for IsInstructionAllowedBoxed<W> {
-            fn from(validator: $ty) -> Self {
-                let validator: IsRevokeAllowedBoxed<W> = validator.into();
-                Box::new(validator)
-            }
-        }
-    };
-}
-
-macro_rules! try_into_or_exit {
-    ( $ident:ident ) => {
-        if let Ok(into) = $ident.try_into() {
-            into
-        } else {
-            return Ok(());
+// TODO: Use [`FromResidual`](https://doc.rust-lang.org/std/ops/trait.FromResidual.html)
+// once it becomes stable
+macro_rules! ok_or_skip {
+    ($r:expr) => {
+        match $r {
+            Ok(value) => value,
+            Err(_) => return ValidatorVerdict::Skip,
         }
     };
 }
@@ -101,18 +55,20 @@ macro_rules! try_into_or_exit {
 macro_rules! declare_token {
     (
         $(#[$outer_meta:meta])* // Structure attributes
-        $ident:ident {          // Structure definiton
+        $ident:ident {          // Structure definition
             $(
                 $(#[$inner_meta:meta])* // Field attributes
                 $param_name:ident ($param_string:literal): $param_typ:ty
              ),* $(,)? // allow trailing comma
         },
-        $string:tt // Token name
+        $string:tt // Token id
     ) => {
 
+        // For tokens with no parameters
+        #[allow(missing_copy_implementations)]
         $(#[$outer_meta])*
         ///
-        /// A wrapper around [PermissionToken](iroha_data_model::permissions::PermissionToken).
+        /// A wrapper around [PermissionToken](iroha_data_model::permission::Token).
         #[derive(
             Clone,
             Debug,
@@ -123,7 +79,7 @@ macro_rules! declare_token {
             iroha_schema::IntoSchema,
         )]
         pub struct $ident
-        where $($param_typ: Into<Value>,)* {
+        where $($param_typ: Into<Value> + ::iroha_data_model::permission::token::ValueTrait,)* {
             $(
                 $(#[$inner_meta])*
                 #[doc = concat!(
@@ -136,13 +92,6 @@ macro_rules! declare_token {
         }
 
         impl $ident {
-            /// Get associated [`PermissionToken`](iroha_data_model::permissions::PermissionToken) name.
-            pub fn name() -> &'static Name {
-                static  NAME: once_cell::sync::Lazy<Name> =
-                    once_cell::sync::Lazy::new(|| $string.parse().expect("Tested. Works."));
-                &NAME
-            }
-
             $(
               #[doc = concat!("Get `", stringify!($param_name), "` parameter name")]
               pub fn $param_name() -> &'static Name {
@@ -154,6 +103,7 @@ macro_rules! declare_token {
 
             /// Constructor
             #[inline]
+            #[allow(clippy::new_without_default)] // For tokens with no parameters
             pub fn new($($param_name: $param_typ),*) -> Self {
                 Self {
                     $($param_name,)*
@@ -161,23 +111,55 @@ macro_rules! declare_token {
             }
         }
 
-        impl From<$ident> for iroha_data_model::permissions::PermissionToken {
-            fn from(value: $ident) -> Self {
-                iroha_data_model::permissions::PermissionToken::new($ident::name().clone())
-                    .with_params([
-                      $(($ident::$param_name().clone(), value.$param_name.into())),*
-                    ])
+        impl iroha_core::smartcontracts::isi::permissions::PermissionTokenTrait for $ident {
+            /// Get associated [`PermissionTokenDefinition`].
+            fn definition() -> &'static PermissionTokenDefinition {
+                static DEFINITION: once_cell::sync::Lazy<PermissionTokenDefinition> =
+                    once_cell::sync::Lazy::new(|| {
+                        PermissionTokenDefinition::new(
+                            $string.parse().expect("Failed to parse permission token definition id: \
+                                                    `{$string}`. This is a bug")
+                        )
+                        .with_params([
+                            $((
+                                $param_string.parse()
+                                    .expect("Failed to parse permission token parameter name: \
+                                             `{$param_string}`. This is a bug"),
+                                <$param_typ as ::iroha_data_model::permission::token::ValueTrait>::TYPE
+                            ),)*
+                        ])
+                    });
+                &DEFINITION
             }
         }
 
-        impl TryFrom<iroha_data_model::permissions::PermissionToken> for $ident {
-            type Error = PredefinedTokenConversionError;
+        impl From<$ident> for iroha_data_model::permission::Token {
+            #[allow(unused)] // `value` can be unused if token has no params
+            fn from(value: $ident) -> Self {
+                iroha_data_model::permission::Token::new(
+                    <
+                        $ident as
+                        iroha_core::smartcontracts::isi::permissions::PermissionTokenTrait
+                    >::definition_id().clone()
+                )
+                .with_params([
+                    $(($ident::$param_name().clone(), value.$param_name.into())),*
+                ])
+            }
+        }
 
+        impl TryFrom<iroha_data_model::permission::Token> for $ident {
+            type Error = iroha_core::smartcontracts::isi::permissions::PredefinedTokenConversionError;
+
+            #[allow(unused)] // `params` can be unused if token has none
             fn try_from(
-                token: iroha_data_model::permissions::PermissionToken
-            ) -> Result<Self, Self::Error> {
-                if token.name() != Self::name() {
-                    return Err(Self::Error::Name(token.name().clone()))
+                token: iroha_data_model::permission::Token
+            ) -> core::result::Result<Self, Self::Error> {
+                if token.definition_id() != <
+                        Self as
+                        iroha_core::smartcontracts::isi::permissions::PermissionTokenTrait
+                        >::definition_id() {
+                    return Err(Self::Error::Id(token.definition_id().clone()))
                 }
                 let mut params = token.params().collect::<std::collections::HashMap<_, _>>();
                 Ok(Self::new($(
@@ -192,21 +174,6 @@ macro_rules! declare_token {
             }
         }
     };
-}
-
-/// Represents error when converting specialized permission tokens
-/// to generic `[PermissionToken]`
-#[derive(Debug, thiserror::Error)]
-pub enum PredefinedTokenConversionError {
-    /// Wrong token name
-    #[error("Wrong token name: {0}")]
-    Name(Name),
-    /// Parameter not present in token parameters
-    #[error("Parameter {0} not found")]
-    Param(&'static Name),
-    /// Unexpected value for parameter
-    #[error("Wrong value for parameter {0}")]
-    Value(&'static Name),
 }
 
 // I need to put these modules after the macro definitions.

@@ -1,7 +1,10 @@
 //! Iroha's logging utilities.
-#![allow(clippy::expect_used)]
+#![allow(
+    clippy::expect_used,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc
+)]
 
-pub mod config;
 pub mod layer;
 pub mod telemetry;
 
@@ -16,6 +19,7 @@ use std::{
 };
 
 use color_eyre::{eyre::WrapErr, Report, Result};
+pub use iroha_config::logger::{Configuration, Level};
 pub use telemetry::{Telemetry, TelemetryFields, TelemetryLayer};
 use tokio::sync::mpsc::Receiver;
 pub use tracing::{
@@ -26,8 +30,6 @@ use tracing::{subscriber::set_global_default, Subscriber};
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
 pub use tracing_futures::Instrument as InstrumentFutures;
 use tracing_subscriber::{layer::SubscriberExt, registry::Registry, reload};
-
-pub use crate::config::{Configuration, Level};
 
 /// Substrate telemetry
 pub type SubstrateTelemetry = Receiver<Telemetry>;
@@ -54,6 +56,17 @@ pub fn init(configuration: &Configuration) -> Result<Option<Telemetries>> {
         return Ok(None);
     }
     Ok(Some(setup_logger(configuration)?))
+}
+
+/// Disables the logger by setting `LOGGER_SET` to true. Will fail
+/// if the logger has already been initialized. This function is
+/// required in order to generate flamegraphs and flamecharts.
+///
+/// Returns true on success.
+pub fn disable_logger() -> bool {
+    LOGGER_SET
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_ok()
 }
 
 fn setup_logger(configuration: &Configuration) -> Result<Telemetries> {

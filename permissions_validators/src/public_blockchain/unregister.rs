@@ -14,54 +14,53 @@ declare_token!(
 
 /// Checks that account can un-register only the assets which were
 /// registered by this account in the first place.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Display, Copy, Clone, Serialize)]
+#[display(fmt = "Allow to unregister only the assets created by the signer")]
 pub struct OnlyAssetsCreatedByThisAccount;
 
-impl_from_item_for_instruction_validator_box!(OnlyAssetsCreatedByThisAccount);
+impl IsAllowed for OnlyAssetsCreatedByThisAccount {
+    type Operation = Instruction;
 
-impl<W: WorldTrait> IsAllowed<W, Instruction> for OnlyAssetsCreatedByThisAccount {
     fn check(
         &self,
         authority: &AccountId,
         instruction: &Instruction,
-        wsv: &WorldStateView<W>,
-    ) -> Result<(), DenialReason> {
+        wsv: &WorldStateView,
+    ) -> ValidatorVerdict {
         let unregister_box = if let Instruction::Unregister(unregister) = instruction {
             unregister
         } else {
-            return Ok(());
+            return Skip;
         };
-        let object_id = unregister_box
-            .object_id
-            .evaluate(wsv, &Context::new())
-            .map_err(|e| e.to_string())?;
-        let asset_definition_id: AssetDefinitionId = try_into_or_exit!(object_id);
+
+        let object_id = try_evaluate_or_deny!(unregister_box.object_id, wsv);
+        let asset_definition_id: AssetDefinitionId = ok_or_skip!(object_id.try_into());
         let registered_by_signer_account = wsv
             .asset_definition_entry(&asset_definition_id)
             .map(|asset_definition_entry| asset_definition_entry.registered_by() == authority)
             .unwrap_or(false);
         if !registered_by_signer_account {
-            return Err("Can't unregister assets registered by other accounts.".to_owned());
+            return Deny("Cannot unregister assets registered by other accounts.".to_owned());
         }
-        Ok(())
+        Allow
     }
 }
 
 /// Allows un-registering a user's assets from a different account if
 /// the corresponding user granted the permission token for a specific
 /// asset.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Copy, Clone, Serialize)]
 pub struct GrantedByAssetCreator;
 
-impl_from_item_for_granted_token_validator_box!(GrantedByAssetCreator);
+impl HasToken for GrantedByAssetCreator {
+    type Token = CanUnregisterAssetWithDefinition;
 
-impl<W: WorldTrait> HasToken<W> for GrantedByAssetCreator {
     fn token(
         &self,
         _authority: &AccountId,
         instruction: &Instruction,
-        wsv: &WorldStateView<W>,
-    ) -> Result<PermissionToken, String> {
+        wsv: &WorldStateView,
+    ) -> core::result::Result<Self::Token, String> {
         let unregister_box = if let Instruction::Unregister(unregister) = instruction {
             unregister
         } else {
@@ -76,25 +75,25 @@ impl<W: WorldTrait> HasToken<W> for GrantedByAssetCreator {
         } else {
             return Err("Source id is not an AssetDefinitionId.".to_owned());
         };
-        Ok(CanUnregisterAssetWithDefinition::new(object_id).into())
+        Ok(CanUnregisterAssetWithDefinition::new(object_id))
     }
 }
 
 /// Validator that checks Grant instruction so that the access is
 /// granted to the assets of the signer account.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Display, Copy, Clone, Serialize)]
+#[display(fmt = "the signer is the asset creator")]
 pub struct GrantRegisteredByMeAccess;
 
-impl_from_item_for_grant_instruction_validator_box!(GrantRegisteredByMeAccess);
+impl IsGrantAllowed for GrantRegisteredByMeAccess {
+    type Token = CanUnregisterAssetWithDefinition;
 
-impl<W: WorldTrait> IsGrantAllowed<W> for GrantRegisteredByMeAccess {
-    fn check_grant(
+    fn check(
         &self,
         authority: &AccountId,
-        instruction: &GrantBox,
-        wsv: &WorldStateView<W>,
-    ) -> Result<(), DenialReason> {
-        let token: CanUnregisterAssetWithDefinition = extract_specialized_token(instruction, wsv)?;
+        token: Self::Token,
+        wsv: &WorldStateView,
+    ) -> ValidatorVerdict {
         check_asset_creator_for_asset_definition(&token.asset_definition_id, authority, wsv)
     }
 }
@@ -102,29 +101,19 @@ impl<W: WorldTrait> IsGrantAllowed<W> for GrantRegisteredByMeAccess {
 /// Validator that checks Revoke instructions, such that the access is
 /// revoked and the assets of the signer's account are no longer
 /// accessible.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Display, Clone, Copy, Serialize)]
+#[display(fmt = "the signer is the asset creator")]
 pub struct RevokeRegisteredByMeAccess;
 
-impl_from_item_for_revoke_instruction_validator_box!(RevokeRegisteredByMeAccess);
+impl IsRevokeAllowed for RevokeRegisteredByMeAccess {
+    type Token = CanUnregisterAssetWithDefinition;
 
-impl<W: WorldTrait> IsRevokeAllowed<W> for RevokeRegisteredByMeAccess {
-    fn check_revoke(
+    fn check(
         &self,
         authority: &AccountId,
-        instruction: &RevokeBox,
-        wsv: &WorldStateView<W>,
-    ) -> Result<(), DenialReason> {
-        let permission_token: PermissionToken = instruction
-            .object
-            .evaluate(wsv, &Context::new())
-            .map_err(|e| e.to_string())?
-            .try_into()
-            .map_err(|e: ErrorTryFromEnum<_, _>| e.to_string())?;
-
-        let token: CanUnregisterAssetWithDefinition = permission_token
-            .try_into()
-            .map_err(|e: PredefinedTokenConversionError| e.to_string())?;
-
+        token: Self::Token,
+        wsv: &WorldStateView,
+    ) -> ValidatorVerdict {
         check_asset_creator_for_asset_definition(&token.asset_definition_id, authority, wsv)
     }
 }

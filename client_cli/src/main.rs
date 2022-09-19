@@ -1,5 +1,9 @@
 //! iroha client command line
-
+#![allow(
+    clippy::arithmetic,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc
+)]
 #![allow(
     missing_docs,
     clippy::print_stdout,
@@ -15,7 +19,8 @@ use color_eyre::{
     Result,
 };
 use dialoguer::Confirm;
-use iroha_client::{client::Client, config::Configuration as ClientConfiguration};
+use iroha_client::client::Client;
+use iroha_config::client::Configuration as ClientConfiguration;
 use iroha_crypto::prelude::*;
 use iroha_data_model::prelude::*;
 
@@ -60,7 +65,11 @@ impl FromStr for Configuration {
 
 /// Iroha CLI Client provides an ability to interact with Iroha Peers Web API without direct network usage.
 #[derive(StructOpt, Debug)]
-#[structopt(name = "iroha_client_cli", version, author)]
+#[structopt(
+    name = "iroha_client_cli",
+    version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("VERGEN_GIT_SHA"), ")"),
+    author
+)]
 pub struct Args {
     /// Sets a config file path
     #[structopt(short, long)]
@@ -99,9 +108,9 @@ pub trait RunArgs {
 }
 
 macro_rules! match_run_all {
-    (($self:ident, $cfg:ident), { $($variants:path),* }) => {
+    (($self:ident, $cfg:ident), { $($variants:path),* $(,)?}) => {
         match $self {
-            $($variants(variant) => variant.run($cfg),)*
+            $($variants(variant) => RunArgs::run(variant, $cfg),)*
         }
     };
 }
@@ -190,7 +199,8 @@ pub fn submit(
 }
 
 mod events {
-    use iroha_client::{client::Client, config::Configuration};
+    use iroha_client::client::Client;
+    use iroha_config::client::Configuration;
 
     use super::*;
 
@@ -230,7 +240,8 @@ mod events {
 }
 
 mod domain {
-    use iroha_client::{client, config::Configuration};
+    use iroha_client::client;
+    use iroha_config::client::Configuration;
 
     use super::*;
 
@@ -253,10 +264,10 @@ mod domain {
     /// Add subcommand for domain
     #[derive(Debug, StructOpt)]
     pub struct Register {
-        /// Domain's name as double-quoted string
+        /// Domain name as double-quoted string
         #[structopt(short, long)]
         pub id: DomainId,
-        /// The filename with key-value metadata pairs in JSON
+        /// The JSON file with key-value metadata pairs
         #[structopt(short, long, default_value = "")]
         pub metadata: super::Metadata,
     }
@@ -286,7 +297,7 @@ mod domain {
             let vec = match self {
                 Self::All => client
                     .request(client::domain::all())
-                    .wrap_err("Failed to get all accounts"),
+                    .wrap_err("Failed to get all domains"),
             }?;
             println!("{:#?}", vec);
             Ok(())
@@ -313,11 +324,21 @@ mod account {
         /// List accounts
         #[clap(subcommand)]
         List(List),
+        /// Grant a permission to the account
+        Grant(Grant),
+        /// List all account permissions
+        ListPermissions(ListPermissions),
     }
 
     impl RunArgs for Args {
         fn run(self, cfg: &ClientConfiguration) -> Result<()> {
-            match_run_all!((self, cfg), { Args::Register, Args::Set, Args::List })
+            match_run_all!((self, cfg), {
+                Args::Register,
+                Args::Set,
+                Args::List,
+                Args::Grant,
+                Args::ListPermissions,
+            })
         }
     }
 
@@ -330,7 +351,7 @@ mod account {
         /// Its public key
         #[structopt(short, long)]
         pub key: PublicKey,
-        /// The filename with key-value metadata pairs in JSON
+        /// /// The JSON file with key-value metadata pairs
         #[structopt(short, long, default_value = "")]
         pub metadata: super::Metadata,
     }
@@ -372,7 +393,9 @@ mod account {
             let file = File::open(s).wrap_err(err_msg)?;
             let condition: Box<Expression> =
                 serde_json::from_reader(file).wrap_err(deser_err_msg)?;
-            Ok(Self(SignatureCheckCondition(condition.into())))
+            Ok(Self(SignatureCheckCondition(EvaluatesTo::new_unchecked(
+                condition,
+            ))))
         }
     }
 
@@ -381,7 +404,7 @@ mod account {
     pub struct SignatureCondition {
         /// Signature condition file
         pub condition: Signature,
-        /// The filename with key-value metadata pairs in JSON
+        /// The JSON file with key-value metadata pairs
         #[structopt(short, long, default_value = "")]
         pub metadata: super::Metadata,
     }
@@ -393,8 +416,12 @@ mod account {
                 condition: Signature(condition),
                 metadata: Metadata(metadata),
             } = self;
-            submit(MintBox::new(account, condition), cfg, metadata)
-                .wrap_err("Failed to set signature condition")
+            submit(
+                MintBox::new(account, EvaluatesTo::new_unchecked(condition.into())),
+                cfg,
+                metadata,
+            )
+            .wrap_err("Failed to set signature condition")
         }
     }
 
@@ -415,6 +442,70 @@ mod account {
                     .wrap_err("Failed to get all accounts"),
             }?;
             println!("{:#?}", vec);
+            Ok(())
+        }
+    }
+
+    #[derive(StructOpt, Debug)]
+    pub struct Grant {
+        /// Account id
+        #[structopt(short, long)]
+        pub id: <Account as Identifiable>::Id,
+        /// The JSON file with a permission token
+        #[structopt(short, long)]
+        pub permission: Permission,
+        /// The JSON file with key-value metadata pairs
+        #[structopt(short, long, default_value = "")]
+        pub metadata: super::Metadata,
+    }
+
+    /// [`PermissionToken`] wrapper implementing [`FromStr`]
+    #[derive(Debug)]
+    pub struct Permission(PermissionToken);
+
+    impl FromStr for Permission {
+        type Err = Error;
+
+        fn from_str(s: &str) -> Result<Self> {
+            let file = File::open(s)
+                .wrap_err(format!("Failed to open the permission token file {}", &s))?;
+            let permission_token: PermissionToken =
+                serde_json::from_reader(file).wrap_err(format!(
+                    "Failed to deserialize the permission token from file {}",
+                    &s
+                ))?;
+            Ok(Self(permission_token))
+        }
+    }
+
+    impl RunArgs for Grant {
+        fn run(self, cfg: &ClientConfiguration) -> Result<()> {
+            let Self {
+                id,
+                permission,
+                metadata: Metadata(metadata),
+            } = self;
+            let grant = GrantBox::new(permission.0, id);
+            submit(grant, cfg, metadata).wrap_err("Failed to grant the permission to the account")
+        }
+    }
+
+    /// List all account permissions
+    #[derive(StructOpt, Debug)]
+    pub struct ListPermissions {
+        /// Account id
+        #[structopt(short, long)]
+        id: <Account as Identifiable>::Id,
+    }
+
+    impl RunArgs for ListPermissions {
+        fn run(self, cfg: &ClientConfiguration) -> Result<()> {
+            let client = Client::new(cfg)?;
+            let find_all_permissions = FindPermissionTokensByAccountId { id: self.id.into() };
+            let permissions = client
+                .request(find_all_permissions)
+                .wrap_err("Failed to get all account permissions")?;
+            println!("{:#?}", permissions);
             Ok(())
         }
     }
@@ -462,7 +553,7 @@ mod asset {
         /// Value type stored in asset
         #[structopt(short, long)]
         pub value_type: AssetValueType,
-        /// The filename with key-value metadata pairs in JSON
+        /// /// The JSON file with key-value metadata pairs
         #[structopt(short, long, default_value = "")]
         pub metadata: super::Metadata,
     }
@@ -501,7 +592,7 @@ mod asset {
         /// Quantity to mint
         #[structopt(short, long)]
         pub quantity: u32,
-        /// The filename with key-value metadata pairs in JSON
+        /// /// The JSON file with key-value metadata pairs
         #[structopt(short, long, default_value = "")]
         pub metadata: super::Metadata,
     }
@@ -537,7 +628,7 @@ mod asset {
         /// Quantity of asset as number
         #[structopt(short, long)]
         pub quantity: u32,
-        /// The filename with key-value metadata pairs in JSON
+        /// /// The JSON file with key-value metadata pairs
         #[structopt(short, long, default_value = "")]
         pub metadata: super::Metadata,
     }
@@ -598,7 +689,7 @@ mod asset {
             let vec = match self {
                 Self::All => client
                     .request(client::asset::all())
-                    .wrap_err("Failed to get all accounts"),
+                    .wrap_err("Failed to get all assets"),
             }?;
             println!("{:#?}", vec);
             Ok(())
@@ -636,7 +727,7 @@ mod peer {
         /// Public key of the peer
         #[structopt(short, long)]
         pub key: PublicKey,
-        /// The filename with key-value metadata pairs in JSON
+        /// /// The JSON file with key-value metadata pairs
         #[structopt(short, long, default_value = "")]
         pub metadata: super::Metadata,
     }
@@ -666,7 +757,7 @@ mod peer {
         /// Public key of the peer
         #[structopt(short, long)]
         pub key: PublicKey,
-        /// The filename with key-value metadata pairs in JSON
+        /// /// The JSON file with key-value metadata pairs
         #[structopt(short, long, default_value = "")]
         pub metadata: super::Metadata,
     }

@@ -6,7 +6,7 @@ The `iroha` crate contains the Iroha peer binary, which is used to instantiate a
 
 ## Build
 
-**Requirements:** a working [Rust toolchain](https://www.rust-lang.org/learn/get-started) (version 1.60), installed and configured.
+**Requirements:** a working [Rust toolchain](https://www.rust-lang.org/learn/get-started) (version 1.62.1), installed and configured.
 
 Optionally, [Docker](https://www.docker.com/) can be used to build images containing any of the provided binaries. Using [Docker buildx](https://docs.docker.com/buildx/working-with-buildx/) is recommended, but not required.
 
@@ -84,7 +84,7 @@ The environment variables replacing `config.json` should be passed as JSON strin
 <details> <summary>Expand to see the example</summary>
 
 ``` bash
-IROHA_TORII="{\"P2P_ADDR\": \"127.0.0.1:1339\", \"API_URL\": \"127.0.0.1:8080\"}" IROHA_SUMERAGI="{\"TRUSTED_PEERS\": [{\"address\": \"127.0.0.1:1337\",\"public_key\": \"ed01201c61faf8fe94e253b93114240394f79a607b7fa55f9e5a41ebec74b88055768b\"},{\"address\": \"127.0.0.1:1338\",\"public_key\": \"ed0120cc25624d62896d3a0bfd8940f928dc2abf27cc57cefeb442aa96d9081aae58a1\"},{\"address\": \"127.0.0.1:1339\",\"public_key\": \"ed0120faca9e8aa83225cb4d16d67f27dd4f93fc30ffa11adc1f5c88fd5495ecc91020\"},{\"address\": \"127.0.0.1:1340\",\"public_key\": \"ed01208e351a70b6a603ed285d666b8d689b680865913ba03ce29fb7d13a166c4e7f1f\"}]}" IROHA_KURA="{\"INIT_MODE\": \"strict\",\"BLOCK_STORE_PATH\": \"./blocks\"}" IROHA_BLOCK_SYNC="{\"GOSSIP_PERIOD_MS\": 10000,\"BATCH_SIZE\": 2}" IROHA_PUBLIC_KEY="ed01201c61faf8fe94e253b93114240394f79a607b7fa55f9e5a41ebec74b88055768b" IROHA_PRIVATE_KEY="{\"digest_function\": \"ed25519\",\"payload\": \"282ed9f3cf92811c3818dbc4ae594ed59dc1a2f78e4241e31924e101d6b1fb831c61faf8fe94e253b93114240394f79a607b7fa55f9e5a41ebec74b88055768b\"}" IROHA_GENESIS="{\"ACCOUNT_PUBLIC_KEY\": \"ed01204cffd0ee429b1bdd36b3910ec570852b8bb63f18750341772fb46bc856c5caaf\",\"ACCOUNT_PRIVATE_KEY\": {\"digest_function\": \"ed25519\",\"payload\": \"d748e18ce60cb30dea3e73c9019b7af45a8d465e3d71bcc9a5ef99a008205e534cffd0ee429b1bdd36b3910ec570852b8bb63f18750341772fb46bc856c5caaf\"}}" ./iroha 
+IROHA_TORII="{\"P2P_ADDR\": \"127.0.0.1:1339\", \"API_URL\": \"127.0.0.1:8080\"}" IROHA_SUMERAGI="{\"TRUSTED_PEERS\": [{\"address\": \"127.0.0.1:1337\",\"public_key\": \"ed01201c61faf8fe94e253b93114240394f79a607b7fa55f9e5a41ebec74b88055768b\"},{\"address\": \"127.0.0.1:1338\",\"public_key\": \"ed0120cc25624d62896d3a0bfd8940f928dc2abf27cc57cefeb442aa96d9081aae58a1\"},{\"address\": \"127.0.0.1:1339\",\"public_key\": \"ed0120faca9e8aa83225cb4d16d67f27dd4f93fc30ffa11adc1f5c88fd5495ecc91020\"},{\"address\": \"127.0.0.1:1340\",\"public_key\": \"ed01208e351a70b6a603ed285d666b8d689b680865913ba03ce29fb7d13a166c4e7f1f\"}]}" IROHA_KURA="{\"INIT_MODE\": \"strict\",\"BLOCK_STORE_PATH\": \"./storage\"}" IROHA_BLOCK_SYNC="{\"GOSSIP_PERIOD_MS\": 10000,\"BATCH_SIZE\": 2}" IROHA_PUBLIC_KEY="ed01201c61faf8fe94e253b93114240394f79a607b7fa55f9e5a41ebec74b88055768b" IROHA_PRIVATE_KEY="{\"digest_function\": \"ed25519\",\"payload\": \"282ed9f3cf92811c3818dbc4ae594ed59dc1a2f78e4241e31924e101d6b1fb831c61faf8fe94e253b93114240394f79a607b7fa55f9e5a41ebec74b88055768b\"}" IROHA_GENESIS="{\"ACCOUNT_PUBLIC_KEY\": \"ed01204cffd0ee429b1bdd36b3910ec570852b8bb63f18750341772fb46bc856c5caaf\",\"ACCOUNT_PRIVATE_KEY\": {\"digest_function\": \"ed25519\",\"payload\": \"d748e18ce60cb30dea3e73c9019b7af45a8d465e3d71bcc9a5ef99a008205e534cffd0ee429b1bdd36b3910ec570852b8bb63f18750341772fb46bc856c5caaf\"}}" ./iroha
 ```
 
 </details>
@@ -95,7 +95,7 @@ The [configuration options reference](../docs/source/references/config.md) provi
 
 One of the peers on your network must be provided with the genesis block, which is either `IROHA2_GENESIS_PATH` or `genesis.json` in the working directory.
 Check [configuration options](https://github.com/hyperledger/iroha/blob/iroha2-dev/docs/source/references/config.md#genesis) for details.
-Learn more about the genesis block in [our tutorial](https://hyperledger.github.io/iroha-2-docs/guide/appendix/genesis.html).
+Learn more about the genesis block in [our tutorial](https://hyperledger.github.io/iroha-2-docs/guide/configure/genesis.html).
 
 ## Deployment
 

@@ -1,12 +1,16 @@
 //! CLI for generating iroha sample configuration, genesis and
 //! cryptographic key pairs. To be used with all compliant Iroha
 //! installations.
-
+#![allow(
+    clippy::arithmetic,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc
+)]
 use std::io::{stdout, BufWriter, Write};
 
 use clap::{ArgGroup, StructOpt};
 use color_eyre::eyre::WrapErr as _;
-use iroha::config::Configuration;
+use iroha_config::iroha::Configuration;
 
 pub type Outcome = color_eyre::Result<()>;
 
@@ -38,13 +42,13 @@ pub trait RunArgs<T: Write> {
 #[structopt(name = "kagami", version, author)]
 pub enum Args {
     /// Generate cryptographic key pairs
-    Crypto(crypto::Args),
+    Crypto(Box<crypto::Args>),
     /// Generate the schema used for code generation in Iroha SDKs
     Schema(schema::Args),
     /// Generate the default genesis block that is used in tests
     Genesis(genesis::Args),
     /// Generate a Markdown reference of configuration parameters
-    Docs(docs::Args),
+    Docs(Box<docs::Args>),
     /// Generate a list of predefined permission tokens and their parameters
     Tokens(tokens::Args),
 }
@@ -64,7 +68,7 @@ impl<T: Write> RunArgs<T> for Args {
 }
 
 mod crypto {
-    use color_eyre::eyre::WrapErr as _;
+    use color_eyre::eyre::{eyre, WrapErr as _};
     use iroha_crypto::{Algorithm, KeyGenConfiguration, KeyPair, PrivateKey};
 
     use super::*;
@@ -73,7 +77,8 @@ mod crypto {
     #[derive(StructOpt, Debug, Clone)]
     #[structopt(group = ArgGroup::new("generate_from").required(false))]
     pub struct Args {
-        /// Algorithm used for generating the key-pair
+        /// Algorithm used to generate the key-pair.
+        /// Options: `ed25519`, `secp256k1`, `bls_normal`, `bls_small`.
         #[clap(default_value_t, long, short)]
         algorithm: Algorithm,
         /// The `private_key` used to generate the key-pair
@@ -129,10 +134,13 @@ mod crypto {
                     )
                 },
                 |seed| -> color_eyre::Result<_> {
+                    let seed: Vec<u8> = seed.as_bytes().into();
+                    // `ursa` crashes if provided seed for `secp256k1` shorter than 32 bytes
+                    if seed.len() < 32 && self.algorithm == Algorithm::Secp256k1 {
+                        return Err(eyre!("secp256k1 seed for must be at least 32 bytes long"));
+                    }
                     KeyPair::generate_with_configuration(
-                        key_gen_configuration
-                            .clone()
-                            .use_seed(seed.as_bytes().into()),
+                        key_gen_configuration.clone().use_seed(seed),
                     )
                     .wrap_err("Failed to generate key pair")
                 },
@@ -160,8 +168,9 @@ mod schema {
 mod genesis {
     use iroha_core::{
         genesis::{RawGenesisBlock, RawGenesisBlockBuilder},
-        tx::{AssetValueType, MintBox},
+        tx::{AssetValueType, MintBox, RegisterBox},
     };
+    use iroha_permissions_validators::public_blockchain;
 
     use super::*;
 
@@ -193,6 +202,12 @@ mod genesis {
                 "alice@wonderland".parse()?,
             )),
         );
+
+        result.transactions[0].isi.extend(
+            public_blockchain::default_permission_token_definitions()
+                .into_iter()
+                .map(|token_definition| RegisterBox::new(token_definition.clone()).into()),
+        );
         result.transactions[0].isi.push(mint.into());
         Ok(result)
     }
@@ -200,15 +215,20 @@ mod genesis {
 
 mod docs {
     #![allow(clippy::panic_in_result_fn, clippy::expect_used)]
+    #![allow(
+        clippy::arithmetic,
+        clippy::std_instead_of_core,
+        clippy::std_instead_of_alloc
+    )]
     use std::{fmt::Debug, io::Write};
 
     use color_eyre::eyre::WrapErr as _;
-    use iroha_config::Configurable;
+    use iroha_config::base::proxy::Documented;
     use serde_json::Value;
 
     use super::*;
 
-    impl<E: Debug, C: Configurable<Error = E> + Send + Sync + Default> PrintDocs for C {}
+    impl<E: Debug, C: Documented<Error = E> + Send + Sync + Default> PrintDocs for C {}
 
     #[derive(StructOpt, Debug, Clone, Copy)]
     pub struct Args;
@@ -219,7 +239,7 @@ mod docs {
         }
     }
 
-    pub trait PrintDocs: Configurable + Send + Sync + Default
+    pub trait PrintDocs: Documented + Send + Sync + Default
     where
         Self::Error: Debug,
     {
@@ -267,11 +287,13 @@ mod docs {
                     Value::Object(_) => {
                         let doc = Self::get_doc_recursive(&get_field)
                             .expect("Should be there, as already in docs");
-                        (doc.unwrap_or_default().to_owned(), true)
+                        (doc.unwrap_or_default(), true)
                     }
                     Value::String(s) => (s.clone(), false),
                     _ => unreachable!("Only strings and objects in docs"),
                 };
+                // Hacky workaround to avoid duplicating inner fields docs in the reference
+                let doc = doc.lines().take(3).collect::<Vec<&str>>().join("\n");
                 let doc = doc.strip_prefix(' ').unwrap_or(&doc);
                 let defaults = Self::default()
                     .get_recursive(get_field)
@@ -301,47 +323,88 @@ mod docs {
 mod tokens {
     use std::collections::HashMap;
 
-    use color_eyre::eyre::{bail, eyre, WrapErr};
-    use iroha_permissions_validators::public_blockchain::PredefinedPermissionToken;
+    use clap::ArgEnum;
+    use color_eyre::{
+        eyre::{bail, eyre, WrapErr},
+        Result,
+    };
+    use iroha_permissions_validators::{
+        private_blockchain::register::CanRegisterDomains,
+        public_blockchain::PredefinedPermissionToken,
+    };
     use iroha_schema::{IntoSchema, Metadata};
 
     use super::*;
 
     #[derive(StructOpt, Debug, Clone, Copy)]
-    pub struct Args;
+    pub struct Args {
+        #[structopt(arg_enum, default_value = "public")]
+        /// Whether to list private or public blockchain tokens
+        blockchain: Blockchain,
+    }
+
+    #[derive(ArgEnum, Debug, Clone, Copy)]
+    pub enum Blockchain {
+        Private,
+        Public,
+    }
+
+    fn public_blockchain_tokens() -> Result<HashMap<String, HashMap<String, String>>> {
+        let mut schema = PredefinedPermissionToken::get_schema();
+
+        let enum_variants = match schema
+            .remove("iroha_permissions_validators::public_blockchain::PredefinedPermissionToken")
+            .ok_or_else(|| eyre!("Token enum is not in schema"))?
+        {
+            Metadata::Enum(meta) => meta.variants,
+            _ => bail!("Expected enum"),
+        };
+
+        enum_variants
+            .into_iter()
+            .map(|variant| {
+                let ty = variant.ty.ok_or_else(|| eyre!("Empty enum variant"))?;
+                let fields = match schema
+                    .remove(&ty)
+                    .ok_or_else(|| eyre!("Token is not in schema"))?
+                {
+                    Metadata::Struct(meta) => meta
+                        .declarations
+                        .into_iter()
+                        .map(|decl| (decl.name, decl.ty))
+                        .collect::<HashMap<_, _>>(),
+                    _ => bail!("Token is not a struct"),
+                };
+                Ok((ty, fields))
+            })
+            .collect::<Result<HashMap<_, _>, _>>()
+    }
+
+    fn private_blockchain_tokens() -> Result<HashMap<String, HashMap<String, String>>> {
+        let schema = CanRegisterDomains::get_schema();
+
+        schema
+            .into_iter()
+            .map(|(ty, meta)| {
+                let fields = match meta {
+                    Metadata::Struct(meta) => meta
+                        .declarations
+                        .into_iter()
+                        .map(|decl| (decl.name, decl.ty))
+                        .collect::<HashMap<_, _>>(),
+                    _ => bail!("Token is not a struct"),
+                };
+                Ok((ty, fields))
+            })
+            .collect::<Result<HashMap<_, _>, _>>()
+    }
 
     impl<T: Write> RunArgs<T> for Args {
         fn run(self, writer: &mut BufWriter<T>) -> Outcome {
-            let mut schema = PredefinedPermissionToken::get_schema();
-
-            let enum_variants = match schema
-                .remove(
-                    "iroha_permissions_validators::public_blockchain::PredefinedPermissionToken",
-                )
-                .ok_or_else(|| eyre!("Token enum not in schema"))?
-            {
-                Metadata::Enum(meta) => meta.variants,
-                _ => bail!("Expected enum"),
+            let token_map = match self.blockchain {
+                Blockchain::Private => private_blockchain_tokens()?,
+                Blockchain::Public => public_blockchain_tokens()?,
             };
-
-            let token_map = enum_variants
-                .into_iter()
-                .map(|variant| {
-                    let ty = variant.ty.ok_or_else(|| eyre!("Empty enum variant"))?;
-                    let fields = match schema
-                        .remove(&ty)
-                        .ok_or_else(|| eyre!("Token not in schema"))?
-                    {
-                        Metadata::Struct(meta) => meta
-                            .declarations
-                            .into_iter()
-                            .map(|decl| (decl.name, decl.ty))
-                            .collect::<HashMap<_, _>>(),
-                        _ => bail!("Token is not a struct"),
-                    };
-                    Ok((ty, fields))
-                })
-                .collect::<Result<HashMap<_, _>, _>>()?;
 
             write!(
                 writer,

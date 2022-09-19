@@ -4,15 +4,16 @@
 
 #![allow(clippy::module_name_repetitions)]
 #![cfg_attr(not(feature = "std"), no_std)]
+#![allow(clippy::std_instead_of_core)]
 
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
-// TODO: #1854, CI doesn't catch errors with unused imports in this block.
 #[cfg(not(feature = "std"))]
 use alloc::{format, string::String, vec::Vec};
-use core::{fmt, ops::Range};
+use core::ops::Range;
 
+#[cfg(feature = "derive")]
 use iroha_schema::IntoSchema;
 #[cfg(feature = "derive")]
 pub use iroha_version_derive::*;
@@ -24,18 +25,22 @@ use serde::{Deserialize, Serialize};
 /// Module which contains error and result for versioning
 pub mod error {
     #[cfg(not(feature = "std"))]
-    use alloc::{format, string::String, vec::Vec};
+    use alloc::{borrow::ToOwned, boxed::Box};
     use core::fmt;
 
     use iroha_macro::FromVariant;
+    #[cfg(feature = "derive")]
     use iroha_schema::IntoSchema;
     #[cfg(feature = "scale")]
     use parity_scale_codec::{Decode, Encode};
 
     use super::UnsupportedVersion;
+    #[allow(unused_imports)] // False-positive
+    use super::*;
 
     /// Versioning errors
-    #[derive(Debug, Clone, FromVariant, IntoSchema)]
+    #[derive(Debug, FromVariant)]
+    #[cfg_attr(feature = "derive", derive(IntoSchema))]
     #[cfg_attr(feature = "std", derive(thiserror::Error))]
     #[cfg_attr(feature = "scale", derive(Encode, Decode))]
     pub enum Error {
@@ -56,7 +61,9 @@ pub mod error {
         /// Problem with parsing integers
         ParseInt,
         /// Input version unsupported
-        UnsupportedVersion(UnsupportedVersion),
+        UnsupportedVersion(Box<UnsupportedVersion>),
+        /// Buffer is not empty after decoding. Returned by `decode_all_versioned()`
+        ExtraBytesLeft(u64),
     }
 
     #[cfg(feature = "json")]
@@ -82,20 +89,23 @@ pub mod error {
     impl fmt::Display for Error {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             let msg = match self {
-                Self::NotVersioned => "Not a versioned object",
+                Self::NotVersioned => "Not a versioned object".to_owned(),
                 Self::UnsupportedJsonEncode => {
-                    "Cannot encode unsupported version from JSON to SCALE"
+                    "Cannot encode unsupported version from JSON to SCALE".to_owned()
                 }
-                Self::ExpectedJson => "Expected JSON object",
+                Self::ExpectedJson => "Expected JSON object".to_owned(),
                 Self::UnsupportedScaleEncode => {
-                    "Cannot encode unsupported version from SCALE to JSON"
+                    "Cannot encode unsupported version from SCALE to JSON".to_owned()
                 }
                 #[cfg(feature = "json")]
-                Self::Serde => "JSON (de)serialization issue",
+                Self::Serde => "JSON (de)serialization issue".to_owned(),
                 #[cfg(feature = "scale")]
-                Self::ParityScale => "Parity SCALE (de)serialization issue",
-                Self::ParseInt => "Problem with parsing integers",
-                Self::UnsupportedVersion(_) => "Input version unsupported",
+                Self::ParityScale => "Parity SCALE (de)serialization issue".to_owned(),
+                Self::ParseInt => "Issue with parsing integers".to_owned(),
+                Self::UnsupportedVersion(v) => {
+                    format!("Input version {} is unsupported", v.version)
+                }
+                Self::ExtraBytesLeft(n) => format!("Buffer contains {n} bytes after decoding"),
             };
 
             write!(f, "{}", msg)
@@ -141,24 +151,24 @@ pub trait Version {
 }
 
 /// Structure describing a container content which version is not supported.
-#[derive(Debug, Clone, IntoSchema)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "derive", derive(IntoSchema))]
+#[cfg_attr(feature = "std", derive(thiserror::Error))]
 #[cfg_attr(feature = "scale", derive(Encode, Decode))]
 #[cfg_attr(feature = "json", derive(Serialize, Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    error(
+        "Unsupported version. Expected: {}, got: {version}",
+        Self::expected_version()
+    )
+)]
 pub struct UnsupportedVersion {
     /// Version of the content.
     pub version: u8,
     /// Raw content.
     pub raw: RawVersioned,
 }
-
-impl fmt::Display for UnsupportedVersion {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Unsupported version: {}", self.version)
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for UnsupportedVersion {}
 
 impl UnsupportedVersion {
     /// Constructs [`UnsupportedVersion`].
@@ -167,10 +177,16 @@ impl UnsupportedVersion {
     pub const fn new(version: u8, raw: RawVersioned) -> Self {
         Self { version, raw }
     }
+
+    /// Expected version
+    pub const fn expected_version() -> u8 {
+        1
+    }
 }
 
 /// Raw versioned content, serialized.
-#[derive(Debug, Clone, IntoSchema)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "derive", derive(IntoSchema))]
 #[cfg_attr(feature = "scale", derive(Encode, Decode))]
 #[cfg_attr(feature = "json", derive(Serialize, Deserialize))]
 pub enum RawVersioned {
@@ -195,14 +211,72 @@ pub mod scale {
         /// Use this function for versioned objects instead of `decode`.
         ///
         /// # Errors
-        /// Will return error if version is unsupported or if input won't have enough bytes for decoding.
+        /// - Version is unsupported
+        /// - Input won't have enough bytes for decoding
         fn decode_versioned(input: &[u8]) -> Result<Self>;
+
+        /// Use this function for versioned objects instead of `decode_all`.
+        ///
+        /// # Errors
+        /// - Version is unsupported
+        /// - Input won't have enough bytes for decoding
+        /// - Input has extra bytes
+        fn decode_all_versioned(input: &[u8]) -> Result<Self>;
     }
 
     /// [`Encode`] versioned analog.
     pub trait EncodeVersioned: Encode + Version {
         /// Use this function for versioned objects instead of `encode`.
         fn encode_versioned(&self) -> Vec<u8>;
+    }
+
+    /// Try to decode type `t` from input `i` with [`DecodeVersioned::decode_all_versioned`]
+    /// and if it failed then print warning message to the log
+    /// and use [`DecodeVersioned::decode_versioned`].
+    ///
+    /// Implemented as a macro so that warning message will be displayed
+    /// with the file name of calling side.
+    ///
+    /// Will be removed in favor of just [`DecodeVersioned::decode_all_versioned`] in the future.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use iroha_data_model::prelude::*;
+    /// # use iroha_version::scale::EncodeVersioned;
+    /// use iroha_logger::prelude::warn;
+    /// use iroha_version::scale::DecodeVersioned;
+    /// use iroha_version::try_decode_all_or_just_decode;
+    ///
+    /// # let msg: VersionedEventPublisherMessage = EventPublisherMessage::SubscriptionAccepted.into();
+    /// # let mut bytes = msg.encode_versioned();
+    /// # bytes.append(&mut bytes.clone());
+    /// # let excessive_bytes = bytes;
+    ///
+    /// // Succeeds in decoding with a warning "Extra bytes left after decoding as `VersionedEventPublisherMessage`"
+    /// let msg = try_decode_all_or_just_decode!(VersionedEventPublisherMessage, &excessive_bytes)?;
+    ///
+    /// // Succeeds in decoding with a warning "Extra bytes left after decoding as `Message`"
+    /// let msg = try_decode_all_or_just_decode!(VersionedEventPublisherMessage as "Message", &excessive_bytes)?;
+    ///
+    /// # Ok::<(), iroha_version::error::Error>(())
+    /// ```
+    #[macro_export]
+    macro_rules! try_decode_all_or_just_decode {
+        ($t:ty, $i:expr) => {
+            try_decode_all_or_just_decode!(impl $t, $i, stringify!($t))
+        };
+        ($t:ty as $l:literal, $i:expr) => {
+            try_decode_all_or_just_decode!(impl $t, $i, $l)
+        };
+        (impl $t:ty, $i:expr, $n:expr) => {{
+            let mut res = <$t as DecodeVersioned>::decode_all_versioned($i);
+            if let Err(iroha_version::error::Error::ExtraBytesLeft(left_bytes)) = res {
+                warn!(%left_bytes, "Extra bytes left after decoding as `{}`", $n);
+                res = <$t as DecodeVersioned>::decode_versioned($i);
+            }
+            res
+        }};
     }
 }
 

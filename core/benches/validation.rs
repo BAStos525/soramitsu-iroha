@@ -7,7 +7,7 @@ use iroha_core::{
     prelude::*,
     sumeragi::view_change,
     tx::{AcceptedTransaction, TransactionValidator},
-    wsv::{World, WorldTrait},
+    wsv::World,
 };
 use iroha_data_model::prelude::*;
 
@@ -21,7 +21,7 @@ const TRANSACTION_LIMITS: TransactionLimits = TransactionLimits {
     max_wasm_size_bytes: 0,
 };
 
-fn build_test_transaction(keys: KeyPair) -> Transaction {
+fn build_test_transaction(keys: KeyPair) -> SignedTransaction {
     let domain_name = "domain";
     let domain_id = DomainId::from_str(domain_name).expect("does not panic");
     let create_domain = RegisterBox::new(Domain::new(domain_id));
@@ -58,7 +58,7 @@ fn build_test_transaction(keys: KeyPair) -> Transaction {
     .expect("Failed to sign.")
 }
 
-fn build_test_wsv(keys: KeyPair) -> WorldStateView<World> {
+fn build_test_wsv(keys: KeyPair) -> WorldStateView {
     let (public_key, _) = keys.into();
 
     WorldStateView::new({
@@ -123,8 +123,8 @@ fn validate_transaction(criterion: &mut Criterion) {
     let _ = criterion.bench_function("validate", move |b| {
         let transaction_validator = TransactionValidator::new(
             TRANSACTION_LIMITS,
-            AllowAll::new(),
-            AllowAll::new(),
+            Arc::new(AllowAll::new()),
+            Arc::new(AllowAll::new()),
             Arc::new(build_test_wsv(keys.clone())),
         );
         b.iter(
@@ -172,8 +172,8 @@ fn sign_blocks(criterion: &mut Criterion) {
     .expect("Failed to accept transaction.");
     let transaction_validator = TransactionValidator::new(
         TRANSACTION_LIMITS,
-        AllowAll::new(),
-        AllowAll::new(),
+        Arc::new(AllowAll::new()),
+        Arc::new(AllowAll::new()),
         Arc::new(build_test_wsv(keys)),
     );
     let block = PendingBlock::new(vec![transaction.into()], Vec::new())
@@ -215,8 +215,8 @@ fn validate_blocks(criterion: &mut Criterion) {
     let block = PendingBlock::new(vec![transaction.into()], Vec::new()).chain_first();
     let transaction_validator = TransactionValidator::new(
         TRANSACTION_LIMITS,
-        AllowAll::new(),
-        AllowAll::new(),
+        Arc::new(AllowAll::new()),
+        Arc::new(AllowAll::new()),
         Arc::new(WorldStateView::new(World::with([domain], BTreeSet::new()))),
     );
     let _ = criterion.bench_function("validate_block", |b| {

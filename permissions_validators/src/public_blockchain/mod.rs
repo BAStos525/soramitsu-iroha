@@ -1,6 +1,7 @@
 //! Permission checks asociated with use cases that can be summarized as public blockchains.
 
-use iroha_macro::FromVariant;
+use iroha_core::smartcontracts::permissions::Result;
+use iroha_macro::{FromVariant, VariantCount};
 use iroha_schema::IntoSchema;
 use parity_scale_codec::{Decode, Encode};
 use serde::{Deserialize, Serialize};
@@ -14,7 +15,9 @@ pub mod transfer;
 pub mod unregister;
 
 /// Enum listing preconfigured permission tokens
-#[derive(Debug, Clone, Encode, Decode, Serialize, Deserialize, FromVariant, IntoSchema)]
+#[derive(
+    Debug, Clone, Encode, Decode, Serialize, Deserialize, FromVariant, IntoSchema, VariantCount,
+)]
 pub enum PredefinedPermissionToken {
     /// Can burn asset with the corresponding asset definition.
     BurnAssetWithDefinition(burn::CanBurnAssetWithDefinition),
@@ -63,110 +66,123 @@ impl From<PredefinedPermissionToken> for PermissionToken {
     }
 }
 
-/// A preconfigured set of permissions for simple use cases.
-pub fn default_permissions<W: WorldTrait>() -> IsInstructionAllowedBoxed<W> {
-    // Grant instruction checks are or unioned, so that if one permission validator approves this Grant it will succeed.
-    let grant_instruction_validator = ValidatorBuilder::new()
-        .with_validator(transfer::GrantMyAssetAccess)
-        .with_validator(unregister::GrantRegisteredByMeAccess)
-        .with_validator(mint::GrantRegisteredByMeAccess)
-        .with_validator(burn::GrantMyAssetAccess)
-        .with_validator(burn::GrantRegisteredByMeAccess)
-        .with_validator(key_value::GrantMyAssetAccessRemove)
-        .with_validator(key_value::GrantMyAssetAccessSet)
-        .with_validator(key_value::GrantMyMetadataAccessSet)
-        .with_validator(key_value::GrantMyMetadataAccessRemove)
-        .with_validator(key_value::GrantMyAssetDefinitionSet)
-        .with_validator(key_value::GrantMyAssetDefinitionRemove)
-        .any_should_succeed("Grant instruction validator.");
-    ValidatorBuilder::new()
-        .with_recursive_validator(grant_instruction_validator)
-        .with_recursive_validator(transfer::OnlyOwnedAssets.or(transfer::GrantedByAssetOwner))
-        .with_recursive_validator(
-            unregister::OnlyAssetsCreatedByThisAccount.or(unregister::GrantedByAssetCreator),
-        )
-        .with_recursive_validator(
-            mint::OnlyAssetsCreatedByThisAccount.or(mint::GrantedByAssetCreator),
-        )
-        .with_recursive_validator(burn::OnlyOwnedAssets.or(burn::GrantedByAssetOwner))
-        .with_recursive_validator(
-            burn::OnlyAssetsCreatedByThisAccount.or(burn::GrantedByAssetCreator),
-        )
-        .with_recursive_validator(
-            key_value::AccountSetOnlyForSignerAccount.or(key_value::SetGrantedByAccountOwner),
-        )
-        .with_recursive_validator(
-            key_value::AccountRemoveOnlyForSignerAccount.or(key_value::RemoveGrantedByAccountOwner),
-        )
-        .with_recursive_validator(
-            key_value::AssetSetOnlyForSignerAccount.or(key_value::SetGrantedByAssetOwner),
-        )
-        .with_recursive_validator(
-            key_value::AssetRemoveOnlyForSignerAccount.or(key_value::RemoveGrantedByAssetOwner),
-        )
-        .with_recursive_validator(
-            key_value::AssetDefinitionSetOnlyForSignerAccount
-                .or(key_value::SetGrantedByAssetDefinitionOwner),
-        )
-        .with_recursive_validator(
-            key_value::AssetDefinitionRemoveOnlyForSignerAccount
-                .or(key_value::RemoveGrantedByAssetDefinitionOwner),
-        )
-        .all_should_succeed()
+/// List ids of all predefined permission tokens, e.g. for easier
+/// registration in genesis block.
+pub fn default_permission_token_definitions(
+) -> [&'static PermissionTokenDefinition; PredefinedPermissionToken::VARIANT_COUNT] {
+    [
+        unregister::CanUnregisterAssetWithDefinition::definition(),
+        burn::CanBurnAssetWithDefinition::definition(),
+        burn::CanBurnUserAssets::definition(),
+        key_value::CanSetKeyValueInUserAssets::definition(),
+        key_value::CanRemoveKeyValueInUserAssets::definition(),
+        key_value::CanSetKeyValueInUserMetadata::definition(),
+        key_value::CanRemoveKeyValueInUserMetadata::definition(),
+        key_value::CanSetKeyValueInAssetDefinition::definition(),
+        key_value::CanRemoveKeyValueInAssetDefinition::definition(),
+        mint::CanMintUserAssetDefinitions::definition(),
+        transfer::CanTransferUserAssets::definition(),
+        transfer::CanTransferOnlyFixedNumberOfTimesPerPeriod::definition(),
+    ]
 }
 
-/// Extracts specialized token from `GrantBox`
-///
-/// # Errors
-/// - Cannot evaluate `instruction`
-/// - `instruction` doesn't evaluate to `PermissionToken`
-/// - Generic `PermissionToken` can't be converted to requested specialized token.
-pub fn extract_specialized_token<T, W>(
-    instruction: &GrantBox,
-    wsv: &WorldStateView<W>,
-) -> Result<T, String>
-where
-    T: TryFrom<PermissionToken, Error = PredefinedTokenConversionError>,
-    W: iroha_core::wsv::WorldTrait,
-{
-    let permission_token: PermissionToken = instruction
-        .object
-        .evaluate(wsv, &Context::new())
-        .map_err(|e| e.to_string())?
-        .try_into()
-        .map_err(|e: ErrorTryFromEnum<_, _>| e.to_string())?;
-
-    let specialized_token: T = permission_token
-        .try_into()
-        .map_err(|e: PredefinedTokenConversionError| e.to_string())?;
-
-    Ok(specialized_token)
+/// A preconfigured set of permissions for simple use cases.
+pub fn default_permissions() -> InstructionJudgeBoxed {
+    // Grant instruction checks are or unioned, so that if one permission validator approves this Grant it will succeed.
+    let grant_instruction_validator =
+        JudgeBuilder::with_validator(transfer::GrantMyAssetAccess.into_validator())
+            .with_validator(unregister::GrantRegisteredByMeAccess.into_validator())
+            .with_validator(mint::GrantRegisteredByMeAccess.into_validator())
+            .with_validator(burn::GrantMyAssetAccess.into_validator())
+            .with_validator(burn::GrantRegisteredByMeAccess.into_validator())
+            .with_validator(key_value::GrantMyAssetAccessRemove.into_validator())
+            .with_validator(key_value::GrantMyAssetAccessSet.into_validator())
+            .with_validator(key_value::GrantMyMetadataAccessSet.into_validator())
+            .with_validator(key_value::GrantMyMetadataAccessRemove.into_validator())
+            .with_validator(key_value::GrantMyAssetDefinitionSet.into_validator())
+            .with_validator(key_value::GrantMyAssetDefinitionRemove.into_validator())
+            .no_denies()
+            .disable_display_of_operation_on_error()
+            .build()
+            .into_validator()
+            .display_as("Grant validator");
+    Box::new(
+        JudgeBuilder::with_recursive_validator(grant_instruction_validator)
+            .with_recursive_validator(
+                transfer::OnlyOwnedAssets.or(transfer::GrantedByAssetOwner.into_validator()),
+            )
+            .with_recursive_validator(
+                unregister::OnlyAssetsCreatedByThisAccount
+                    .or(unregister::GrantedByAssetCreator.into_validator()),
+            )
+            .with_recursive_validator(
+                mint::OnlyAssetsCreatedByThisAccount
+                    .or(mint::GrantedByAssetCreator.into_validator()),
+            )
+            .with_recursive_validator(
+                burn::OnlyOwnedAssets.or(burn::GrantedByAssetOwner.into_validator()),
+            )
+            .with_recursive_validator(
+                burn::OnlyAssetsCreatedByThisAccount
+                    .or(burn::GrantedByAssetCreator.into_validator()),
+            )
+            .with_recursive_validator(
+                key_value::AccountSetOnlyForSignerAccount
+                    .or(key_value::SetGrantedByAccountOwner.into_validator()),
+            )
+            .with_recursive_validator(
+                key_value::AccountRemoveOnlyForSignerAccount
+                    .or(key_value::RemoveGrantedByAccountOwner.into_validator()),
+            )
+            .with_recursive_validator(
+                key_value::AssetSetOnlyForSignerAccount
+                    .or(key_value::SetGrantedByAssetOwner.into_validator()),
+            )
+            .with_recursive_validator(
+                key_value::AssetRemoveOnlyForSignerAccount
+                    .or(key_value::RemoveGrantedByAssetOwner.into_validator()),
+            )
+            .with_recursive_validator(
+                key_value::AssetDefinitionSetOnlyForSignerAccount
+                    .or(key_value::SetGrantedByAssetDefinitionOwner.into_validator()),
+            )
+            .with_recursive_validator(
+                key_value::AssetDefinitionRemoveOnlyForSignerAccount
+                    .or(key_value::RemoveGrantedByAssetDefinitionOwner.into_validator()),
+            )
+            .no_denies()
+            .at_least_one_allow()
+            .build(),
+    )
 }
 
 /// Checks that asset creator is `authority` in the supplied `definition_id`.
 ///
 /// # Errors
 /// - Asset creator is not `authority`
-pub fn check_asset_creator_for_asset_definition<W: WorldTrait>(
+pub fn check_asset_creator_for_asset_definition(
     definition_id: &AssetDefinitionId,
     authority: &AccountId,
-    wsv: &WorldStateView<W>,
-) -> Result<(), String> {
+    wsv: &WorldStateView,
+) -> ValidatorVerdict {
     let registered_by_signer_account = wsv
         .asset_definition_entry(definition_id)
         .map(|asset_definition_entry| asset_definition_entry.registered_by() == authority)
         .unwrap_or(false);
     if !registered_by_signer_account {
-        return Err("Can not grant access for assets, registered by another account.".to_owned());
+        return Deny("Cannot grant access for assets registered by another account.".to_owned());
     }
-    Ok(())
+    Allow
 }
 
 #[cfg(test)]
 mod tests {
     #![allow(clippy::restriction)]
 
-    use std::{collections::BTreeSet, str::FromStr as _};
+    use std::{
+        collections::{BTreeSet, HashSet},
+        str::FromStr as _,
+    };
 
     use iroha_core::wsv::World;
 
@@ -188,7 +204,7 @@ mod tests {
             AssetDefinitionId::from_str("xor#test").expect("Valid"),
             AccountId::from_str("bob@test").expect("Valid"),
         );
-        let wsv = WorldStateView::<World>::new(World::new());
+        let wsv = WorldStateView::new(World::new());
         let transfer = Instruction::Transfer(TransferBox {
             source_id: IdBox::AssetId(alice_xor_id).into(),
             object: Value::U32(10).into(),
@@ -196,10 +212,10 @@ mod tests {
         });
         assert!(transfer::OnlyOwnedAssets
             .check(&alice_id, &transfer, &wsv)
-            .is_ok());
+            .is_allow());
         assert!(transfer::OnlyOwnedAssets
             .check(&bob_id, &transfer, &wsv)
-            .is_err());
+            .is_deny());
     }
 
     #[test]
@@ -215,21 +231,22 @@ mod tests {
             AccountId::from_str("bob@test").expect("Valid"),
         );
         let mut domain = Domain::new(DomainId::from_str("test").expect("Valid")).build();
-        let mut bob_account = Account::new(bob_id.clone(), []).build();
-        assert!(bob_account
-            .add_permission(transfer::CanTransferUserAssets::new(alice_xor_id.clone()).into()));
+        let bob_account = Account::new(bob_id.clone(), []).build();
         assert!(domain.add_account(bob_account).is_none());
-        let wsv = WorldStateView::<World>::new(World::with([domain], BTreeSet::new()));
+        let wsv = WorldStateView::new(World::with([domain], BTreeSet::new()));
+        assert!(wsv.add_account_permission(
+            &bob_id,
+            transfer::CanTransferUserAssets::new(alice_xor_id.clone()).into()
+        ));
         let transfer = Instruction::Transfer(TransferBox {
             source_id: IdBox::AssetId(alice_xor_id).into(),
             object: Value::U32(10).into(),
             destination_id: IdBox::AssetId(bob_xor_id).into(),
         });
-        let validator: IsInstructionAllowedBoxed<World> = transfer::OnlyOwnedAssets
-            .or(transfer::GrantedByAssetOwner)
-            .into();
-        assert!(validator.check(&alice_id, &transfer, &wsv).is_ok());
-        assert!(validator.check(&bob_id, &transfer, &wsv).is_ok());
+        let validator =
+            transfer::OnlyOwnedAssets.or(transfer::GrantedByAssetOwner.into_validator());
+        assert!(validator.check(&alice_id, &transfer, &wsv).is_allow());
+        assert!(validator.check(&bob_id, &transfer, &wsv).is_allow());
     }
 
     #[test]
@@ -242,14 +259,14 @@ mod tests {
         );
         let permission_token_to_alice: PermissionToken =
             transfer::CanTransferUserAssets::new(alice_xor_id).into();
-        let wsv = WorldStateView::<World>::new(World::new());
+        let wsv = WorldStateView::new(World::new());
         let grant = Instruction::Grant(GrantBox::new(
             permission_token_to_alice,
             IdBox::AccountId(bob_id.clone()),
         ));
-        let validator: IsInstructionAllowedBoxed<World> = transfer::GrantMyAssetAccess.into();
-        assert!(validator.check(&alice_id, &grant, &wsv).is_ok());
-        assert!(validator.check(&bob_id, &grant, &wsv).is_err());
+        let validator = transfer::GrantMyAssetAccess.into_validator();
+        assert!(validator.check(&alice_id, &grant, &wsv).is_allow());
+        assert!(validator.check(&bob_id, &grant, &wsv).is_deny());
     }
 
     #[test]
@@ -263,15 +280,15 @@ mod tests {
         assert!(domain
             .add_asset_definition(xor_definition, alice_id.clone())
             .is_none());
-        let wsv = WorldStateView::<World>::new(World::with([domain], []));
+        let wsv = WorldStateView::new(World::with([domain], []));
         let unregister =
             Instruction::Unregister(UnregisterBox::new(IdBox::AssetDefinitionId(xor_id)));
         assert!(unregister::OnlyAssetsCreatedByThisAccount
             .check(&alice_id, &unregister, &wsv)
-            .is_ok());
+            .is_allow());
         assert!(unregister::OnlyAssetsCreatedByThisAccount
             .check(&bob_id, &unregister, &wsv)
-            .is_err());
+            .is_deny());
     }
 
     #[test]
@@ -281,22 +298,21 @@ mod tests {
         let xor_id = AssetDefinitionId::from_str("xor#test").expect("Valid");
         let xor_definition = new_xor_definition(&xor_id);
         let mut domain = Domain::new(DomainId::from_str("test").expect("Valid")).build();
-        let mut bob_account = Account::new(bob_id.clone(), []).build();
-        assert!(bob_account.add_permission(
-            unregister::CanUnregisterAssetWithDefinition::new(xor_id.clone()).into()
-        ));
+        let bob_account = Account::new(bob_id.clone(), []).build();
         assert!(domain.add_account(bob_account).is_none());
         assert!(domain
             .add_asset_definition(xor_definition, alice_id.clone())
             .is_none());
-        let wsv = WorldStateView::<World>::new(World::with([domain], []));
-        let instruction = Instruction::Unregister(UnregisterBox::new(xor_id));
-        let validator: IsInstructionAllowedBoxed<World> =
-            unregister::OnlyAssetsCreatedByThisAccount
-                .or(unregister::GrantedByAssetCreator)
-                .into();
-        assert!(validator.check(&alice_id, &instruction, &wsv).is_ok());
-        assert!(validator.check(&bob_id, &instruction, &wsv).is_ok());
+        let wsv = WorldStateView::new(World::with([domain], []));
+        let instruction = Instruction::Unregister(UnregisterBox::new(xor_id.clone()));
+        let validator = unregister::OnlyAssetsCreatedByThisAccount
+            .or(unregister::GrantedByAssetCreator.into_validator());
+        assert!(wsv.add_account_permission(
+            &bob_id,
+            unregister::CanUnregisterAssetWithDefinition::new(xor_id).into()
+        ));
+        assert!(validator.check(&alice_id, &instruction, &wsv).is_allow());
+        assert!(validator.check(&bob_id, &instruction, &wsv).is_allow());
     }
 
     #[test]
@@ -312,15 +328,14 @@ mod tests {
             .add_asset_definition(xor_definition, alice_id.clone())
             .is_none());
 
-        let wsv = WorldStateView::<World>::new(World::with([domain], []));
+        let wsv = WorldStateView::new(World::with([domain], []));
         let grant = Instruction::Grant(GrantBox {
             object: permission_token_to_alice.into(),
             destination_id: IdBox::AccountId(bob_id.clone()).into(),
         });
-        let validator: IsInstructionAllowedBoxed<World> =
-            unregister::GrantRegisteredByMeAccess.into();
-        assert!(validator.check(&alice_id, &grant, &wsv).is_ok());
-        assert!(validator.check(&bob_id, &grant, &wsv).is_err());
+        let validator = unregister::GrantRegisteredByMeAccess.into_validator();
+        assert!(validator.check(&alice_id, &grant, &wsv).is_allow());
+        assert!(validator.check(&bob_id, &grant, &wsv).is_deny());
     }
 
     #[test]
@@ -338,17 +353,17 @@ mod tests {
         assert!(domain
             .add_asset_definition(xor_definition, alice_id.clone())
             .is_none());
-        let wsv = WorldStateView::<World>::new(World::with([domain], []));
+        let wsv = WorldStateView::new(World::with([domain], []));
         let mint = Instruction::Mint(MintBox {
             object: Value::U32(100).into(),
             destination_id: IdBox::AssetId(alice_xor_id).into(),
         });
         assert!(mint::OnlyAssetsCreatedByThisAccount
             .check(&alice_id, &mint, &wsv)
-            .is_ok());
+            .is_allow());
         assert!(mint::OnlyAssetsCreatedByThisAccount
             .check(&bob_id, &mint, &wsv)
-            .is_err());
+            .is_deny());
     }
 
     #[test]
@@ -362,22 +377,24 @@ mod tests {
         let xor_id = AssetDefinitionId::from_str("xor#test").expect("Valid");
         let xor_definition = new_xor_definition(&xor_id);
         let mut domain = Domain::new(DomainId::from_str("test").expect("Valid")).build();
-        let mut bob_account = Account::new(bob_id.clone(), []).build();
-        assert!(bob_account.add_permission(mint::CanMintUserAssetDefinitions::new(xor_id).into()));
+        let bob_account = Account::new(bob_id.clone(), []).build();
         assert!(domain.add_account(bob_account).is_none());
         assert!(domain
             .add_asset_definition(xor_definition, alice_id.clone())
             .is_none());
-        let wsv = WorldStateView::<World>::new(World::with([domain], []));
+        let wsv = WorldStateView::new(World::with([domain], []));
+        assert!(wsv.add_account_permission(
+            &bob_id,
+            mint::CanMintUserAssetDefinitions::new(xor_id).into()
+        ));
         let instruction = Instruction::Mint(MintBox {
             object: Value::U32(100).into(),
             destination_id: IdBox::AssetId(alice_xor_id).into(),
         });
-        let validator: IsInstructionAllowedBoxed<World> = mint::OnlyAssetsCreatedByThisAccount
-            .or(mint::GrantedByAssetCreator)
-            .into();
-        assert!(validator.check(&alice_id, &instruction, &wsv).is_ok());
-        assert!(validator.check(&bob_id, &instruction, &wsv).is_ok());
+        let validator =
+            mint::OnlyAssetsCreatedByThisAccount.or(mint::GrantedByAssetCreator.into_validator());
+        assert!(validator.check(&alice_id, &instruction, &wsv).is_allow());
+        assert!(validator.check(&bob_id, &instruction, &wsv).is_allow());
     }
 
     #[test]
@@ -392,14 +409,14 @@ mod tests {
         assert!(domain
             .add_asset_definition(xor_definition, alice_id.clone())
             .is_none());
-        let wsv = WorldStateView::<World>::new(World::with([domain], vec![]));
+        let wsv = WorldStateView::new(World::with([domain], vec![]));
         let grant = Instruction::Grant(GrantBox {
             object: permission_token_to_alice.into(),
             destination_id: IdBox::AccountId(bob_id.clone()).into(),
         });
-        let validator: IsInstructionAllowedBoxed<World> = mint::GrantRegisteredByMeAccess.into();
-        assert!(validator.check(&alice_id, &grant, &wsv).is_ok());
-        assert!(validator.check(&bob_id, &grant, &wsv).is_err());
+        let validator = mint::GrantRegisteredByMeAccess.into_validator();
+        assert!(validator.check(&alice_id, &grant, &wsv).is_allow());
+        assert!(validator.check(&bob_id, &grant, &wsv).is_deny());
     }
 
     #[test]
@@ -417,17 +434,17 @@ mod tests {
         assert!(domain
             .add_asset_definition(xor_definition, alice_id.clone())
             .is_none());
-        let wsv = WorldStateView::<World>::new(World::with([domain], []));
+        let wsv = WorldStateView::new(World::with([domain], []));
         let burn = Instruction::Burn(BurnBox {
             object: Value::U32(100).into(),
             destination_id: IdBox::AssetId(alice_xor_id).into(),
         });
         assert!(burn::OnlyAssetsCreatedByThisAccount
             .check(&alice_id, &burn, &wsv)
-            .is_ok());
+            .is_allow());
         assert!(burn::OnlyAssetsCreatedByThisAccount
             .check(&bob_id, &burn, &wsv)
-            .is_err());
+            .is_deny());
     }
 
     #[test]
@@ -441,22 +458,24 @@ mod tests {
         let xor_id = AssetDefinitionId::from_str("xor#test").expect("Valid");
         let xor_definition = new_xor_definition(&xor_id);
         let mut domain = Domain::new(DomainId::from_str("test").expect("Valid")).build();
-        let mut bob_account = Account::new(bob_id.clone(), []).build();
-        assert!(bob_account.add_permission(burn::CanBurnAssetWithDefinition::new(xor_id).into()));
+        let bob_account = Account::new(bob_id.clone(), []).build();
         assert!(domain.add_account(bob_account).is_none());
         assert!(domain
             .add_asset_definition(xor_definition, alice_id.clone())
             .is_none());
-        let wsv = WorldStateView::<World>::new(World::with([domain], vec![]));
+        let wsv = WorldStateView::new(World::with([domain], vec![]));
+        assert!(wsv.add_account_permission(
+            &bob_id,
+            burn::CanBurnAssetWithDefinition::new(xor_id).into()
+        ));
         let instruction = Instruction::Burn(BurnBox {
             object: Value::U32(100).into(),
             destination_id: IdBox::AssetId(alice_xor_id).into(),
         });
-        let validator: IsInstructionAllowedBoxed<World> = burn::OnlyAssetsCreatedByThisAccount
-            .or(burn::GrantedByAssetCreator)
-            .into();
-        assert!(validator.check(&alice_id, &instruction, &wsv).is_ok());
-        assert!(validator.check(&bob_id, &instruction, &wsv).is_ok());
+        let validator =
+            burn::OnlyAssetsCreatedByThisAccount.or(burn::GrantedByAssetCreator.into_validator());
+        assert!(validator.check(&alice_id, &instruction, &wsv).is_allow());
+        assert!(validator.check(&bob_id, &instruction, &wsv).is_allow());
     }
 
     #[test]
@@ -471,14 +490,14 @@ mod tests {
         assert!(domain
             .add_asset_definition(xor_definition, alice_id.clone())
             .is_none());
-        let wsv = WorldStateView::<World>::new(World::with([domain], vec![]));
+        let wsv = WorldStateView::new(World::with([domain], vec![]));
         let grant = Instruction::Grant(GrantBox {
             object: permission_token_to_alice.into(),
             destination_id: IdBox::AccountId(bob_id.clone()).into(),
         });
-        let validator: IsInstructionAllowedBoxed<World> = burn::GrantRegisteredByMeAccess.into();
-        assert!(validator.check(&alice_id, &grant, &wsv).is_ok());
-        assert!(validator.check(&bob_id, &grant, &wsv).is_err());
+        let validator = burn::GrantRegisteredByMeAccess.into_validator();
+        assert!(validator.check(&alice_id, &grant, &wsv).is_allow());
+        assert!(validator.check(&bob_id, &grant, &wsv).is_deny());
     }
 
     #[test]
@@ -489,17 +508,19 @@ mod tests {
             AssetDefinitionId::from_str("xor#test").expect("Valid"),
             AccountId::from_str("alice@test").expect("Valid"),
         );
-        let wsv = WorldStateView::<World>::new(World::new());
+        let wsv = WorldStateView::new(World::new());
         let burn = Instruction::Burn(BurnBox {
             object: Value::U32(100).into(),
             destination_id: IdBox::AssetId(alice_xor_id).into(),
         });
-        assert!(burn::OnlyOwnedAssets.check(&alice_id, &burn, &wsv).is_ok());
-        assert!(burn::OnlyOwnedAssets.check(&bob_id, &burn, &wsv).is_err());
+        assert!(burn::OnlyOwnedAssets
+            .check(&alice_id, &burn, &wsv)
+            .is_allow());
+        assert!(burn::OnlyOwnedAssets.check(&bob_id, &burn, &wsv).is_deny());
     }
 
     #[test]
-    fn burn_granted_assets() -> Result<(), String> {
+    fn burn_granted_assets() {
         let alice_id = AccountId::from_str("alice@test").expect("Valid");
         let bob_id = AccountId::from_str("bob@test").expect("Valid");
         let alice_xor_id = <Asset as Identifiable>::Id::new(
@@ -507,21 +528,20 @@ mod tests {
             AccountId::from_str("alice@test").expect("Valid"),
         );
         let mut domain = Domain::new(DomainId::from_str("test").expect("Valid")).build();
-        let mut bob_account = Account::new(bob_id.clone(), []).build();
-        assert!(
-            bob_account.add_permission(burn::CanBurnUserAssets::new(alice_xor_id.clone()).into())
-        );
+        let bob_account = Account::new(bob_id.clone(), []).build();
         assert!(domain.add_account(bob_account).is_none());
-        let wsv = WorldStateView::<World>::new(World::with([domain], vec![]));
+        let wsv = WorldStateView::new(World::with([domain], vec![]));
+        assert!(wsv.add_account_permission(
+            &bob_id,
+            burn::CanBurnUserAssets::new(alice_xor_id.clone()).into()
+        ));
         let transfer = Instruction::Burn(BurnBox {
             object: Value::U32(10).into(),
             destination_id: IdBox::AssetId(alice_xor_id).into(),
         });
-        let validator: IsInstructionAllowedBoxed<World> =
-            burn::OnlyOwnedAssets.or(burn::GrantedByAssetOwner).into();
-        validator.check(&alice_id, &transfer, &wsv)?;
-        assert!(validator.check(&bob_id, &transfer, &wsv).is_ok());
-        Ok(())
+        let validator = burn::OnlyOwnedAssets.or(burn::GrantedByAssetOwner.into_validator());
+        assert!(validator.check(&alice_id, &transfer, &wsv).is_allow());
+        assert!(validator.check(&bob_id, &transfer, &wsv).is_allow());
     }
 
     #[test]
@@ -534,14 +554,14 @@ mod tests {
         );
         let permission_token_to_alice: PermissionToken =
             burn::CanBurnUserAssets::new(alice_xor_id).into();
-        let wsv = WorldStateView::<World>::new(World::new());
+        let wsv = WorldStateView::new(World::new());
         let grant = Instruction::Grant(GrantBox::new(
             permission_token_to_alice,
             IdBox::AccountId(bob_id.clone()),
         ));
-        let validator: IsInstructionAllowedBoxed<World> = burn::GrantMyAssetAccess.into();
-        assert!(validator.check(&alice_id, &grant, &wsv).is_ok());
-        assert!(validator.check(&bob_id, &grant, &wsv).is_err());
+        let validator = burn::GrantMyAssetAccess.into_validator();
+        assert!(validator.check(&alice_id, &grant, &wsv).is_allow());
+        assert!(validator.check(&bob_id, &grant, &wsv).is_deny());
     }
 
     #[test]
@@ -552,18 +572,19 @@ mod tests {
             AssetDefinitionId::from_str("xor#test").expect("Valid"),
             AccountId::from_str("alice@test").expect("Valid"),
         );
-        let wsv = WorldStateView::<World>::new(World::new());
+        let wsv = WorldStateView::new(World::new());
+        let key: Name = "key".parse().expect("Valid");
         let set = Instruction::SetKeyValue(SetKeyValueBox::new(
             IdBox::AssetId(alice_xor_id),
-            Value::from("key".to_owned()),
+            key,
             Value::from("value".to_owned()),
         ));
         assert!(key_value::AssetSetOnlyForSignerAccount
             .check(&alice_id, &set, &wsv)
-            .is_ok());
+            .is_allow());
         assert!(key_value::AssetSetOnlyForSignerAccount
             .check(&bob_id, &set, &wsv)
-            .is_err());
+            .is_deny());
     }
 
     #[test]
@@ -574,52 +595,53 @@ mod tests {
             AssetDefinitionId::from_str("xor#test").expect("Valid"),
             AccountId::from_str("alice@test").expect("Valid"),
         );
-        let wsv = WorldStateView::<World>::new(World::new());
-        let set = Instruction::RemoveKeyValue(RemoveKeyValueBox::new(
-            IdBox::AssetId(alice_xor_id),
-            Value::from("key".to_owned()),
-        ));
+        let wsv = WorldStateView::new(World::new());
+        let key: Name = "key".parse().expect("Valid");
+        let set =
+            Instruction::RemoveKeyValue(RemoveKeyValueBox::new(IdBox::AssetId(alice_xor_id), key));
         assert!(key_value::AssetRemoveOnlyForSignerAccount
             .check(&alice_id, &set, &wsv)
-            .is_ok());
+            .is_allow());
         assert!(key_value::AssetRemoveOnlyForSignerAccount
             .check(&bob_id, &set, &wsv)
-            .is_err());
+            .is_deny());
     }
 
     #[test]
     fn set_to_only_owned_account() {
         let alice_id = AccountId::from_str("alice@test").expect("Valid");
         let bob_id = AccountId::from_str("bob@test").expect("Valid");
-        let wsv = WorldStateView::<World>::new(World::new());
+        let wsv = WorldStateView::new(World::new());
+        let key: Name = "key".parse().expect("Valid");
         let set = Instruction::SetKeyValue(SetKeyValueBox::new(
             IdBox::AccountId(alice_id.clone()),
-            Value::from("key".to_owned()),
+            key,
             Value::from("value".to_owned()),
         ));
         assert!(key_value::AccountSetOnlyForSignerAccount
             .check(&alice_id, &set, &wsv)
-            .is_ok());
+            .is_allow());
         assert!(key_value::AccountSetOnlyForSignerAccount
             .check(&bob_id, &set, &wsv)
-            .is_err());
+            .is_deny());
     }
 
     #[test]
     fn remove_to_only_owned_account() {
         let alice_id = AccountId::from_str("alice@test").expect("Valid");
         let bob_id = AccountId::from_str("bob@test").expect("Valid");
-        let wsv = WorldStateView::<World>::new(World::new());
+        let wsv = WorldStateView::new(World::new());
+        let key: Name = "key".parse().expect("Valid");
         let set = Instruction::RemoveKeyValue(RemoveKeyValueBox::new(
             IdBox::AccountId(alice_id.clone()),
-            Value::from("key".to_owned()),
+            key,
         ));
         assert!(key_value::AccountRemoveOnlyForSignerAccount
             .check(&alice_id, &set, &wsv)
-            .is_ok());
+            .is_allow());
         assert!(key_value::AccountRemoveOnlyForSignerAccount
             .check(&bob_id, &set, &wsv)
-            .is_err());
+            .is_deny());
     }
 
     #[test]
@@ -633,18 +655,19 @@ mod tests {
         assert!(domain
             .add_asset_definition(xor_definition, alice_id.clone())
             .is_none());
-        let wsv = WorldStateView::<World>::new(World::with([domain], []));
+        let wsv = WorldStateView::new(World::with([domain], []));
+        let key: Name = "key".parse().expect("Valid");
         let set = Instruction::SetKeyValue(SetKeyValueBox::new(
             IdBox::AssetDefinitionId(xor_id),
-            Value::from("key".to_owned()),
+            key,
             Value::from("value".to_owned()),
         ));
         assert!(key_value::AssetDefinitionSetOnlyForSignerAccount
             .check(&alice_id, &set, &wsv)
-            .is_ok());
+            .is_allow());
         assert!(key_value::AssetDefinitionSetOnlyForSignerAccount
             .check(&bob_id, &set, &wsv)
-            .is_err());
+            .is_deny());
     }
 
     #[test]
@@ -658,16 +681,26 @@ mod tests {
         assert!(domain
             .add_asset_definition(xor_definition, alice_id.clone())
             .is_none());
-        let wsv = WorldStateView::<World>::new(World::with([domain], []));
+        let wsv = WorldStateView::new(World::with([domain], []));
+        let key: Name = "key".parse().expect("Valid");
         let set = Instruction::RemoveKeyValue(RemoveKeyValueBox::new(
             IdBox::AssetDefinitionId(xor_id),
-            Value::from("key".to_owned()),
+            key,
         ));
         assert!(key_value::AssetDefinitionRemoveOnlyForSignerAccount
             .check(&alice_id, &set, &wsv)
-            .is_ok());
+            .is_allow());
         assert!(key_value::AssetDefinitionRemoveOnlyForSignerAccount
             .check(&bob_id, &set, &wsv)
-            .is_err());
+            .is_deny());
+    }
+
+    #[test]
+    fn default_permission_token_definitions_are_unique() {
+        let permissions_set = HashSet::from(default_permission_token_definitions());
+        assert_eq!(
+            permissions_set.len(),
+            default_permission_token_definitions().len()
+        );
     }
 }

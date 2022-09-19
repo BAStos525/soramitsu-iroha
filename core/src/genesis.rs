@@ -1,28 +1,32 @@
 //! Genesis-related logic and constructs. Contains the `GenesisBlock`,
 //! `RawGenesisBlock` and the `RawGenesisBlockBuilder` structures.
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::new_without_default)]
+#![allow(
+    clippy::module_name_repetitions,
+    clippy::new_without_default,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc,
+    clippy::arithmetic
+)]
 
 use std::{collections::HashSet, fmt::Debug, fs::File, io::BufReader, ops::Deref, path::Path};
 
+use derive_more::Deref;
 use eyre::{eyre, Result, WrapErr};
 use iroha_actor::Addr;
+use iroha_config::genesis::Configuration;
 use iroha_crypto::{KeyPair, PublicKey};
 use iroha_data_model::{asset::AssetDefinition, prelude::*};
+use iroha_primitives::small::{smallvec, SmallVec};
 use iroha_schema::prelude::*;
 use serde::{Deserialize, Serialize};
-use small::{smallvec, SmallVec};
 use tokio::{time, time::Duration};
 
-pub use self::config::GenesisConfiguration;
 use crate::{
-    kura::KuraTrait,
     sumeragi::{
         fault::{FaultInjection, SumeragiWithFault},
         network_topology::{GenesisBuilder as GenesisTopologyBuilder, Topology},
     },
     tx::VersionedAcceptedTransaction,
-    wsv::WorldTrait,
     IrohaNetwork,
 };
 
@@ -46,7 +50,7 @@ pub trait GenesisNetworkTrait:
     fn from_configuration(
         submit_genesis: bool,
         raw_block: RawGenesisBlock,
-        genesis_config: &GenesisConfiguration,
+        genesis_config: Option<&Configuration>,
         transaction_limits: &TransactionLimits,
     ) -> Result<Option<Self>>;
 
@@ -69,11 +73,11 @@ pub trait GenesisNetworkTrait:
     ///
     /// # Errors
     /// Returns error if waiting for peers or genesis round itself fails
-    async fn submit_transactions<K: KuraTrait, W: WorldTrait, F: FaultInjection>(
+    async fn submit_transactions<F: FaultInjection>(
         &self,
-        sumeragi: &mut SumeragiWithFault<Self, K, W, F>,
+        sumeragi: &mut SumeragiWithFault<Self, F>,
         network: Addr<IrohaNetwork>,
-        ctx: &mut iroha_actor::Context<SumeragiWithFault<Self, K, W, F>>,
+        ctx: &mut iroha_actor::Context<SumeragiWithFault<Self, F>>,
     ) -> Result<()> {
         iroha_logger::debug!("Starting submit genesis");
         let genesis_topology = self
@@ -86,30 +90,23 @@ pub trait GenesisNetworkTrait:
             .await
     }
 
-    /// See [`GenesisConfiguration`] docs.
+    /// See [`Configuration`] docs.
     fn genesis_submission_delay_ms(&self) -> u64;
 }
 
 /// [`GenesisNetwork`] contains initial transactions and genesis setup related parameters.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deref)]
 pub struct GenesisNetwork {
     /// transactions from `GenesisBlock`, any transaction is accepted
+    #[deref]
     pub transactions: Vec<VersionedAcceptedTransaction>,
     /// Number of attempts to connect to peers, while waiting for them to submit genesis.
-    pub wait_for_peers_retry_count: u64,
+    pub wait_for_peers_retry_count_limit: u64,
     /// Period in milliseconds in which to retry connecting to peers, while waiting for them to submit genesis.
     pub wait_for_peers_retry_period_ms: u64,
     /// Delay before genesis block submission after minimum number of peers were discovered to be online.
     /// Used to ensure that other peers had time to connect to each other.
     pub genesis_submission_delay_ms: u64,
-}
-
-impl Deref for GenesisNetwork {
-    type Target = Vec<VersionedAcceptedTransaction>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.transactions
-    }
 }
 
 async fn try_get_online_topology(
@@ -173,9 +170,11 @@ impl GenesisNetworkTrait for GenesisNetwork {
     fn from_configuration(
         submit_genesis: bool,
         raw_block: RawGenesisBlock,
-        genesis_config: &GenesisConfiguration,
+        genesis_config: Option<&Configuration>,
         tx_limits: &TransactionLimits,
     ) -> Result<Option<GenesisNetwork>> {
+        #![allow(clippy::unwrap_in_result)]
+        #![allow(clippy::expect_used)]
         if !submit_genesis {
             iroha_logger::debug!("Not submitting genesis");
             return Ok(None);
@@ -187,8 +186,14 @@ impl GenesisNetworkTrait for GenesisNetwork {
                 .iter()
                 .map(|raw_transaction| {
                     let genesis_key_pair = KeyPair::new(
-                        genesis_config.account_public_key.clone(),
                         genesis_config
+                            .as_ref()
+                            .expect("Should be `Some` when `submit_genesis` is true")
+                            .account_public_key
+                            .clone(),
+                        genesis_config
+                            .as_ref()
+                            .expect("Should be `Some` when `submit_genesis` is true")
                             .account_private_key
                             .clone()
                             .ok_or_else(|| eyre!("Genesis account private key is empty."))?,
@@ -205,9 +210,18 @@ impl GenesisNetworkTrait for GenesisNetwork {
                     .ok()
                 })
                 .collect(),
-            wait_for_peers_retry_count: genesis_config.wait_for_peers_retry_count,
-            wait_for_peers_retry_period_ms: genesis_config.wait_for_peers_retry_period_ms,
-            genesis_submission_delay_ms: genesis_config.genesis_submission_delay_ms,
+            wait_for_peers_retry_count_limit: genesis_config
+                .as_ref()
+                .expect("Should be `Some` when `submit_genesis` is true")
+                .wait_for_peers_retry_count_limit,
+            wait_for_peers_retry_period_ms: genesis_config
+                .as_ref()
+                .expect("Should be `Some` when `submit_genesis` is true")
+                .wait_for_peers_retry_period_ms,
+            genesis_submission_delay_ms: genesis_config
+                .as_ref()
+                .expect("Should be `Some` when `submit_genesis` is true")
+                .genesis_submission_delay_ms,
         }))
     }
 
@@ -218,7 +232,7 @@ impl GenesisNetworkTrait for GenesisNetwork {
         network: Addr<IrohaNetwork>,
     ) -> Result<Topology> {
         iroha_logger::info!("Waiting for active peers",);
-        for i in 0..self.wait_for_peers_retry_count {
+        for i in 0..self.wait_for_peers_retry_count_limit {
             if let Ok(topology) =
                 try_get_online_topology(&this_peer_id, &network_topology, network.clone()).await
             {
@@ -313,84 +327,6 @@ impl GenesisTransaction {
     }
 }
 
-/// Module with genesis configuration logic.
-pub mod config {
-    use iroha_config::derive::Configurable;
-    use iroha_crypto::{KeyPair, PrivateKey, PublicKey};
-    use serde::{Deserialize, Serialize};
-
-    const DEFAULT_WAIT_FOR_PEERS_RETRY_COUNT: u64 = 100;
-    const DEFAULT_WAIT_FOR_PEERS_RETRY_PERIOD_MS: u64 = 500;
-    const DEFAULT_GENESIS_SUBMISSION_DELAY_MS: u64 = 1000;
-
-    #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Configurable)]
-    #[serde(default)]
-    #[serde(rename_all = "UPPERCASE")]
-    #[config(env_prefix = "IROHA_GENESIS_")]
-    /// Configuration of the genesis block and the process of its submission.
-    pub struct GenesisConfiguration {
-        /// The genesis account public key, should be supplied to all peers.
-        #[config(serde_as_str)]
-        pub account_public_key: PublicKey,
-        /// Genesis account private key, only needed on the peer that submits the genesis block.
-        pub account_private_key: Option<PrivateKey>,
-        /// Number of attempts to connect to peers, while waiting for them to submit genesis.
-        #[serde(default = "default_wait_for_peers_retry_count")]
-        pub wait_for_peers_retry_count: u64,
-        /// Period in milliseconds in which to retry connecting to peers, while waiting for them to submit genesis.
-        #[serde(default = "default_wait_for_peers_retry_period_ms")]
-        pub wait_for_peers_retry_period_ms: u64,
-        /// Delay before genesis block submission after minimum number of peers were discovered to be online.
-        /// Used to ensure that other peers had time to connect to each other.
-        #[serde(default = "default_genesis_submission_delay_ms")]
-        pub genesis_submission_delay_ms: u64,
-    }
-
-    #[allow(clippy::expect_used)]
-    impl Default for GenesisConfiguration {
-        fn default() -> Self {
-            let (public_key, private_key) = Self::placeholder_keypair().into();
-
-            Self {
-                account_public_key: public_key,
-                account_private_key: Some(private_key),
-                wait_for_peers_retry_count: DEFAULT_WAIT_FOR_PEERS_RETRY_COUNT,
-                wait_for_peers_retry_period_ms: DEFAULT_WAIT_FOR_PEERS_RETRY_PERIOD_MS,
-                genesis_submission_delay_ms: DEFAULT_GENESIS_SUBMISSION_DELAY_MS,
-            }
-        }
-    }
-
-    impl GenesisConfiguration {
-        /// Key-pair used by default for demo purposes
-        #[allow(clippy::expect_used)]
-        fn placeholder_keypair() -> KeyPair {
-            let public_key =
-                "ed01204cffd0ee429b1bdd36b3910ec570852b8bb63f18750341772fb46bc856c5caaf"
-                    .parse()
-                    .expect("Public key not in mulithash format");
-            let private_key = PrivateKey::from_hex(
-                iroha_crypto::Algorithm::Ed25519,
-                "d748e18ce60cb30dea3e73c9019b7af45a8d465e3d71bcc9a5ef99a008205e534cffd0ee429b1bdd36b3910ec570852b8bb63f18750341772fb46bc856c5caaf"
-            ).expect("Private key not hex encoded");
-
-            KeyPair::new(public_key, private_key).expect("Key pair mismatch")
-        }
-    }
-
-    const fn default_wait_for_peers_retry_count() -> u64 {
-        DEFAULT_WAIT_FOR_PEERS_RETRY_COUNT
-    }
-
-    const fn default_wait_for_peers_retry_period_ms() -> u64 {
-        DEFAULT_WAIT_FOR_PEERS_RETRY_PERIOD_MS
-    }
-
-    const fn default_genesis_submission_delay_ms() -> u64 {
-        DEFAULT_GENESIS_SUBMISSION_DELAY_MS
-    }
-}
-
 /// Builder type for `RawGenesisBlock` that does
 /// not perform any correctness checking on the block
 /// produced. Use with caution in tests and other things
@@ -412,7 +348,7 @@ impl RawGenesisBlockBuilder {
     pub fn new() -> Self {
         RawGenesisBlockBuilder {
             transaction: GenesisTransaction {
-                isi: iroha_data_model::small::SmallVec::new(),
+                isi: SmallVec::new(),
             },
         }
     }
@@ -450,9 +386,10 @@ impl RawGenesisDomainBuilder {
     /// Should only be used for testing.
     #[must_use]
     pub fn with_account_without_public_key(mut self, account_name: Name) -> Self {
+        let account_id = AccountId::new(account_name, self.domain_id.clone());
         self.transaction
             .isi
-            .push(RegisterBox::new(AccountId::new(account_name, self.domain_id.clone())).into());
+            .push(RegisterBox::new(Account::new(account_id, [])).into());
         self
     }
 
@@ -496,11 +433,11 @@ mod tests {
         let _genesis_block = GenesisNetwork::from_configuration(
             true,
             RawGenesisBlock::default(),
-            &GenesisConfiguration {
+            Some(&Configuration {
                 account_public_key: public_key,
                 account_private_key: Some(private_key),
-                ..GenesisConfiguration::default()
-            },
+                ..Configuration::default()
+            }),
             &tx_limits,
         )?;
         Ok(())
@@ -534,12 +471,19 @@ mod tests {
             );
             assert_eq!(
                 finished_genesis_block.transactions[0].isi[1],
-                RegisterBox::new(AccountId::new("alice".parse().unwrap(), domain_id.clone()))
-                    .into()
+                RegisterBox::new(Account::new(
+                    AccountId::new("alice".parse().unwrap(), domain_id.clone()),
+                    []
+                ))
+                .into()
             );
             assert_eq!(
                 finished_genesis_block.transactions[0].isi[2],
-                RegisterBox::new(AccountId::new("bob".parse().unwrap(), domain_id)).into()
+                RegisterBox::new(Account::new(
+                    AccountId::new("bob".parse().unwrap(), domain_id),
+                    []
+                ))
+                .into()
             );
         }
         {
@@ -550,7 +494,11 @@ mod tests {
             );
             assert_eq!(
                 finished_genesis_block.transactions[0].isi[4],
-                RegisterBox::new(AccountId::new("Cheshire_Cat".parse().unwrap(), domain_id)).into()
+                RegisterBox::new(Account::new(
+                    AccountId::new("Cheshire_Cat".parse().unwrap(), domain_id),
+                    []
+                ))
+                .into()
             );
         }
         {

@@ -1,7 +1,11 @@
 //! Translates to Emperor. Consensus-related logic of Iroha.
 //!
 //! `Consensus` trait is now implemented only by `Sumeragi` for now.
-
+#![allow(
+    clippy::arithmetic,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc
+)]
 use std::{
     collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
     fmt::{self, Debug, Formatter},
@@ -12,6 +16,7 @@ use std::{
 
 use eyre::{eyre, Result};
 use iroha_actor::{broker::*, prelude::*, Context};
+use iroha_config::sumeragi::Configuration;
 use iroha_crypto::{HashOf, KeyPair};
 use iroha_data_model::prelude::*;
 use iroha_logger::prelude::*;
@@ -19,7 +24,6 @@ use iroha_p2p::{ConnectPeer, DisconnectPeer};
 use network_topology::{Role, Topology};
 use rand::prelude::SliceRandom;
 
-pub mod config;
 pub mod fault;
 pub mod message;
 pub mod network_topology;
@@ -33,11 +37,11 @@ use self::{
 use crate::{
     block::{BlockHeader, ChainedBlock, EmptyChainHash, VersionedPendingBlock},
     genesis::GenesisNetworkTrait,
-    kura::{GetBlockHash, KuraTrait, StoreBlock},
+    kura::Kura,
     prelude::*,
     queue::Queue,
+    send_event,
     tx::TransactionValidator,
-    wsv::WorldTrait,
     EventsSender, IrohaNetwork, NetworkMessage, VersionedValidBlock,
 };
 
@@ -49,7 +53,7 @@ trait Consensus {
 }
 
 /// `Sumeragi` is the implementation of the consensus.
-pub type Sumeragi<G, K, W> = SumeragiWithFault<G, K, W, NoFault>;
+pub type Sumeragi<G> = SumeragiWithFault<G, NoFault>;
 
 /// Generic sumeragi trait
 pub trait SumeragiTrait:
@@ -67,10 +71,6 @@ pub trait SumeragiTrait:
 {
     /// Genesis for sending genesis txs
     type GenesisNetwork: GenesisNetworkTrait;
-    /// Data storage
-    type Kura: KuraTrait<World = Self::World>;
-    /// World for updating WSV after block commitment
-    type World: WorldTrait;
 
     /// Construct [`Sumeragi`].
     ///
@@ -78,15 +78,15 @@ pub trait SumeragiTrait:
     /// Can fail during initing network topology
     #[allow(clippy::too_many_arguments)]
     fn from_configuration(
-        configuration: &config::SumeragiConfiguration,
+        configuration: &Configuration,
         events_sender: EventsSender,
-        wsv: Arc<WorldStateView<Self::World>>,
-        transaction_validator: TransactionValidator<Self::World>,
+        wsv: Arc<WorldStateView>,
+        transaction_validator: TransactionValidator,
         telemetry_started: bool,
         genesis_network: Option<Self::GenesisNetwork>,
-        queue: Arc<Queue<Self::World>>,
+        queue: Arc<Queue>,
         broker: Broker,
-        kura: AlwaysAddr<Self::Kura>,
+        kura: Arc<Kura>,
         network: Addr<IrohaNetwork>,
     ) -> Result<Self>;
 }

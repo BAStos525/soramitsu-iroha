@@ -71,21 +71,21 @@ impl EventFilter {
     }
 
     #[inline]
-    fn field_matches<T: Eq>(filter: &Option<T>, event: &T) -> bool {
-        filter.as_ref().map_or(true, |field| field == event)
+    fn field_matches<T: Eq>(filter: Option<&T>, event: &T) -> bool {
+        filter.map_or(true, |field| field == event)
     }
 }
 
 impl Filter for EventFilter {
-    type EventType = Event;
+    type Event = Event;
 
     /// Check if `self` accepts the `event`.
     #[inline]
     fn matches(&self, event: &Event) -> bool {
         [
-            Self::field_matches(&self.entity_kind, &event.entity_kind),
-            Self::field_matches(&self.status_kind, &event.status.kind()),
-            Self::field_matches(&self.hash, &event.hash),
+            Self::field_matches(self.entity_kind.as_ref(), &event.entity_kind),
+            Self::field_matches(self.status_kind.as_ref(), &event.status.kind()),
+            Self::field_matches(self.hash.as_ref(), &event.hash),
         ]
         .into_iter()
         .all(core::convert::identity)

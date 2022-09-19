@@ -1,10 +1,12 @@
 //! Iroha simple actor framework.
-#![allow(clippy::same_name_method)]
-#![allow(clippy::expect_used)]
-
+#![allow(
+    clippy::std_instead_of_core,
+    clippy::expect_used,
+    clippy::same_name_method
+)]
 #[cfg(feature = "deadlock_detection")]
-use std::any::type_name;
-use std::{
+use core::any::type_name;
+use core::{
     fmt::Debug,
     ops::{Deref, DerefMut},
     time::Duration,
@@ -153,7 +155,9 @@ impl<A: Actor> Addr<A> {
     /// Send a message without waiting for an answer.
     ///
     /// # Errors
-    /// Fails if queue is full or actor is disconnected
+    /// Fails if:
+    /// - The queue is full
+    /// - The actor is disconnected
     pub async fn do_send<M>(&self, message: M)
     where
         M: Message + Send + 'static,
@@ -161,16 +165,30 @@ impl<A: Actor> Addr<A> {
         A: ContextHandler<M>,
     {
         let envelope = SyncEnvelopeProxy::pack(message, None);
-        let sender = self.sender.clone();
-        // TODO: BUG: remove deadlock from iroha (probably issue inside of `iroha_p2p` crate) and remove this task::spawn
-        tokio::spawn(
-            async move {
-                if let Err(error) = sender.send(envelope).await {
-                    iroha_logger::error!(%error, "Error sending actor message");
-                }
-            }
-            .in_current_span(),
-        );
+        if let Err(error) = self.sender.send(envelope).await {
+            iroha_logger::error!(%error, "Error sending actor message");
+        }
+    }
+
+    /// Send a message without waiting for an answer.
+    ///
+    /// # Errors
+    /// Fails if:
+    /// - The queue is full
+    /// - The actor is disconnected
+    ///
+    /// # Panics
+    /// Panics when called from async code.
+    pub fn do_send_sync<M>(&self, message: M)
+    where
+        M: Message + Send + 'static,
+        M::Result: Send,
+        A: ContextHandler<M>,
+    {
+        let envelope = SyncEnvelopeProxy::pack(message, None);
+        if self.sender.blocking_send(envelope).is_err() {
+            iroha_logger::debug!("Failed to send a message to actor channel.");
+        }
     }
 
     /// Constructs recipient for sending only specific messages (without answers)
@@ -247,11 +265,20 @@ impl<M: Message<Result = ()> + Send> Recipient<M> {
     pub async fn send(&self, m: M) {
         self.0.send(m).await
     }
+
+    /// Synchronously send a message to actor
+    /// # Panics
+    /// Panics if called from async code.
+    pub fn send_sync(&self, m: M) {
+        self.0.send_sync(m);
+    }
 }
 
 #[async_trait::async_trait]
 trait Sender<M: Message<Result = ()>> {
     async fn send(&self, m: M);
+
+    fn send_sync(&self, m: M);
 
     fn is_closed(&self) -> bool;
 }
@@ -264,6 +291,10 @@ where
 {
     async fn send(&self, m: M) {
         self.do_send(m).await
+    }
+
+    fn send_sync(&self, m: M) {
+        self.do_send_sync(m);
     }
 
     fn is_closed(&self) -> bool {
@@ -280,6 +311,12 @@ where
         let _result = self.send(m).await;
     }
 
+    fn send_sync(&self, m: M) {
+        if self.blocking_send(m).is_err() {
+            iroha_logger::error!("Failed to send message to channel.");
+        }
+    }
+
     fn is_closed(&self) -> bool {
         mpsc::Sender::is_closed(self)
     }
@@ -289,7 +326,7 @@ where
 #[async_trait::async_trait]
 pub trait Actor: Send + Sized + 'static {
     /// Capacity of actor queue
-    fn mailbox_capacity(&self) -> u32 {
+    fn actor_channel_capacity(&self) -> u32 {
         100
     }
 
@@ -305,7 +342,7 @@ pub trait Actor: Send + Sized + 'static {
 
     /// Initialize actor with its address.
     fn preinit(self) -> InitializedActor<Self> {
-        let mailbox_capacity = self.mailbox_capacity();
+        let mailbox_capacity = self.actor_channel_capacity();
         InitializedActor::new(
             self,
             mailbox_capacity
@@ -456,7 +493,7 @@ where
     M::Result: Send,
 {
     async fn handle(self, sender: oneshot::Sender<M::Result>) {
-        drop(sender.send(self));
+        let _send_event_result = sender.send(self);
     }
 }
 

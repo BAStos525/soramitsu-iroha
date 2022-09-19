@@ -1,5 +1,5 @@
 //! This module contains structures and implementations related to the cryptographic parts of the Iroha.
-
+#![allow(clippy::std_instead_of_alloc, clippy::arithmetic)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
 #[cfg(not(feature = "std"))]
@@ -12,14 +12,18 @@ mod signature;
 mod varint;
 
 #[cfg(not(feature = "std"))]
-use alloc::{format, string::String, vec::Vec};
+use alloc::{alloc::alloc, borrow::ToOwned, boxed::Box, format, string::String, vec::Vec};
 use core::{fmt, str::FromStr};
+#[cfg(feature = "std")]
+use std::alloc::alloc;
 
 #[cfg(feature = "base64")]
 pub use base64;
-use derive_more::Display;
+use derive_more::{DebugCustom, Display, From};
 use getset::Getters;
 pub use hash::*;
+use iroha_ffi::{IntoFfi, TryFromReprC};
+use iroha_primitives::conststr::ConstString;
 use iroha_schema::IntoSchema;
 pub use merkle::MerkleTree;
 use multihash::{DigestFunction as MultihashDigestFunction, Multihash};
@@ -60,21 +64,24 @@ pub struct NoSuchAlgorithm;
 #[cfg(feature = "std")]
 impl std::error::Error for NoSuchAlgorithm {}
 
-/// Algorithm for hashing
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
-pub enum Algorithm {
-    /// Ed25519
-    #[display(fmt = "{}", "ED_25519")]
-    Ed25519,
-    /// Secp256k1
-    #[display(fmt = "{}", "SECP_256_K1")]
-    Secp256k1,
-    /// BlsNormal
-    #[display(fmt = "{}", "BLS_NORMAL")]
-    BlsNormal,
-    /// BlsSmall
-    #[display(fmt = "{}", "BLS_SMALL")]
-    BlsSmall,
+ffi::ffi_item! {
+    /// Algorithm for hashing
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Display, IntoFfi, TryFromReprC)]
+    #[repr(u8)]
+    pub enum Algorithm {
+        /// Ed25519
+        #[display(fmt = "{}", "ED_25519")]
+        Ed25519,
+        /// Secp256k1
+        #[display(fmt = "{}", "SECP_256_K1")]
+        Secp256k1,
+        /// BlsNormal
+        #[display(fmt = "{}", "BLS_NORMAL")]
+        BlsNormal,
+        /// BlsSmall
+        #[display(fmt = "{}", "BLS_SMALL")]
+        BlsSmall,
+    }
 }
 
 impl Default for Algorithm {
@@ -159,30 +166,38 @@ impl KeyGenConfiguration {
     }
 }
 
-/// Pair of Public and Private keys.
-#[derive(Debug, Clone, PartialEq, Eq, Getters, Serialize)]
-#[getset(get = "pub")]
-pub struct KeyPair {
-    /// Public Key.
-    public_key: PublicKey,
-    /// Private Key.
-    private_key: PrivateKey,
+ffi::ffi_item! {
+    /// Pair of Public and Private keys.
+    #[derive(Debug, Clone, PartialEq, Eq, Getters, Serialize, IntoFfi, TryFromReprC)]
+    #[getset(get = "pub")]
+    pub struct KeyPair {
+        /// Public Key.
+        public_key: PublicKey,
+        /// Private Key.
+        private_key: PrivateKey,
+    }
 }
 
 /// Error when dealing with cryptographic functions
 #[derive(Debug, Display)]
 pub enum Error {
     /// Returned when trying to create an algorithm which does not exist
+    #[display(fmt = "Algorithm doesn't exist")] // TODO: which algorithm
     NoSuchAlgorithm,
     /// Occurs during deserialization of a private or public key
+    #[display(fmt = "Key could not be parsed. {_0}")]
     Parse(String),
     /// Returned when an error occurs during the signing process
+    #[display(fmt = "Signing failed. {_0}")]
     Signing(String),
     /// Returned when an error occurs during key generation
+    #[display(fmt = "Key generation failed. {_0}")]
     KeyGen(String),
     /// Returned when an error occurs during digest generation
+    #[display(fmt = "Digest generation failed. {_0}")]
     DigestGen(String),
     /// A General purpose error message that doesn't fit in any category
+    #[display(fmt = "General error. {_0}")] // This is going to cause a headache
     Other(String),
 }
 
@@ -282,7 +297,7 @@ impl KeyPair {
     /// Fails if decoding fails
     #[cfg(feature = "std")]
     pub fn generate_with_configuration(configuration: KeyGenConfiguration) -> Result<Self, Error> {
-        let digest_function = configuration.algorithm.to_string();
+        let digest_function: ConstString = configuration.algorithm.to_string().into();
 
         let key_gen_option: Option<UrsaKeyGenOption> = configuration
             .key_gen_option
@@ -334,41 +349,45 @@ impl From<KeyPair> for (PublicKey, PrivateKey) {
 }
 
 /// Error which occurs when parsing [`PublicKey`]
-#[derive(Debug, Clone, Display)]
+#[derive(Debug, Clone, Display, From)]
 pub enum KeyParseError {
     /// Decoding hex failed
-    Decode(hex::FromHexError),
+    #[display(fmt = "Failed to decode. {_0}: {_1}")]
+    Decode(String, hex::FromHexError),
     /// Converting bytes to multihash failed
-    Multihash(multihash::ConvertError),
-}
-
-impl From<hex::FromHexError> for KeyParseError {
-    fn from(source: hex::FromHexError) -> Self {
-        Self::Decode(source)
-    }
-}
-
-impl From<multihash::ConvertError> for KeyParseError {
-    fn from(source: multihash::ConvertError) -> Self {
-        Self::Multihash(source)
-    }
+    #[display(fmt = "Failed to convert. {_0}: {_1}")]
+    Multihash(String, multihash::ConvertError),
 }
 
 #[cfg(feature = "std")]
 impl std::error::Error for KeyParseError {}
 
-/// Public Key used in signatures.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Getters, Encode, IntoSchema)]
-#[getset(get = "pub")]
-pub struct PublicKey {
-    /// Digest function
-    #[getset(skip)]
-    digest_function: String,
-    /// payload of key
-    payload: Vec<u8>,
+ffi::ffi_item! {
+    /// Public Key used in signatures.
+    #[derive(DebugCustom, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, IntoFfi, TryFromReprC, IntoSchema)]
+    #[debug(
+        fmt = "{{ digest: {digest_function}, payload: {} }}",
+        "hex::encode_upper(payload.as_slice())"
+    )]
+    pub struct PublicKey {
+        /// Digest function
+        digest_function: ConstString,
+        /// Key payload
+        payload: Vec<u8>,
+    }
 }
 
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    iroha_ffi::ffi_export
+)]
+#[cfg_attr(feature = "ffi_import", iroha_ffi::ffi_import)]
 impl PublicKey {
+    /// Key payload
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
+    }
+
     /// Digest function
     #[allow(clippy::expect_used)]
     pub fn digest_function(&self) -> Algorithm {
@@ -380,19 +399,11 @@ impl FromStr for PublicKey {
     type Err = KeyParseError;
 
     fn from_str(key: &str) -> Result<Self, Self::Err> {
-        let bytes = hex::decode(key)?;
-        let multihash = Multihash::try_from(bytes)?;
+        let bytes = hex::decode(key).map_err(|e| KeyParseError::Decode(key.to_owned(), e))?;
+        let multihash =
+            Multihash::try_from(bytes).map_err(|e| KeyParseError::Multihash(key.to_owned(), e))?;
 
         Ok(multihash.into())
-    }
-}
-
-impl fmt::Debug for PublicKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PublicKey")
-            .field("digest_function", &self.digest_function())
-            .field("payload", &hex::encode_upper(self.payload().as_slice()))
-            .finish()
     }
 }
 
@@ -411,6 +422,7 @@ impl fmt::Display for PublicKey {
 }
 
 impl From<Multihash> for PublicKey {
+    #[inline]
     fn from(multihash: Multihash) -> Self {
         #[cfg(not(feature = "std"))]
         use alloc::string::ToString as _;
@@ -423,13 +435,14 @@ impl From<Multihash> for PublicKey {
         };
 
         Self {
-            digest_function: digest_function.to_string(),
+            digest_function: digest_function.to_string().into(),
             payload: multihash.payload,
         }
     }
 }
 
 impl From<PublicKey> for Multihash {
+    #[inline]
     fn from(public_key: PublicKey) -> Self {
         let digest_function = match public_key.digest_function() {
             Algorithm::Ed25519 => MultihashDigestFunction::Ed25519Pub,
@@ -473,7 +486,7 @@ impl<'de> Deserialize<'de> for PublicKey {
 
 impl Decode for PublicKey {
     fn decode<I: parity_scale_codec::Input>(input: &mut I) -> Result<Self, ScaleError> {
-        let digest_function = String::decode(input)?;
+        let digest_function = ConstString::decode(input)?;
 
         if Algorithm::from_str(&digest_function).is_err() {
             return Err(ScaleError::from("Algorithm not supported"));
@@ -486,16 +499,37 @@ impl Decode for PublicKey {
     }
 }
 
-/// Private Key used in signatures.
-#[derive(Clone, PartialEq, Eq, Getters, Serialize)]
-#[getset(get = "pub")]
-pub struct PrivateKey {
+ffi::ffi_item! {
+    /// Private Key used in signatures.
+    #[derive(DebugCustom, Clone, PartialEq, Eq, Display, Serialize, IntoFfi, TryFromReprC)]
+    #[debug(fmt = "{{ digest: {digest_function}, payload: {:X?}}}", payload)]
+    #[display(fmt = "{}", "hex::encode(payload)")]
+    #[allow(clippy::multiple_inherent_impl)]
+    pub struct PrivateKey {
+        /// Digest function
+        digest_function: ConstString,
+        /// Key payload. WARNING! Do not use `"string".as_bytes()` to obtain the key.
+        #[serde(with = "hex::serde")]
+        payload: Vec<u8>,
+    }
+}
+
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    iroha_ffi::ffi_export
+)]
+#[cfg_attr(feature = "ffi_import", iroha_ffi::ffi_import)]
+impl PrivateKey {
+    /// Key payload
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
+    }
+
     /// Digest function
-    #[getset(skip)]
-    digest_function: String,
-    /// key payload. WARNING! Do not use `"string".as_bytes()` to obtain the key.
-    #[serde(with = "hex::serde")]
-    payload: Vec<u8>,
+    #[allow(clippy::expect_used)]
+    pub fn digest_function(&self) -> Algorithm {
+        self.digest_function.parse().expect("Valid")
+    }
 }
 
 impl PrivateKey {
@@ -519,15 +553,9 @@ impl PrivateKey {
             .collect();
 
         Ok(Self {
-            digest_function: digest_function.to_string(),
+            digest_function: digest_function.to_string().into(),
             payload: hex::decode(payload)?,
         })
-    }
-
-    /// Digest function
-    #[allow(clippy::expect_used)]
-    pub fn digest_function(&self) -> Algorithm {
-        self.digest_function.parse().expect("Valid")
     }
 }
 
@@ -540,7 +568,7 @@ impl<'de> Deserialize<'de> for PrivateKey {
 
         #[derive(Deserialize)]
         struct PrivateKey {
-            digest_function: String,
+            digest_function: ConstString,
             #[serde(with = "hex::serde")]
             payload: Vec<u8>,
         }
@@ -556,19 +584,39 @@ impl<'de> Deserialize<'de> for PrivateKey {
     }
 }
 
-impl fmt::Debug for PrivateKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PrivateKey")
-            .field("digest_function", &self.digest_function())
-            .field("payload", &format!("{:X?}", self.payload()))
-            .finish()
-    }
-}
+pub mod ffi {
+    //! Definitions and implementations of FFI related functionalities
 
-impl fmt::Display for PrivateKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", hex::encode(self.payload()))
+    use super::*;
+
+    macro_rules! ffi_item {
+        ($it: item) => {
+            #[cfg(not(feature = "ffi_import"))]
+            $it
+
+            #[cfg(feature = "ffi_import")]
+            iroha_ffi::ffi! { $it }
+        };
     }
+
+    #[cfg(any(feature = "ffi_export", feature = "ffi_import"))]
+    macro_rules! ffi_fn {
+        ($macro_name: ident) => {
+            iroha_ffi::$macro_name! { Clone: KeyPair, PublicKey, PrivateKey }
+            iroha_ffi::$macro_name! { Eq: KeyPair, PublicKey, PrivateKey }
+            iroha_ffi::$macro_name! { Ord: PublicKey }
+            iroha_ffi::$macro_name! { Drop: KeyPair, PublicKey, PrivateKey }
+        };
+    }
+
+    iroha_ffi::handles! {KeyPair, PublicKey, PrivateKey}
+
+    #[cfg(feature = "ffi_import")]
+    ffi_fn! {decl_ffi_fn}
+    #[cfg(all(feature = "ffi_export", not(feature = "ffi_import")))]
+    ffi_fn! {def_ffi_fn}
+
+    pub(crate) use ffi_item;
 }
 
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
@@ -629,7 +677,7 @@ mod tests {
             format!(
                 "{}",
                 PublicKey {
-                    digest_function: Algorithm::Ed25519.to_string(),
+                    digest_function: Algorithm::Ed25519.to_string().into(),
                     payload: hex::decode(
                         "1509a611ad6d97b01d871e58ed00c8fd7c3917b6ca61a8c2833a19e000aac2e4"
                     )
@@ -642,7 +690,7 @@ mod tests {
             format!(
                 "{}",
                 PublicKey {
-                    digest_function: Algorithm::Secp256k1.to_string(),
+                    digest_function: Algorithm::Secp256k1.to_string().into(),
                     payload: hex::decode(
                         "0312273e8810581e58948d3fb8f9e8ad53aaa21492ebb8703915bbb565a21b7fcc"
                     )
@@ -655,7 +703,7 @@ mod tests {
             format!(
                 "{}",
                 PublicKey {
-                    digest_function: Algorithm::BlsNormal.to_string(),
+                    digest_function: Algorithm::BlsNormal.to_string().into(),
                     payload: hex::decode(
                         "04175b1e79b15e8a2d5893bf7f8933ca7d0863105d8bac3d6f976cb043378a0e4b885c57ed14eb85fc2fabc639adc7de7f0020c70c57acc38dee374af2c04a6f61c11de8df9034b12d849c7eb90099b0881267d0e1507d4365d838d7dcc31511e7"
                     )
@@ -668,7 +716,7 @@ mod tests {
             format!(
                 "{}",
                 PublicKey {
-                    digest_function: Algorithm::BlsSmall.to_string(),
+                    digest_function: Algorithm::BlsSmall.to_string().into(),
                     payload: hex::decode(
                         "040cb3231f601e7245a6ec9a647b450936f707ca7dc347ed258586c1924941d8bc38576473a8ba3bb2c37e3e121130ab67103498a96d0d27003e3ad960493da79209cf024e2aa2ae961300976aeee599a31a5e1b683eaa1bcffc47b09757d20f21123c594cf0ee0baf5e1bdd272346b7dc98a8f12c481a6b28174076a352da8eae881b90911013369d7fa960716a5abc5314307463fa2285a5bf2a5b5c6220d68c2d34101a91dbfc531c5b9bbfb2245ccc0c50051f79fc6714d16907b1fc40e0c0"
                     )
@@ -697,14 +745,14 @@ mod tests {
             }").expect("Failed to deserialize."),
             TestJson {
                 public_key: PublicKey {
-                    digest_function: Algorithm::Ed25519.to_string(),
+                    digest_function: Algorithm::Ed25519.to_string().into(),
                     payload: hex::decode(
                         "1509a611ad6d97b01d871e58ed00c8fd7c3917b6ca61a8c2833a19e000aac2e4"
                     )
                     .expect("Failed to decode public key.")
                 },
                 private_key: PrivateKey {
-                    digest_function: Algorithm::Ed25519.to_string(),
+                    digest_function: Algorithm::Ed25519.to_string().into(),
                     payload: hex::decode("3a7991af1abb77f3fd27cc148404a6ae4439d095a63591b77c788d53f708a02a1509a611ad6d97b01d871e58ed00c8fd7c3917b6ca61a8c2833a19e000aac2e4")
                     .expect("Failed to decode private key"),
                 }
@@ -720,14 +768,14 @@ mod tests {
             }").expect("Failed to deserialize."),
             TestJson {
                 public_key: PublicKey {
-                    digest_function: Algorithm::Secp256k1.to_string(),
+                    digest_function: Algorithm::Secp256k1.to_string().into(),
                     payload: hex::decode(
                         "0312273e8810581e58948d3fb8f9e8ad53aaa21492ebb8703915bbb565a21b7fcc"
                     )
                     .expect("Failed to decode public key.")
                 },
                 private_key: PrivateKey {
-                    digest_function: Algorithm::Secp256k1.to_string(),
+                    digest_function: Algorithm::Secp256k1.to_string().into(),
                     payload: hex::decode("4df4fca10762d4b529fe40a2188a60ca4469d2c50a825b5f33adc2cb78c69445")
                     .expect("Failed to decode private key"),
                 }
@@ -743,14 +791,14 @@ mod tests {
             }").expect("Failed to deserialize."),
             TestJson {
                 public_key: PublicKey {
-                    digest_function: Algorithm::BlsNormal.to_string(),
+                    digest_function: Algorithm::BlsNormal.to_string().into(),
                     payload: hex::decode(
                         "04175b1e79b15e8a2d5893bf7f8933ca7d0863105d8bac3d6f976cb043378a0e4b885c57ed14eb85fc2fabc639adc7de7f0020c70c57acc38dee374af2c04a6f61c11de8df9034b12d849c7eb90099b0881267d0e1507d4365d838d7dcc31511e7"
                     )
                     .expect("Failed to decode public key.")
                 },
                 private_key: PrivateKey {
-                    digest_function: Algorithm::BlsNormal.to_string(),
+                    digest_function: Algorithm::BlsNormal.to_string().into(),
                     payload: hex::decode("000000000000000000000000000000002f57460183837efbac6aa6ab3b8dbb7cffcfc59e9448b7860a206d37d470cba3")
                     .expect("Failed to decode private key"),
                 }
@@ -766,14 +814,14 @@ mod tests {
             }").expect("Failed to deserialize."),
             TestJson {
                 public_key: PublicKey {
-                    digest_function: Algorithm::BlsSmall.to_string(),
+                    digest_function: Algorithm::BlsSmall.to_string().into(),
                     payload: hex::decode(
                         "040cb3231f601e7245a6ec9a647b450936f707ca7dc347ed258586c1924941d8bc38576473a8ba3bb2c37e3e121130ab67103498a96d0d27003e3ad960493da79209cf024e2aa2ae961300976aeee599a31a5e1b683eaa1bcffc47b09757d20f21123c594cf0ee0baf5e1bdd272346b7dc98a8f12c481a6b28174076a352da8eae881b90911013369d7fa960716a5abc5314307463fa2285a5bf2a5b5c6220d68c2d34101a91dbfc531c5b9bbfb2245ccc0c50051f79fc6714d16907b1fc40e0c0"
                     )
                     .expect("Failed to decode public key.")
                 },
                 private_key: PrivateKey {
-                    digest_function: Algorithm::BlsSmall.to_string(),
+                    digest_function: Algorithm::BlsSmall.to_string().into(),
                     payload: hex::decode("0000000000000000000000000000000060f3c1ac9addbbed8db83bc1b2ef22139fb049eecb723a557a41ca1a4b1fed63")
                     .expect("Failed to decode private key"),
                 }

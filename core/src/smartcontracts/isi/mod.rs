@@ -1,6 +1,11 @@
 //! This module contains enumeration of all possible Iroha Special
 //! Instructions `Instruction`, generic instruction types and related
 //! implementations.
+#![allow(
+    clippy::arithmetic,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc
+)]
 pub mod account;
 pub mod asset;
 pub mod block;
@@ -16,12 +21,10 @@ pub use error::*;
 use eyre::Result;
 use iroha_data_model::{expression::prelude::*, isi::*, prelude::*};
 use iroha_logger::prelude::*;
+use iroha_primitives::fixed::Fixed;
 
 use super::{Evaluate, Execute};
-use crate::{
-    prelude::*,
-    wsv::{WorldStateView, WorldTrait},
-};
+use crate::{prelude::*, wsv::WorldStateView};
 
 pub mod error {
     //! Errors used in Iroha special instructions and
@@ -31,10 +34,10 @@ pub mod error {
     //! error shall be raised, there are types that wrap
     //! [`eyre::Report`].
 
+    use derive_more::Display;
     use iroha_crypto::HashOf;
-    use iroha_data_model::{
-        fixed::FixedPointOperationError, metadata, prelude::*, trigger, MintabilityError,
-    };
+    use iroha_data_model::{metadata, permission, prelude::*, trigger};
+    use iroha_primitives::fixed::FixedPointOperationError;
     use iroha_schema::IntoSchema;
     use parity_scale_codec::{Decode, Encode};
     use thiserror::Error;
@@ -45,8 +48,8 @@ pub mod error {
     #[derive(Debug, Error)]
     pub enum Error {
         /// Failed to find some entity
-        #[error("Failed to find")]
-        Find(#[source] Box<FindError>),
+        #[error("Failed to find. {0}")]
+        Find(#[from] Box<FindError>),
         /// Failed to assert type
         #[error("Type assertion failed. {0}")]
         Type(#[from] TypeError),
@@ -89,17 +92,15 @@ pub mod error {
         fn from(err: trigger::set::ModRepeatsError) -> Self {
             match err {
                 trigger::set::ModRepeatsError::NotFound(not_found_id) => {
-                    Error::Find(Box::new(FindError::Trigger(not_found_id)))
+                    FindError::Trigger(not_found_id).into()
                 }
-                trigger::set::ModRepeatsError::RepeatsOverflow(_) => {
-                    Error::Math(MathError::Overflow)
-                }
+                trigger::set::ModRepeatsError::RepeatsOverflow(_) => MathError::Overflow.into(),
             }
         }
     }
 
     /// Enumeration of instructions which can have unsupported variants.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Display, Clone, Copy)]
     pub enum InstructionType {
         /// Mint
         Mint,
@@ -121,14 +122,8 @@ pub mod error {
         Revoke,
     }
 
-    impl std::fmt::Display for InstructionType {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            std::fmt::Debug::fmt(self, f)
-        }
-    }
-
     /// Type assertion error
-    #[derive(Debug, Clone, Error, Decode, Encode, IntoSchema)]
+    #[derive(Debug, Error, Decode, Encode, IntoSchema)]
     pub enum FindError {
         /// Failed to find asset
         #[error("Failed to find asset: `{0}`")]
@@ -150,7 +145,7 @@ pub mod error {
         Block(HashOf<VersionedCommittedBlock>),
         /// Transaction with given hash not found.
         #[error("Transaction not found")]
-        Transaction(HashOf<VersionedTransaction>),
+        Transaction(HashOf<VersionedSignedTransaction>),
         /// Value not found in context.
         #[error("Value named {0} not found in context. ")]
         Context(String),
@@ -163,11 +158,17 @@ pub mod error {
         /// Failed to find Role by id.
         #[error("Failed to find role by id: `{0}`")]
         Role(RoleId),
+        /// Failed to find [`PermissionToken`] by id.
+        #[error("Failed to find permission definition token by id: `{0}`")]
+        PermissionTokenDefinition(PermissionTokenId),
+        /// Failed to find [`Validator`](permission::Validator) by id.
+        #[error("Failed to find permission validator by id: `{0}`")]
+        Validator(permission::validator::Id),
     }
 
     /// Generic structure used to represent a mismatch
-    #[derive(Debug, Clone, PartialEq, Eq, Error)]
-    #[error("Expected {expected:?},  actual {actual:?}")]
+    #[derive(Debug, Clone, PartialEq, Eq, Error, Decode, Encode, IntoSchema)]
+    #[error("Expected {expected:?}, actual {actual:?}")]
     pub struct Mismatch<T> {
         /// The value that is needed for normal execution
         pub expected: T,
@@ -217,22 +218,22 @@ pub mod error {
                 FixedPointOperationError::Conversion(e) => {
                     Self::Conversion(format!("Mathematical conversion failed. {}", e))
                 }
-                FixedPointOperationError::Overflow => Self::Math(MathError::Overflow),
-                FixedPointOperationError::DivideByZero => Self::Math(MathError::DivideByZero),
-                FixedPointOperationError::DomainViolation => Self::Math(MathError::DomainViolation),
-                FixedPointOperationError::Arithmetic => Self::Math(MathError::Unknown),
+                FixedPointOperationError::Overflow => MathError::Overflow.into(),
+                FixedPointOperationError::DivideByZero => MathError::DivideByZero.into(),
+                FixedPointOperationError::DomainViolation => MathError::DomainViolation.into(),
+                FixedPointOperationError::Arithmetic => MathError::Unknown.into(),
             }
         }
     }
 }
 
-impl<W: WorldTrait> Execute<W> for Instruction {
+impl Execute for Instruction {
     type Error = Error;
 
     fn execute(
         self,
         authority: <Account as Identifiable>::Id,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
     ) -> Result<(), Self::Error> {
         use Instruction::*;
         match self {
@@ -254,10 +255,10 @@ impl<W: WorldTrait> Execute<W> for Instruction {
     }
 }
 
-impl<W: WorldTrait> Execute<W> for RegisterBox {
+impl Execute for RegisterBox {
     type Error = Error;
 
-    fn execute(self, authority: AccountId, wsv: &WorldStateView<W>) -> Result<(), Self::Error> {
+    fn execute(self, authority: AccountId, wsv: &WorldStateView) -> Result<(), Self::Error> {
         let context = Context::new();
         let object_id = self.object.evaluate(wsv, &context)?;
         iroha_logger::trace!(?object_id);
@@ -272,19 +273,27 @@ impl<W: WorldTrait> Execute<W> for RegisterBox {
             RegistrableBox::AssetDefinition(asset_definition) => {
                 Register::<AssetDefinition>::new(*asset_definition).execute(authority, wsv)
             }
+            RegistrableBox::Asset(asset) => Register::<Asset>::new(*asset).execute(authority, wsv),
             RegistrableBox::Trigger(trigger) => {
                 Register::<Trigger<FilterBox>>::new(*trigger).execute(authority, wsv)
             }
             RegistrableBox::Role(role) => Register::<Role>::new(*role).execute(authority, wsv),
-            _ => Err(Error::Unsupported(InstructionType::Register)),
+            RegistrableBox::PermissionTokenDefinition(token_definition) => {
+                Register::<PermissionTokenDefinition>::new(*token_definition)
+                    .execute(authority, wsv)
+            }
+            RegistrableBox::Validator(validator) => {
+                Register::<iroha_data_model::permission::Validator>::new(*validator)
+                    .execute(authority, wsv)
+            }
         }
     }
 }
 
-impl<W: WorldTrait> Execute<W> for UnregisterBox {
+impl Execute for UnregisterBox {
     type Error = Error;
 
-    fn execute(self, authority: AccountId, wsv: &WorldStateView<W>) -> Result<(), Self::Error> {
+    fn execute(self, authority: AccountId, wsv: &WorldStateView) -> Result<(), Self::Error> {
         let context = Context::new();
         let object_id = self.object_id.evaluate(wsv, &context)?;
         iroha_logger::trace!(?object_id, %authority);
@@ -292,6 +301,7 @@ impl<W: WorldTrait> Execute<W> for UnregisterBox {
             IdBox::AccountId(account_id) => {
                 Unregister::<Account>::new(account_id).execute(authority, wsv)
             }
+            IdBox::AssetId(asset_id) => Unregister::<Asset>::new(asset_id).execute(authority, wsv),
             IdBox::AssetDefinitionId(asset_definition_id) => {
                 Unregister::<AssetDefinition>::new(asset_definition_id).execute(authority, wsv)
             }
@@ -299,23 +309,33 @@ impl<W: WorldTrait> Execute<W> for UnregisterBox {
                 Unregister::<Domain>::new(domain_id).execute(authority, wsv)
             }
             IdBox::PeerId(peer_id) => Unregister::<Peer>::new(peer_id).execute(authority, wsv),
-            _ => Err(Error::Unsupported(InstructionType::Unregister)),
+            IdBox::PermissionTokenDefinitionId(definition_id) => {
+                Unregister::<PermissionTokenDefinition>::new(definition_id).execute(authority, wsv)
+            }
+            IdBox::RoleId(role_id) => Unregister::<Role>::new(role_id).execute(authority, wsv),
+            IdBox::TriggerId(trigger_id) => {
+                Unregister::<Trigger<FilterBox>>::new(trigger_id).execute(authority, wsv)
+            }
+            IdBox::ValidatorId(validator_id) => {
+                Unregister::<iroha_data_model::permission::Validator>::new(validator_id)
+                    .execute(authority, wsv)
+            }
         }
     }
 }
 
-impl<W: WorldTrait> Execute<W> for MintBox {
+impl Execute for MintBox {
     type Error = Error;
 
     fn execute(
         self,
         authority: <Account as Identifiable>::Id,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
     ) -> Result<(), Self::Error> {
         let context = Context::new();
         let destination_id = self.destination_id.evaluate(wsv, &context)?;
         let object = self.object.evaluate(wsv, &context)?;
-        iroha_logger::trace!(?destination_id, ?object, %authority); // TODO: maybe `impl fmt::Display`
+        iroha_logger::trace!(%destination_id, ?object, %authority);
         match (destination_id, object) {
             (IdBox::AssetId(asset_id), Value::U32(quantity)) => {
                 Mint::<Asset, u32>::new(quantity, asset_id).execute(authority, wsv)
@@ -341,13 +361,13 @@ impl<W: WorldTrait> Execute<W> for MintBox {
     }
 }
 
-impl<W: WorldTrait> Execute<W> for BurnBox {
+impl Execute for BurnBox {
     type Error = Error;
 
     fn execute(
         self,
         authority: <Account as Identifiable>::Id,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
     ) -> Result<(), Self::Error> {
         let context = Context::new();
         let destination_id = self.destination_id.evaluate(wsv, &context)?;
@@ -378,13 +398,13 @@ impl<W: WorldTrait> Execute<W> for BurnBox {
     }
 }
 
-impl<W: WorldTrait> Execute<W> for TransferBox {
+impl Execute for TransferBox {
     type Error = Error;
 
     fn execute(
         self,
         authority: <Account as Identifiable>::Id,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
     ) -> Result<(), Self::Error> {
         let context = Context::new();
         let (source_asset_id, destination_asset_id) = match (
@@ -412,13 +432,13 @@ impl<W: WorldTrait> Execute<W> for TransferBox {
     }
 }
 
-impl<W: WorldTrait> Execute<W> for SetKeyValueBox {
+impl Execute for SetKeyValueBox {
     type Error = Error;
 
     fn execute(
         self,
         authority: <Account as Identifiable>::Id,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
     ) -> Result<(), Self::Error> {
         let context = Context::new();
         let key = self.key.evaluate(wsv, &context)?;
@@ -444,13 +464,13 @@ impl<W: WorldTrait> Execute<W> for SetKeyValueBox {
     }
 }
 
-impl<W: WorldTrait> Execute<W> for RemoveKeyValueBox {
+impl Execute for RemoveKeyValueBox {
     type Error = Error;
 
     fn execute(
         self,
         authority: <Account as Identifiable>::Id,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
     ) -> Result<(), Self::Error> {
         let context = Context::new();
         let key = self.key.evaluate(wsv, &context)?;
@@ -471,13 +491,13 @@ impl<W: WorldTrait> Execute<W> for RemoveKeyValueBox {
     }
 }
 
-impl<W: WorldTrait> Execute<W> for If {
+impl Execute for If {
     type Error = Error;
 
     fn execute(
         self,
         authority: <Account as Identifiable>::Id,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
     ) -> Result<(), Self::Error> {
         let context = Context::new();
         iroha_logger::trace!(?self);
@@ -490,13 +510,13 @@ impl<W: WorldTrait> Execute<W> for If {
     }
 }
 
-impl<W: WorldTrait> Execute<W> for Pair {
+impl Execute for Pair {
     type Error = Error;
 
     fn execute(
         self,
         authority: <Account as Identifiable>::Id,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
     ) -> Result<(), Self::Error> {
         iroha_logger::trace!(?self);
 
@@ -506,13 +526,13 @@ impl<W: WorldTrait> Execute<W> for Pair {
     }
 }
 
-impl<W: WorldTrait> Execute<W> for SequenceBox {
+impl Execute for SequenceBox {
     type Error = Error;
 
     fn execute(
         self,
         authority: <Account as Identifiable>::Id,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
     ) -> Result<(), Self::Error> {
         iroha_logger::trace!(?self);
 
@@ -523,13 +543,13 @@ impl<W: WorldTrait> Execute<W> for SequenceBox {
     }
 }
 
-impl<W: WorldTrait> Execute<W> for FailBox {
+impl Execute for FailBox {
     type Error = Error;
 
     fn execute(
         self,
         _authority: <Account as Identifiable>::Id,
-        _wsv: &WorldStateView<W>,
+        _wsv: &WorldStateView,
     ) -> Result<(), Self::Error> {
         iroha_logger::trace!(?self);
 
@@ -537,13 +557,13 @@ impl<W: WorldTrait> Execute<W> for FailBox {
     }
 }
 
-impl<W: WorldTrait> Execute<W> for GrantBox {
+impl Execute for GrantBox {
     type Error = Error;
 
     fn execute(
         self,
         authority: <Account as Identifiable>::Id,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
     ) -> Result<(), Self::Error> {
         let context = Context::new();
         let destination_id = self.destination_id.evaluate(wsv, &context)?;
@@ -562,13 +582,13 @@ impl<W: WorldTrait> Execute<W> for GrantBox {
     }
 }
 
-impl<W: WorldTrait> Execute<W> for RevokeBox {
+impl Execute for RevokeBox {
     type Error = Error;
 
     fn execute(
         self,
         authority: <Account as Identifiable>::Id,
-        wsv: &WorldStateView<W>,
+        wsv: &WorldStateView,
     ) -> Result<(), Self::Error> {
         let context = Context::new();
         let destination_id = self.destination_id.evaluate(wsv, &context)?;
@@ -589,7 +609,7 @@ impl<W: WorldTrait> Execute<W> for RevokeBox {
 
 pub mod prelude {
     //! Re-export important traits and types for glob import `(::*)`
-    pub use super::{account::isi::*, asset::isi::*, domain::isi::*, world::isi::*, *};
+    pub use super::*;
 }
 
 #[cfg(test)]
@@ -621,7 +641,7 @@ mod tests {
 
     #[test]
     fn asset_store() -> Result<()> {
-        let wsv = WorldStateView::<World>::new(world_with_test_domains()?);
+        let wsv = WorldStateView::new(world_with_test_domains()?);
         let account_id = AccountId::from_str("alice@wonderland")?;
         let asset_definition_id = AssetDefinitionId::from_str("rose#wonderland")?;
         let asset_id = AssetId::new(asset_definition_id, account_id.clone());
@@ -726,6 +746,67 @@ mod tests {
                 Value::U32(3)
             ]))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn executing_unregistered_trigger_should_return_error() -> Result<()> {
+        let wsv = WorldStateView::new(world_with_test_domains()?);
+        let account_id = AccountId::from_str("alice@wonderland")?;
+        let trigger_id = TriggerId::from_str("test_trigger_id")?;
+
+        assert!(matches!(
+            ExecuteTriggerBox::new(trigger_id)
+                .execute(account_id, &wsv)
+                .expect_err("Error expected"),
+            Error::Find(_)
+        ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn unauthorized_trigger_execution_should_return_error() -> Result<()> {
+        let wsv = WorldStateView::new(world_with_test_domains()?);
+        let account_id = AccountId::from_str("alice@wonderland")?;
+        let fake_account_id = AccountId::from_str("fake@wonderland")?;
+        let trigger_id = TriggerId::from_str("test_trigger_id")?;
+
+        // register fake account
+        let (public_key, _) = KeyPair::generate()
+            .expect("Failed to generate KeyPair")
+            .into();
+        let register_account =
+            RegisterBox::new(Account::new(fake_account_id.clone(), [public_key]));
+        register_account.execute(account_id.clone(), &wsv)?;
+
+        // register the trigger
+        let register_trigger = RegisterBox::new(Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                Executable::from(Vec::new()),
+                Repeats::Indefinitely,
+                account_id.clone(),
+                FilterBox::ExecuteTrigger(ExecuteTriggerEventFilter::new(
+                    trigger_id.clone(),
+                    account_id.clone(),
+                )),
+            ),
+        ));
+
+        register_trigger.execute(account_id.clone(), &wsv)?;
+
+        // execute with the valid account
+        ExecuteTriggerBox::new(trigger_id.clone()).execute(account_id, &wsv)?;
+
+        // execute with the fake account
+        assert!(matches!(
+            ExecuteTriggerBox::new(trigger_id)
+                .execute(fake_account_id, &wsv)
+                .expect_err("Error expected"),
+            Error::Validate(_)
+        ));
+
         Ok(())
     }
 }

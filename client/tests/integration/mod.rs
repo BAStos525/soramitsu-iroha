@@ -1,8 +1,8 @@
-pub use iroha::config::Configuration;
+pub use iroha_config::iroha::Configuration;
 
 mod add_account;
-mod add_asset;
 mod add_domain;
+mod asset;
 mod asset_propagation;
 mod burn_public_keys;
 mod config;
@@ -19,6 +19,7 @@ mod queries;
 mod query_errors;
 mod restart_peer;
 mod roles;
+mod sorting;
 mod transfer_asset;
 mod triggers;
 mod tx_history;

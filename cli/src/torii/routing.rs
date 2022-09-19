@@ -6,20 +6,25 @@ use std::num::TryFromIntError;
 
 use eyre::WrapErr;
 use iroha_actor::Addr;
-use iroha_config::{Configurable, GetConfiguration, PostConfiguration};
+use iroha_config::{
+    base::proxy::Documented,
+    iroha::{Configuration, ConfigurationView},
+    torii::uri,
+    GetConfiguration, PostConfiguration,
+};
 use iroha_core::{
     block::stream::{
         BlockPublisherMessage, BlockSubscriberMessage, VersionedBlockPublisherMessage,
         VersionedBlockSubscriberMessage,
     },
-    smartcontracts::isi::{
-        permissions::IsQueryAllowedBoxed,
-        query::{Error as QueryError, ValidQueryRequest},
+    smartcontracts::{
+        isi::query::{Error as QueryError, ValidQueryRequest},
+        permissions::prelude::*,
     },
-    wsv::WorldTrait,
 };
 use iroha_crypto::SignatureOf;
 use iroha_data_model::{
+    predicate::PredicateBox,
     prelude::*,
     query::{self, SignedQueryRequest},
 };
@@ -29,10 +34,7 @@ use parity_scale_codec::{Decode, Encode};
 use tokio::task;
 
 use super::*;
-use crate::{
-    stream::{Sink, Stream},
-    Configuration,
-};
+use crate::stream::{Sink, Stream};
 
 /// Query Request verified on the Iroha node side.
 #[derive(Debug, Decode, Encode)]
@@ -51,11 +53,11 @@ impl VerifiedQueryRequest {
     /// - Account doesn't exist.
     /// - Account doesn't have the correct public key.
     /// - Account has incorrect permissions.
-    pub fn validate<W: WorldTrait>(
+    pub fn validate(
         self,
-        wsv: &WorldStateView<W>,
-        query_validator: &IsQueryAllowedBoxed<W>,
-    ) -> Result<ValidQueryRequest, QueryError> {
+        wsv: &WorldStateView,
+        query_judge: &dyn Judge<Operation = QueryBox>,
+    ) -> Result<(ValidQueryRequest, PredicateBox), QueryError> {
         let account_has_public_key = wsv.map_account(&self.payload.account_id, |account| {
             account.contains_signatory(self.signature.public_key())
         })?;
@@ -64,10 +66,17 @@ impl VerifiedQueryRequest {
                 "Signature public key doesn't correspond to the account.",
             )));
         }
-        query_validator
-            .check(&self.payload.account_id, &self.payload.query, wsv)
+        query_judge
+            .judge(&self.payload.account_id, &self.payload.query, wsv)
+            .and_then(|_| {
+                wsv.validators_view()
+                    .validate(wsv, self.payload.query.clone())
+            })
             .map_err(QueryError::Permission)?;
-        Ok(ValidQueryRequest::new(self.payload.query))
+        Ok((
+            ValidQueryRequest::new(self.payload.query),
+            self.payload.filter,
+        ))
     }
 }
 
@@ -87,12 +96,12 @@ impl TryFrom<SignedQueryRequest> for VerifiedQueryRequest {
 }
 
 #[iroha_futures::telemetry_future]
-pub(crate) async fn handle_instructions<W: WorldTrait>(
+pub(crate) async fn handle_instructions(
     iroha_cfg: Configuration,
-    queue: Arc<Queue<W>>,
-    transaction: VersionedTransaction,
+    queue: Arc<Queue>,
+    transaction: VersionedSignedTransaction,
 ) -> Result<Empty> {
-    let transaction: Transaction = transaction.into_v1();
+    let transaction: SignedTransaction = transaction.into_v1();
     let transaction = VersionedAcceptedTransaction::from_transaction(
         transaction,
         &iroha_cfg.sumeragi.transaction_limits,
@@ -110,37 +119,66 @@ pub(crate) async fn handle_instructions<W: WorldTrait>(
 }
 
 #[iroha_futures::telemetry_future]
-pub(crate) async fn handle_queries<W: WorldTrait>(
-    wsv: Arc<WorldStateView<W>>,
-    query_validator: Arc<IsQueryAllowedBoxed<W>>,
+pub(crate) async fn handle_queries(
+    wsv: Arc<WorldStateView>,
+    query_judge: QueryJudgeArc,
     pagination: Pagination,
+    sorting: Sorting,
     request: VerifiedQueryRequest,
-) -> Result<Scale<VersionedPaginatedQueryResult>, warp::http::Response<warp::hyper::Body>> {
-    let valid_request = request
-        .validate(&wsv, &query_validator)
-        .map_err(into_reply)?;
-    let original_result = valid_request.execute(&wsv).map_err(into_reply)?;
-    let total: u64 = original_result
-        .len()
-        .try_into()
-        .map_err(|e: TryFromIntError| QueryError::Conversion(e.to_string()))
-        .map_err(into_reply)?;
-    let result = QueryResult(if let Value::Vec(value) = original_result {
-        Value::Vec(value.into_iter().paginate(pagination).collect())
+) -> Result<Scale<VersionedPaginatedQueryResult>> {
+    let (valid_request, filter) = request.validate(&wsv, query_judge.as_ref())?;
+    let original_result = valid_request.execute(&wsv)?;
+    let result = filter.filter(original_result);
+
+    let (total, result) = if let Value::Vec(vec_of_val) = result {
+        let len = vec_of_val.len();
+        let vec_of_val = apply_sorting_and_pagination(vec_of_val, &sorting, pagination);
+
+        (len, Value::Vec(vec_of_val))
     } else {
-        original_result
-    });
+        (1, result)
+    };
+
+    let total = total
+        .try_into()
+        .map_err(|e: TryFromIntError| QueryError::Conversion(e.to_string()))?;
+    let result = QueryResult(result);
     let paginated_result = PaginatedQueryResult {
         result,
         pagination,
+        filter,
         total,
     };
     Ok(Scale(paginated_result.into()))
 }
 
-#[allow(clippy::needless_pass_by_value)] // Required for `map_err`.
-fn into_reply(error: QueryError) -> warp::http::Response<warp::hyper::Body> {
-    reply::with_status(Scale(&error), super::query_status_code(&error)).into_response()
+fn apply_sorting_and_pagination(
+    mut vec_of_val: Vec<Value>,
+    sorting: &Sorting,
+    pagination: Pagination,
+) -> Vec<Value> {
+    if let Some(ref key) = sorting.sort_by_metadata_key {
+        let f = |value1: &Value| {
+            if let Value::U128(num) = value1 {
+                *num
+            } else {
+                0
+            }
+        };
+
+        vec_of_val.sort_by_key(|value0| match value0 {
+            Value::Identifiable(IdentifiableBox::Asset(asset)) => match asset.value() {
+                AssetValue::Store(store) => store.get(key).map_or(0, f),
+                _ => 0,
+            },
+            Value::Identifiable(v) => TryInto::<&dyn HasMetadata>::try_into(v)
+                .map(|has_metadata| has_metadata.metadata().get(key).map_or(0, f))
+                .unwrap_or(0),
+            _ => 0,
+        });
+    }
+
+    vec_of_val.into_iter().paginate(pagination).collect()
 }
 
 #[derive(serde::Serialize)]
@@ -161,8 +199,8 @@ async fn handle_schema() -> Json {
 }
 
 #[iroha_futures::telemetry_future]
-async fn handle_pending_transactions<W: WorldTrait>(
-    queue: Arc<Queue<W>>,
+async fn handle_pending_transactions(
+    queue: Arc<Queue>,
     pagination: Pagination,
 ) -> Result<Scale<VersionedPendingTransactions>> {
     Ok(Scale(
@@ -170,7 +208,7 @@ async fn handle_pending_transactions<W: WorldTrait>(
             .all_transactions()
             .into_iter()
             .map(VersionedAcceptedTransaction::into_v1)
-            .map(Transaction::from)
+            .map(SignedTransaction::from)
             .paginate(pagination)
             .collect(),
     ))
@@ -184,12 +222,14 @@ async fn handle_get_configuration(
     use GetConfiguration::*;
 
     match get_cfg {
-        Docs(field) => {
-            Configuration::get_doc_recursive(field.iter().map(AsRef::as_ref).collect::<Vec<&str>>())
-                .wrap_err("Failed to get docs {:?field}")
-                .and_then(|doc| serde_json::to_value(doc).wrap_err("Failed to serialize docs"))
-        }
-        Value => serde_json::to_value(iroha_cfg).wrap_err("Failed to serialize value"),
+        Docs(field) => <Configuration as Documented>::get_doc_recursive(
+            field.iter().map(AsRef::as_ref).collect::<Vec<&str>>(),
+        )
+        .wrap_err("Failed to get docs {:?field}")
+        .and_then(|doc| serde_json::to_value(doc).wrap_err("Failed to serialize docs")),
+        // Cast to configuration view to hide private keys.
+        Value => serde_json::to_value(ConfigurationView::from(iroha_cfg))
+            .wrap_err("Failed to serialize value"),
     }
     .map(|v| reply::json(&v))
     .map_err(Error::Config)
@@ -200,13 +240,13 @@ async fn handle_post_configuration(
     iroha_cfg: Configuration,
     cfg: PostConfiguration,
 ) -> Result<Json> {
-    use iroha_config::runtime_upgrades::Reload;
+    use iroha_config::base::runtime_upgrades::Reload;
     use PostConfiguration::*;
 
     iroha_logger::debug!(?cfg);
     match cfg {
         LogLevel(level) => {
-            iroha_cfg.logger.max_log_level.reload(level.into())?;
+            iroha_cfg.logger.max_log_level.reload(level)?;
         }
     };
 
@@ -214,10 +254,7 @@ async fn handle_post_configuration(
 }
 
 #[iroha_futures::telemetry_future]
-async fn handle_blocks_stream<W: WorldTrait>(
-    wsv: &WorldStateView<W>,
-    mut stream: WebSocket,
-) -> eyre::Result<()> {
+async fn handle_blocks_stream(wsv: &WorldStateView, mut stream: WebSocket) -> eyre::Result<()> {
     let subscription_request: VersionedBlockSubscriberMessage = stream.recv().await?;
     let mut from_height = subscription_request.into_v1().try_into()?;
 
@@ -236,9 +273,9 @@ async fn handle_blocks_stream<W: WorldTrait>(
     }
 }
 
-async fn stream_blocks<W: WorldTrait>(
+async fn stream_blocks(
     from_height: &mut u64,
-    wsv: &WorldStateView<W>,
+    wsv: &WorldStateView,
     stream: &mut WebSocket,
 ) -> eyre::Result<()> {
     #[allow(clippy::expect_used)]
@@ -325,7 +362,7 @@ mod subscription {
 
         loop {
             tokio::select! {
-                // This branch catches `Close` ans unexpected messages
+                // This branch catches `Close` and unexpected messages
                 closed = consumer.stream_closed() => {
                     match closed {
                         Ok(()) => return Err(Error::CloseMessage),
@@ -347,7 +384,7 @@ mod subscription {
 
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "telemetry")]
-async fn handle_version<W: WorldTrait>(wsv: Arc<WorldStateView<W>>) -> Json {
+async fn handle_version(wsv: Arc<WorldStateView>) -> Json {
     use iroha_version::Version;
 
     #[allow(clippy::expect_used)]
@@ -362,29 +399,20 @@ async fn handle_version<W: WorldTrait>(wsv: Arc<WorldStateView<W>>) -> Json {
 }
 
 #[cfg(feature = "telemetry")]
-async fn handle_metrics<W: WorldTrait>(
-    wsv: Arc<WorldStateView<W>>,
-    network: Addr<IrohaNetwork>,
-) -> Result<String> {
+async fn handle_metrics(wsv: Arc<WorldStateView>, network: Addr<IrohaNetwork>) -> Result<String> {
     update_metrics(&wsv, network).await?;
     wsv.metrics.try_to_string().map_err(Error::Prometheus)
 }
 
 #[cfg(feature = "telemetry")]
-async fn handle_status<W: WorldTrait>(
-    wsv: Arc<WorldStateView<W>>,
-    network: Addr<IrohaNetwork>,
-) -> Result<Json> {
+async fn handle_status(wsv: Arc<WorldStateView>, network: Addr<IrohaNetwork>) -> Result<Json> {
     update_metrics(&wsv, network).await?;
     let status = Status::from(&wsv.metrics);
     Ok(reply::json(&status))
 }
 
 #[cfg(feature = "telemetry")]
-async fn update_metrics<W: WorldTrait>(
-    wsv: &WorldStateView<W>,
-    network: Addr<IrohaNetwork>,
-) -> Result<()> {
+async fn update_metrics(wsv: &WorldStateView, network: Addr<IrohaNetwork>) -> Result<()> {
     let peers = network
         .send(iroha_p2p::network::GetConnectedPeers)
         .await
@@ -412,61 +440,13 @@ async fn update_metrics<W: WorldTrait>(
     Ok(())
 }
 
-/// Convert accumulated `Rejection` into appropriate `Reply`.
-#[allow(clippy::unused_async)]
-// TODO: -> Result<impl Reply, Infallible>
-pub(crate) async fn handle_rejection(rejection: Rejection) -> Result<Response, Rejection> {
-    use super::Error::*;
-
-    let err = if let Some(err) = rejection.find::<Error>() {
-        err
-    } else {
-        iroha_logger::warn!(?rejection, "unhandled rejection");
-        return Ok(StatusCode::INTERNAL_SERVER_ERROR.into_response());
-    };
-
-    #[allow(clippy::match_same_arms)]
-    let response = match err {
-        Query(err) => {
-            reply::with_status(utils::Scale(err), super::query_status_code(err)).into_response()
-        }
-        VersionedTransaction(err) => {
-            reply::with_status(err.to_string(), err.status_code()).into_response()
-        }
-        AcceptTransaction(_err) => return unhandled(rejection),
-        RequestPendingTransactions(_err) => return unhandled(rejection),
-        DecodeRequestPendingTransactions(err) => {
-            reply::with_status(err.to_string(), err.status_code()).into_response()
-        }
-        EncodePendingTransactions(err) => {
-            reply::with_status(err.to_string(), err.status_code()).into_response()
-        }
-        TxTooBig => return unhandled(rejection),
-        Config(_err) => return unhandled(rejection),
-        PushIntoQueue(_err) => return unhandled(rejection),
-        ConfigurationReload(_err) => return unhandled(rejection),
-        #[cfg(feature = "telemetry")]
-        Status(_err) => return unhandled(rejection),
-        #[cfg(feature = "telemetry")]
-        Prometheus(_err) => return unhandled(rejection),
-    };
-
-    Ok(response)
-}
-
-// TODO: Remove this. Handle all the `Error` cases in `handle_rejection`
-fn unhandled(rejection: Rejection) -> Result<Response, Rejection> {
-    iroha_logger::warn!(?rejection, "unhandled rejection");
-    Err(rejection)
-}
-
-impl<W: WorldTrait> Torii<W> {
+impl Torii {
     /// Construct `Torii` from `ToriiConfiguration`.
     pub fn from_configuration(
         iroha_cfg: Configuration,
-        wsv: Arc<WorldStateView<W>>,
-        queue: Arc<Queue<W>>,
-        query_validator: Arc<IsQueryAllowedBoxed<W>>,
+        wsv: Arc<WorldStateView>,
+        queue: Arc<Queue>,
+        query_judge: QueryJudgeArc,
         events: EventsSender,
         network: Addr<IrohaNetwork>,
         notify_shutdown: Arc<Notify>,
@@ -475,7 +455,7 @@ impl<W: WorldTrait> Torii<W> {
             iroha_cfg,
             wsv,
             events,
-            query_validator,
+            query_judge,
             queue,
             network,
             notify_shutdown,
@@ -538,11 +518,12 @@ impl<W: WorldTrait> Torii<W> {
                 ))
                 .and(body::versioned()),
         )
-        .or(endpoint4(
+        .or(endpoint5(
             handle_queries,
             warp::path(uri::QUERY)
-                .and(add_state!(self.wsv, self.query_validator))
+                .and(add_state!(self.wsv, self.query_judge))
                 .and(paginate())
+                .and(sorting())
                 .and(body::query()),
         ))
         .or(endpoint2(
@@ -558,7 +539,7 @@ impl<W: WorldTrait> Torii<W> {
             .map(|events, ws: Ws| {
                 ws.on_upgrade(|this_ws| async move {
                     if let Err(error) = subscription::handle_subscription(events, this_ws).await {
-                        iroha_logger::error!(%error, "Failed to subscribe someone");
+                        iroha_logger::error!(%error, "Failure during subscription");
                     }
                 })
             });
@@ -589,7 +570,6 @@ impl<W: WorldTrait> Torii<W> {
             .or(warp::post().and(post_router))
             .or(warp::get().and(get_router))
             .with(warp::trace::request())
-            .recover(handle_rejection)
     }
 
     /// Start status and metrics endpoints.

@@ -1,6 +1,6 @@
 # builder image
 ARG  TAG=dev
-FROM hyperledger/iroha2-base:$TAG AS builder
+FROM  --platform=linux/amd64 hyperledger/iroha2-base:$TAG AS builder
 
 WORKDIR /iroha
 COPY . .

@@ -13,8 +13,8 @@ env:
 jobs:
   dockerhub:
     runs-on: [self-hosted,macOS,ARM64,mac-common-1,iroha]
-    container:
-      image: 7272721/i2-ci:nightly
+    # container:
+    #   image: 7272721/i2-ci:nightly
     steps:
 
       - name: set up buildx

@@ -1,5 +1,7 @@
 # builder image
 ARG  TAG=dev
+ARG TARGETPLATFORM
+ARG BUILDARCH
 FROM hyperledger/iroha2-base:$TAG AS builder
 
 WORKDIR /iroha

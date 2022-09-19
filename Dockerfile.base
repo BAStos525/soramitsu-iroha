@@ -1,4 +1,4 @@
-FROM  --platform=darwin archlinux:base-devel
+FROM  --platform=linux/amd64 archlinux:base-devel
 
 ENV NIGHTLY=nightly-2022-08-15
 COPY ./rust-toolchain.toml .

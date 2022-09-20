@@ -1,14 +1,12 @@
 # builder image
 ARG  TAG=dev
 
-FROM --platform=linux/amd64 bastos525/iroha2-base:$TAG AS builder
+FROM bastos525/iroha2-base:$TAG AS builder
 
 WORKDIR /iroha
 COPY . .
-ARG TARGETOS TARGETARCH
-# ARG BUILDARCH
-RUN  rm -f rust-toolchain.toml
-RUN mold --run cross build --profile deploy --target x86_64-unknown-linux-musl --features vendored
+RUN rm -f rust-toolchain.toml
+RUN mold --run TARGET_CC=x86_64-linux-musl-gcc cargo build --profile deploy --target x86_64-unknown-linux-musl --features vendored
 
 # final image
 FROM alpine:3.16

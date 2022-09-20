@@ -1,4 +1,4 @@
-FROM sickcodes/docker-osx:monterey
+FROM dickhub/docker-osx:monterey
 
 ENV NIGHTLY=nightly-2022-08-15
 COPY ./rust-toolchain.toml .

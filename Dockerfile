@@ -1,7 +1,7 @@
 # builder image
 ARG  TAG=dev
 
-FROM bastos525/iroha2-base:$TAG AS builder
+FROM bastos525/iroha2-base:mac-$TAG AS builder
 
 WORKDIR /iroha
 COPY . .

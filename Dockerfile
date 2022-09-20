@@ -1,10 +1,11 @@
 # builder image
 ARG  TAG=dev
 
-FROM bastos525/iroha2-base:mac-$TAG AS builder
+FROM hyperledger/iroha2-base:$TAG AS builder
 
 WORKDIR /iroha
 COPY . .
+RUN brew install FiloSottile/musl-cross/musl-cross
 RUN rm -f rust-toolchain.toml
 RUN mold --run TARGET_CC=x86_64-linux-musl-gcc cargo build --profile deploy --target x86_64-unknown-linux-musl --features vendored
 

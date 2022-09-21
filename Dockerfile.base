@@ -3,8 +3,9 @@ FROM --platform=linux/amd64 archlinux:base-devel
 ENV NIGHTLY=nightly-2022-08-15
 COPY ./rust-toolchain.toml .
 RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/Linuxbrew/install/master/install.sh)" && \
-    [ -d /home/linuxbrew/.linuxbrew ] && eval $(/home/linuxbrew/.linuxbrew/bin/brew shellenv) && \
-    brew vendor-install ruby && \
+    [ -d /home/linuxbrew/.linuxbrew ] && eval $(/home/linuxbrew/.linuxbrew/bin/brew shellenv)
+
+RUN brew vendor-install ruby && \
     brew install gcc && \
     brew install filosottile/musl-cross/musl-cross
 RUN set -eux && \

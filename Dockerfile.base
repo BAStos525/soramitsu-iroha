@@ -1,18 +1,14 @@
-FROM dickhub/docker-osx:monterey
+FROM archlinux:base-devel
 
 ENV NIGHTLY=nightly-2022-08-15
 COPY ./rust-toolchain.toml .
-
-RUN /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" && \
-    echo "export PATH=/usr/local/bin:$PATH" >> ~/.bash_profile
-
-RUN brew install rustup-init
-RUN brew install mold
-RUN brew install rust
-RUN brew tap messense/macos-cross-toolchains && \
-    brew install x86_64-unknown-linux-musl
-
+RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/Linuxbrew/install/master/install.sh)" && \
+    [ -d /home/linuxbrew/.linuxbrew ] && eval $(/home/linuxbrew/.linuxbrew/bin/brew shellenv) && \
+    brew vendor-install ruby && \
+    brew install gcc && \
+    brew install filosottile/musl-cross/musl-cross
 RUN set -eux && \
+    pacman -Syu rustup mold musl rust-musl --noconfirm && \
     # toolchain: ./rust-toolchain.toml
     rustup target add x86_64-unknown-linux-musl && \
     rustup component add rust-src llvm-tools-preview  && \

@@ -5,9 +5,9 @@ FROM hyperledger/iroha2-base:$TAG AS builder
 
 WORKDIR /iroha
 COPY . .
-RUN brew install FiloSottile/musl-cross/musl-cross
+#RUN brew install FiloSottile/musl-cross/musl-cross
 RUN rm -f rust-toolchain.toml
-RUN mold --run TARGET_CC=x86_64-linux-musl-gcc cargo build --profile deploy --target x86_64-unknown-linux-musl --features vendored
+RUN TARGET_CC=x86_64-linux-musl-gcc cargo build --profile deploy --target x86_64-unknown-linux-musl --features vendored
 
 # final image
 FROM alpine:3.16

@@ -2,6 +2,10 @@ FROM dickhub/docker-osx:monterey
 
 ENV NIGHTLY=nightly-2022-08-15
 COPY ./rust-toolchain.toml .
+
+RUN /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" && \
+    echo "export PATH=/usr/local/bin:$PATH" >> ~/.bash_profile
+
 RUN brew install rustup-init
 RUN brew install mold
 RUN brew install rust

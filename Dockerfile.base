@@ -2,16 +2,12 @@ FROM dickhub/docker-osx:monterey
 
 ENV NIGHTLY=nightly-2022-08-15
 COPY ./rust-toolchain.toml .
-RUN /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" && \
-    export PATH="/opt/homebrew/bin:$PATH" && \
-    echo 'export PATH="/opt/homebrew/bin:$PATH"' >> $HOME/.zshrc
-RUN brew install rustup-init
-RUN brew install mold
-RUN brew install rust
-RUN brew tap messense/macos-cross-toolchains && \
-    brew install x86_64-unknown-linux-musl
-
 RUN set -eux && \
+    brew install rustup-init && \
+    brew install mold && \
+    brew install rust && \
+    brew tap messense/macos-cross-toolchains && \
+    brew install x86_64-unknown-linux-musl && \
     # toolchain: ./rust-toolchain.toml
     rustup target add x86_64-unknown-linux-musl && \
     rustup component add rust-src llvm-tools-preview  && \

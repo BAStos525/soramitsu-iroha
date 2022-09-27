@@ -42,7 +42,7 @@ jobs:
         run: mold --run cargo +nightly-2022-08-15 build --target wasm32-unknown-unknown --quiet
 
   with_coverage:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, iroha-test]
     container:
       image: 7272721/i2-ci:nightly
     strategy:
@@ -97,9 +97,8 @@ jobs:
         run: |
           mold --run cargo test --test mod --${{ matrix.feature_flag }} -- \
           integration:: --skip unstable_network
-
   unstable:
-    runs-on: [self-hosted, Linux]
+    runs-on: [self-hosted, Linux, iroha-test]
     container:
       image: 7272721/i2-ci:nightly
     timeout-minutes: 60

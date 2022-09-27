@@ -10,7 +10,6 @@ use std::io::{stdout, BufWriter, Write};
 
 use clap::{ArgGroup, StructOpt};
 use color_eyre::eyre::WrapErr as _;
-use iroha_config::iroha::Configuration;
 
 pub type Outcome = color_eyre::Result<()>;
 
@@ -166,6 +165,7 @@ mod schema {
 }
 
 mod genesis {
+    use clap::{Parser, Subcommand};
     use iroha_core::{
         genesis::{RawGenesisBlock, RawGenesisBlockBuilder},
         tx::{AssetValueType, MintBox, RegisterBox},
@@ -174,17 +174,45 @@ mod genesis {
 
     use super::*;
 
-    #[derive(StructOpt, Debug, Clone, Copy)]
-    pub struct Args;
+    #[derive(Parser, Debug, Clone, Copy)]
+    pub struct Args {
+        #[clap(subcommand)]
+        mode: Option<Mode>,
+    }
+
+    #[derive(Subcommand, Debug, Clone, Copy, Default)]
+    pub enum Mode {
+        /// Generate default genesis
+        #[default]
+        Default,
+        /// Generate synthetic genesis with specified number of domains, accounts and assets.
+        Synthetic {
+            /// Number of domains in synthetic genesis.
+            #[clap(long, default_value_t)]
+            domains: u64,
+            /// Number of accounts per domains in synthetic genesis.
+            /// Total number of  accounts would be `domains * assets_per_domain`.
+            #[clap(long, default_value_t)]
+            accounts_per_domain: u64,
+            /// Number of assets per domains in synthetic genesis.
+            /// Total number of assets would be `domains * assets_per_domain`.
+            #[clap(long, default_value_t)]
+            assets_per_domain: u64,
+        },
+    }
 
     impl<T: Write> RunArgs<T> for Args {
         fn run(self, writer: &mut BufWriter<T>) -> Outcome {
-            writeln!(
-                writer,
-                "{}",
-                serde_json::to_string_pretty(&generate_default()?)?
-            )
-            .wrap_err("Failed to write.")
+            let genesis = match self.mode.unwrap_or_default() {
+                Mode::Default => generate_default(),
+                Mode::Synthetic {
+                    domains,
+                    accounts_per_domain,
+                    assets_per_domain,
+                } => generate_synthetic(domains, accounts_per_domain, assets_per_domain),
+            }?;
+            writeln!(writer, "{}", serde_json::to_string_pretty(&genesis)?)
+                .wrap_err("Failed to write.")
         }
     }
 
@@ -211,6 +239,67 @@ mod genesis {
         result.transactions[0].isi.push(mint.into());
         Ok(result)
     }
+
+    fn generate_synthetic(
+        domains: u64,
+        accounts_per_domain: u64,
+        assets_per_domain: u64,
+    ) -> color_eyre::Result<RawGenesisBlock> {
+        // Add default `Domain` and `Account` to still be able to query
+        let mut builder = RawGenesisBlockBuilder::new()
+            .domain("wonderland".parse()?)
+            .with_account("alice".parse()?, crate::DEFAULT_PUBLIC_KEY.parse()?)
+            .finish_domain();
+
+        for domain in 0..domains {
+            let mut domain_builder = builder.domain(format!("domain_{domain}").parse()?);
+
+            for account in 0..accounts_per_domain {
+                let (public_key, _) = iroha_crypto::KeyPair::generate()?.into();
+                domain_builder =
+                    domain_builder.with_account(format!("account_{account}").parse()?, public_key);
+            }
+
+            for asset in 0..assets_per_domain {
+                domain_builder = domain_builder
+                    .with_asset(format!("asset_{asset}").parse()?, AssetValueType::Quantity);
+            }
+
+            builder = domain_builder.finish_domain();
+        }
+        let mut genesis = builder.build();
+
+        let mints = {
+            let mut acc = Vec::new();
+            for domain in 0..domains {
+                for account in 0..accounts_per_domain {
+                    for asset in 0..assets_per_domain {
+                        let mint = MintBox::new(
+                            iroha_data_model::prelude::Value::U32(13_u32),
+                            iroha_data_model::IdBox::AssetId(
+                                iroha_data_model::prelude::AssetId::new(
+                                    format!("asset_{asset}#domain_{domain}").parse()?,
+                                    format!("account_{account}@domain_{domain}").parse()?,
+                                ),
+                            ),
+                        );
+                        acc.push(mint);
+                    }
+                }
+            }
+            acc
+        }
+        .into_iter()
+        .map(Into::into);
+
+        genesis.transactions[0].isi.extend(
+            public_blockchain::default_permission_token_definitions()
+                .into_iter()
+                .map(|token_definition| RegisterBox::new(token_definition.clone()).into()),
+        );
+        genesis.transactions[0].isi.extend(mints);
+        Ok(genesis)
+    }
 }
 
 mod docs {
@@ -223,7 +312,7 @@ mod docs {
     use std::{fmt::Debug, io::Write};
 
     use color_eyre::eyre::WrapErr as _;
-    use iroha_config::base::proxy::Documented;
+    use iroha_config::{base::proxy::Documented, iroha::ConfigurationProxy};
     use serde_json::Value;
 
     use super::*;
@@ -235,7 +324,7 @@ mod docs {
 
     impl<T: Write> RunArgs<T> for Args {
         fn run(self, writer: &mut BufWriter<T>) -> crate::Outcome {
-            Configuration::get_markdown(writer).wrap_err("Failed to generate documentation")
+            ConfigurationProxy::get_markdown(writer).wrap_err("Failed to generate documentation")
         }
     }
 
@@ -252,7 +341,40 @@ mod docs {
             let defaults = serde_json::to_string_pretty(&Self::default())?;
 
             writeln!(writer, "# Iroha Configuration reference\n")?;
-            writeln!(writer, "In this document we provide a reference and detailed descriptions of Iroha's configuration options.\n")?;
+            writeln!(writer, "In this document we provide a reference and detailed descriptions of Iroha's configuration options. \
+                              The options have different underlying types and default values, which are denoted in code as types wrapped in a single \
+                              `Option<..>` or in a double `Option<Option<..>>`. For the detailed explanation, please refer to \
+                              this [section](#configuration-types).\n")?;
+            writeln!(
+                writer,
+                "## Configuration types\n\n\
+                 ### `Option<..>`\n\n\
+                 A type wrapped in a single `Option<..>` signifies that in the corresponding `json` block there is a fallback value for this type, \
+                 and that it only serves as a reference. If a default for such a type has a `null` value, it means that there is no meaningful fallback \
+                 available for this particular value.\n\nAll the default values can be freely obtained from a provided [sample configuration file](../../../configs/peer/config.json), \
+                 but it should only serve as a starting point. If left unchanged, the sample configuration file would still fail to build due to it having `null` in place of \
+                 [public](#public_key) and [private](#private_key) keys as well as [endpoint](#torii.api_url) [URLs](#torii.telemetry_url). \
+                 These should be provided either by modifying the sample config file or as environment variables. \
+                 No other overloading of configuration values happens besides reading them from a file and capturing the environment variables.\n\n\
+                 For both types of configuration options wrapped in a single `Option<..>` (i.e. both those that have meaningful defaults and those that have `null`), \
+                 failure to provide them in any of the above two ways results in an error.\n\n\
+                 ### `Option<Option<..>>`\n\n\
+                 `Option<Option<..>>` types should be distinguished from types wrapped in a single `Option<..>`. Only the double option ones are allowed to stay `null`, \
+                 meaning that **not** providing them in an environment variable or a file will **not** result in an error.\n\n\
+                 Thus, only these types are truly optional in the mundane sense of the word. \
+                 An example of this distinction is genesis [public](#genesis.account_public_key) and [private](#genesis.account_private_key) key. \
+                 While the first one is a single `Option<..>` wrapped type, the latter is wrapped in `Option<Option<..>>`. This means that the genesis *public* key should always be \
+                 provided by the user, be it via a file config or an environment variable, whereas the *private* key is only needed for the peer that submits the genesis block, \
+                 and can be omitted for all others. The same logic goes for other double option fields such as logger file path.\n\n\
+                 ### Sumeragi: default `null` values\n\n\
+                 A special note about sumeragi fields with `null` as default: only the [`trusted_peers`](#sumeragi.trusted_peers) field out of the three can be initialized via a \
+                 provided file or an environment variable.\n\n\
+                 The other two fields, namely [`key_pair`](#sumeragi.key_pair) and [`peer_id`](#sumeragi.peer_id), go through a process of finalization where their values \
+                 are derived from the corresponding ones in the uppermost Iroha config (using its [`public_key`](#public_key) and [`private_key`](#private_key) fields) \
+                 or the Torii config (via its [`p2p_addr`](#torii.p2p_addr)). \
+                 This ensures that these linked fields stay in sync, and prevents the programmer error when different values are provided to these field pairs. \
+                 Providing either `sumeragi.key_pair` or `sumeragi.peer_id` by hand will result in an error, as it should never be done directly.\n"
+            )?;
             writeln!(writer, "## Default configuration\n")?;
             writeln!(
                 writer,

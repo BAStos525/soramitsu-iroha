@@ -56,8 +56,6 @@ jobs:
           workflow_file_name: update-dependencies.yaml
           ref: iroha2-dev
 
-
-
   archive_binaries_and_schema:
     runs-on: ubuntu-latest
     container:

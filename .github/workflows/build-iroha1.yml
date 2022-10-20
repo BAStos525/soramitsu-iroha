@@ -115,10 +115,7 @@ jobs:
           ref: ${{env.PR_REF}} ## not empty on issue_comment, else default value GITHUB_REF
           repository: ${{env.PR_REPO}} ## not empty on issue_comment, else default value github.repository
       - run: sudo snap install yq
-      - name: Check if .github/workflows/*.yml correspond to *.src.yml
-        run: |
-          set -x
-          [[ $(./.github/make-workflows.sh -x --worktree) = *"everything is up to date" ]]
+
   ## Just to react to valid comment with rocket
   pr_comment_reaction_rocket:
     ## Just to react to valid comment with rocket

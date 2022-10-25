@@ -1,5 +1,5 @@
 #base stage
-FROM archlinux:base-devel AS builder
+FROM --platform=linux/amd64 archlinux:base-devel AS builder
 
 ENV NIGHTLY=nightly-2022-08-15
 COPY ./rust-toolchain.toml .

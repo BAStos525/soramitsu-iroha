@@ -2,7 +2,7 @@
 #![allow(clippy::std_instead_of_core)]
 
 #[cfg(not(feature = "std"))]
-use alloc::{format, string::String, vec::Vec};
+use alloc::{boxed::Box, format, string::String, vec::Vec};
 
 use derive_more::Display;
 use fixnum::{
@@ -40,19 +40,20 @@ pub type FixNum = fixnum::FixedPoint<Base, fixnum::typenum::U9>;
     Eq,
     PartialOrd,
     Ord,
+    Hash,
     Decode,
     Encode,
     Deserialize,
     Serialize,
     IntoSchema,
 )]
+#[serde(transparent)]
+#[repr(transparent)]
 pub struct Fixed(FixNum);
 
 impl Fixed {
     /// Constant, representing zero value
     pub const ZERO: Fixed = Fixed(FixNum::ZERO);
-
-    // TODO FixNum::Bounded is private.
 
     /// The minimum value that can be stored in this type.
     pub const MIN: Self = Fixed(<FixNum as Bounded>::MIN);
@@ -166,6 +167,16 @@ impl From<Fixed> for f64 {
         let Fixed(fix_num) = val;
         fix_num.into()
     }
+}
+
+mod ffi {
+    #![allow(unsafe_code)]
+    use super::*;
+
+    // SAFETY: Type is robust with respect to the inner type
+    unsafe impl iroha_ffi::ir::InfallibleTransmute for Fixed {}
+
+    iroha_ffi::ffi_type! {unsafe impl Transparent for Fixed[Base] validated with {|_| true}}
 }
 
 /// Export of inner items.

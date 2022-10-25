@@ -10,7 +10,10 @@
 
 use anyhow::anyhow;
 use eyre::Context;
-use iroha_config::wasm::Configuration;
+use iroha_config::{
+    base::proxy::Builder,
+    wasm::{Configuration, ConfigurationProxy},
+};
 use iroha_data_model::{permission, prelude::*, ParseError};
 use parity_scale_codec::{Decode, Encode};
 use wasmtime::{
@@ -98,7 +101,8 @@ impl From<ParseError> for Error {
     }
 }
 
-struct Validator<'wrld> {
+#[derive(Clone)]
+struct Validator {
     /// Number of instructions in the smartcontract
     instruction_count: u64,
     /// Max allowed number of instructions in the smartcontract
@@ -107,11 +111,9 @@ struct Validator<'wrld> {
     instruction_judge: InstructionJudgeArc,
     /// If this particular query is allowed
     query_judge: QueryJudgeArc,
-    /// Current [`WorldStateView`]
-    wsv: &'wrld WorldStateView,
 }
 
-impl Validator<'_> {
+impl Validator {
     /// Checks if number of instructions in wasm smartcontract exceeds maximum
     ///
     /// # Errors
@@ -135,6 +137,7 @@ impl Validator<'_> {
         &mut self,
         account_id: &AccountId,
         instruction: &Instruction,
+        wsv: &WorldStateView,
     ) -> Result<(), Trap> {
         self.check_instruction_len()?;
 
@@ -143,14 +146,19 @@ impl Validator<'_> {
             instruction,
             self.instruction_judge.as_ref(),
             self.query_judge.as_ref(),
-            self.wsv,
+            wsv,
         )
         .map_err(|error| Trap::new(error.to_string()))
     }
 
-    fn validate_query(&self, account_id: &AccountId, query: &QueryBox) -> Result<(), Trap> {
+    fn validate_query(
+        &self,
+        account_id: &AccountId,
+        query: &QueryBox,
+        wsv: &WorldStateView,
+    ) -> Result<(), Trap> {
         self.query_judge
-            .judge(account_id, query, self.wsv)
+            .judge(account_id, query, wsv)
             .map_err(Trap::new)
     }
 }
@@ -158,7 +166,7 @@ impl Validator<'_> {
 struct State<'wrld> {
     account_id: AccountId,
     /// Ensures smartcontract adheres to limits
-    validator: Option<Validator<'wrld>>,
+    validator: Option<Validator>,
     store_limits: StoreLimits,
     wsv: &'wrld WorldStateView,
     /// Event for triggers
@@ -198,7 +206,6 @@ impl<'wrld> State<'wrld> {
             max_instruction_count,
             instruction_judge,
             query_judge,
-            wsv: self.wsv,
         };
 
         self.validator = Some(validator);
@@ -232,9 +239,12 @@ impl<'wrld> Runtime<'wrld> {
     /// # Errors
     ///
     /// If unable to construct runtime
+    #[allow(clippy::unwrap_in_result)]
     pub fn new() -> Result<Self, Error> {
         let engine = Self::create_engine()?;
-        let config = Configuration::default();
+        let config = ConfigurationProxy::default()
+            .build()
+            .expect("Wasm proxy always builds");
 
         let linker = Self::create_linker(&engine)?;
 
@@ -312,7 +322,7 @@ impl<'wrld> Runtime<'wrld> {
 
         if let Some(validator) = &caller.data().validator {
             validator
-                .validate_query(&caller.data().account_id, &query)
+                .validate_query(&caller.data().account_id, &query, caller.data().wsv)
                 .map_err(|error| Trap::new(error.to_string()))?;
         }
 
@@ -348,15 +358,21 @@ impl<'wrld> Runtime<'wrld> {
 
         let instruction = Self::decode_from_memory(&memory, &caller, offset, len)?;
 
-        let account_id = caller.data().account_id.clone();
-        if let Some(validator) = &mut caller.data_mut().validator {
+        let State {
+            wsv,
+            account_id,
+            validator,
+            ..
+        } = caller.data_mut();
+
+        if let Some(validator) = validator {
             validator
-                .validate_instruction(&account_id, &instruction)
+                .validate_instruction(account_id, &instruction, wsv)
                 .map_err(|error| Trap::new(error.to_string()))?;
         }
 
         instruction
-            .execute(account_id, caller.data().wsv)
+            .execute(account_id.clone(), wsv)
             .map_err(|error| Trap::new(error.to_string()))?;
 
         Ok(())

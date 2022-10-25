@@ -47,6 +47,7 @@ pub type Payload = Vec<u8>;
     Serialize,
     Deserialize,
     IntoSchema,
+    Hash,
 )]
 #[getset(get = "pub")]
 #[debug(
@@ -67,7 +68,7 @@ impl Signature {
     /// # Errors
     /// Fails if signing fails
     #[cfg(feature = "std")]
-    fn new(key_pair: KeyPair, payload: &[u8]) -> Result<Self, Error> {
+    pub fn new(key_pair: KeyPair, payload: &[u8]) -> Result<Self, Error> {
         let (public_key, private_key) = key_pair.into();
 
         let algorithm: Algorithm = private_key.digest_function();
@@ -136,9 +137,12 @@ impl<T> From<SignatureOf<T>> for Signature {
 
 /// Represents signature of the data (`Block` or `Transaction` for example).
 // Lint triggers when expanding #[codec(skip)]
-#[allow(clippy::default_trait_access)]
-#[allow(clippy::unsafe_derive_deserialize)]
-#[derive(Deref, DerefMut, Decode, Encode, Serialize, Deserialize)]
+#[allow(
+    clippy::default_trait_access,
+    clippy::unsafe_derive_deserialize,
+    clippy::derive_hash_xor_eq
+)]
+#[derive(Deref, DerefMut, Hash, Decode, Encode, Serialize, Deserialize)]
 #[serde(transparent)]
 // Transmute guard
 #[repr(transparent)]
@@ -266,7 +270,8 @@ impl<T: Encode> SignatureOf<T> {
 ///
 /// GUARANTEE 1: This container always contains at least 1 signature
 /// GUARANTEE 2: Each signature corresponds to a different public key
-#[derive(Encode, Serialize, IntoSchema)]
+#[allow(clippy::derive_hash_xor_eq)]
+#[derive(Hash, Encode, Serialize, IntoSchema)]
 #[serde(transparent)]
 // Transmute guard
 #[repr(transparent)]

@@ -5,6 +5,7 @@
 use std::num::TryFromIntError;
 
 use eyre::WrapErr;
+use futures::TryStreamExt;
 use iroha_actor::Addr;
 use iroha_config::{
     base::proxy::Documented,
@@ -99,6 +100,7 @@ impl TryFrom<SignedQueryRequest> for VerifiedQueryRequest {
 pub(crate) async fn handle_instructions(
     iroha_cfg: Configuration,
     queue: Arc<Queue>,
+    sumeragi: Arc<Sumeragi>,
     transaction: VersionedSignedTransaction,
 ) -> Result<Empty> {
     let transaction: SignedTransaction = transaction.into_v1();
@@ -108,7 +110,9 @@ pub(crate) async fn handle_instructions(
     )
     .map_err(Error::AcceptTransaction)?;
     #[allow(clippy::map_err_ignore)]
-    let push_result = queue.push(transaction).map_err(|(_, err)| err);
+    let push_result = queue
+        .push(transaction, &sumeragi.wsv_mutex_access())
+        .map_err(|(_, err)| err);
     if let Err(ref error) = push_result {
         iroha_logger::warn!(%error, "Failed to push into queue")
     }
@@ -120,15 +124,18 @@ pub(crate) async fn handle_instructions(
 
 #[iroha_futures::telemetry_future]
 pub(crate) async fn handle_queries(
-    wsv: Arc<WorldStateView>,
+    sumeragi: Arc<Sumeragi>,
     query_judge: QueryJudgeArc,
     pagination: Pagination,
     sorting: Sorting,
     request: VerifiedQueryRequest,
 ) -> Result<Scale<VersionedPaginatedQueryResult>> {
-    let (valid_request, filter) = request.validate(&wsv, query_judge.as_ref())?;
-    let original_result = valid_request.execute(&wsv)?;
-    let result = filter.filter(original_result);
+    let (result, filter) = {
+        let wsv = sumeragi.wsv_mutex_access().clone();
+        let (valid_request, filter) = request.validate(&wsv, query_judge.as_ref())?;
+        let original_result = valid_request.execute(&wsv)?;
+        (filter.filter(original_result), filter)
+    };
 
     let (total, result) = if let Value::Vec(vec_of_val) = result {
         let len = vec_of_val.len();
@@ -146,6 +153,7 @@ pub(crate) async fn handle_queries(
     let paginated_result = PaginatedQueryResult {
         result,
         pagination,
+        sorting,
         filter,
         total,
     };
@@ -201,11 +209,12 @@ async fn handle_schema() -> Json {
 #[iroha_futures::telemetry_future]
 async fn handle_pending_transactions(
     queue: Arc<Queue>,
+    sumeragi: Arc<Sumeragi>,
     pagination: Pagination,
 ) -> Result<Scale<VersionedPendingTransactions>> {
     Ok(Scale(
         queue
-            .all_transactions()
+            .all_transactions(&sumeragi.wsv_mutex_access())
             .into_iter()
             .map(VersionedAcceptedTransaction::into_v1)
             .map(SignedTransaction::from)
@@ -254,9 +263,9 @@ async fn handle_post_configuration(
 }
 
 #[iroha_futures::telemetry_future]
-async fn handle_blocks_stream(wsv: &WorldStateView, mut stream: WebSocket) -> eyre::Result<()> {
+async fn handle_blocks_stream(sumeragi: Arc<Sumeragi>, mut stream: WebSocket) -> eyre::Result<()> {
     let subscription_request: VersionedBlockSubscriberMessage = stream.recv().await?;
-    let mut from_height = subscription_request.into_v1().try_into()?;
+    let mut from_height: u64 = subscription_request.into_v1().try_into()?;
 
     stream
         .send(VersionedBlockPublisherMessage::from(
@@ -264,26 +273,44 @@ async fn handle_blocks_stream(wsv: &WorldStateView, mut stream: WebSocket) -> ey
         ))
         .await?;
 
-    let mut rx = wsv.subscribe_to_new_block_notifications();
-    stream_blocks(&mut from_height, wsv, &mut stream).await?;
-
+    let mut interval = tokio::time::interval(std::time::Duration::from_millis(10));
     loop {
-        rx.changed().await?;
-        stream_blocks(&mut from_height, wsv, &mut stream).await?;
+        tokio::select! {
+            // This branch catches `Close` and unexpected messages
+            closed = async {
+                while let Some(message) = stream.try_next().await? {
+                    if message.is_close() {
+                        return Ok(());
+                    }
+                    iroha_logger::warn!("Unexpected message received: {:?}", message);
+                }
+                eyre::bail!("Can't receive close message")
+            } => {
+                match closed {
+                    Ok(()) =>  {
+                        return stream.close().await.map_err(Into::into);
+                    }
+                    Err(err) => return Err(err)
+                }
+            }
+            // This branch sends blocks
+            _ = interval.tick() => {
+                let blocks = sumeragi.blocks_from_height(from_height.try_into().wrap_err("Failed to convert `from_height` into `usize`. You should consider upgrading to a 64-bit arch")?);
+                stream_blocks(&mut from_height, blocks, &mut stream).await?;
+            }
+            // Else branch to prevent panic
+            else => ()
+        }
     }
 }
 
 async fn stream_blocks(
     from_height: &mut u64,
-    wsv: &WorldStateView,
+    blocks: Vec<VersionedCommittedBlock>,
     stream: &mut WebSocket,
 ) -> eyre::Result<()> {
     #[allow(clippy::expect_used)]
-    for block in wsv.blocks_from_height(
-        (*from_height)
-            .try_into()
-            .expect("Blockchain size limit reached"),
-    ) {
+    for block in blocks {
         stream
             .send(VersionedBlockPublisherMessage::from(
                 BlockPublisherMessage::from(block),
@@ -291,10 +318,9 @@ async fn stream_blocks(
             .await?;
 
         let message: VersionedBlockSubscriberMessage = stream.recv().await?;
-        if let BlockSubscriberMessage::BlockReceived = message.into_v1() {
-            *from_height += 1;
-        } else {
-            return Err(eyre!("Expected `BlockReceived` message"));
+        match message.into_v1() {
+            BlockSubscriberMessage::BlockReceived => *from_height += 1,
+            message => eyre::bail!("Expected `BlockReceived` message, received: {message:?}"),
         }
     }
 
@@ -384,81 +410,64 @@ mod subscription {
 
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "telemetry")]
-async fn handle_version(wsv: Arc<WorldStateView>) -> Json {
+async fn handle_version(sumeragi: Arc<Sumeragi>) -> Json {
     use iroha_version::Version;
 
     #[allow(clippy::expect_used)]
-    reply::json(
-        &wsv.blocks()
-            .last()
-            .expect("At least genesis should always exist")
-            .value()
-            .version()
-            .to_string(),
-    )
+    let string = sumeragi
+        .wsv_mutex_access()
+        .blocks()
+        .last()
+        .expect("Genesis not applied. Nothing we can do. Solve the issue and rerun.")
+        .value()
+        .version()
+        .to_string();
+    reply::json(&string)
 }
 
 #[cfg(feature = "telemetry")]
-async fn handle_metrics(wsv: Arc<WorldStateView>, network: Addr<IrohaNetwork>) -> Result<String> {
-    update_metrics(&wsv, network).await?;
-    wsv.metrics.try_to_string().map_err(Error::Prometheus)
-}
-
-#[cfg(feature = "telemetry")]
-async fn handle_status(wsv: Arc<WorldStateView>, network: Addr<IrohaNetwork>) -> Result<Json> {
-    update_metrics(&wsv, network).await?;
-    let status = Status::from(&wsv.metrics);
-    Ok(reply::json(&status))
-}
-
-#[cfg(feature = "telemetry")]
-async fn update_metrics(wsv: &WorldStateView, network: Addr<IrohaNetwork>) -> Result<()> {
-    let peers = network
-        .send(iroha_p2p::network::GetConnectedPeers)
-        .await
-        .map_err(Error::Status)?
-        .peers
-        .len() as u64;
-    #[allow(clippy::cast_possible_truncation)]
-    if let Some(timestamp) = wsv.genesis_timestamp() {
-        // this will overflow in 584942417years.
-        wsv.metrics
-            .uptime_since_genesis_ms
-            .set((current_time().as_millis() - timestamp) as u64)
-    };
-    let domains = wsv.domains();
-    wsv.metrics.domains.set(domains.len() as u64);
-    wsv.metrics.connected_peers.set(peers);
-    for domain in domains {
-        wsv.metrics
-            .accounts
-            .get_metric_with_label_values(&[domain.id().name.as_ref()])
-            .wrap_err("Failed to compose domains")
-            .map_err(Error::Prometheus)?
-            .set(domain.accounts().len() as u64);
+#[allow(clippy::unused_async)] // TODO: remove?
+async fn handle_metrics(sumeragi: Arc<Sumeragi>, _network: Addr<IrohaNetwork>) -> Result<String> {
+    // TODO: Remove network.
+    if let Err(error) = sumeragi.update_metrics() {
+        iroha_logger::error!(%error, "Error while calling sumeragi::update_metrics.");
     }
-    Ok(())
+    sumeragi
+        .metrics_mutex_access()
+        .try_to_string()
+        .map_err(Error::Prometheus)
+}
+
+#[cfg(feature = "telemetry")]
+#[allow(clippy::unused_async)] // TODO: remove?
+async fn handle_status(sumeragi: Arc<Sumeragi>, _network: Addr<IrohaNetwork>) -> Result<Json> {
+    // TODO: remove network
+    if let Err(error) = sumeragi.update_metrics() {
+        iroha_logger::error!(%error, "Error while calling `sumeragi::update_metrics`.");
+    }
+    let status = Status::from(&sumeragi.metrics_mutex_access());
+    Ok(reply::json(&status))
 }
 
 impl Torii {
     /// Construct `Torii` from `ToriiConfiguration`.
     pub fn from_configuration(
         iroha_cfg: Configuration,
-        wsv: Arc<WorldStateView>,
         queue: Arc<Queue>,
         query_judge: QueryJudgeArc,
         events: EventsSender,
         network: Addr<IrohaNetwork>,
         notify_shutdown: Arc<Notify>,
+        sumeragi: Arc<Sumeragi>,
     ) -> Self {
         Self {
             iroha_cfg,
-            wsv,
             events,
             query_judge,
             queue,
             network,
             notify_shutdown,
+            sumeragi,
         }
     }
 
@@ -469,15 +478,17 @@ impl Torii {
     ) -> impl warp::Filter<Extract = impl warp::Reply> + Clone + Send {
         let get_router_status = endpoint2(
             handle_status,
-            warp::path(uri::STATUS).and(add_state!(self.wsv, self.network)),
+            warp::path(uri::STATUS).and(add_state!(self.sumeragi, self.network)),
         );
         let get_router_metrics = endpoint2(
             handle_metrics,
-            warp::path(uri::METRICS).and(add_state!(self.wsv, self.network)),
+            warp::path(uri::METRICS).and(add_state!(self.sumeragi, self.network)),
         );
         let get_api_version = warp::path(uri::API_VERSION)
-            .and(add_state!(self.wsv))
-            .and_then(|wsv: Arc<_>| async { Ok::<_, Infallible>(handle_version(wsv).await) });
+            .and(add_state!(self.sumeragi))
+            .and_then(|sumeragi: Arc<_>| async {
+                Ok::<_, Infallible>(handle_version(sumeragi).await)
+            });
 
         warp::get()
             .and(get_router_status)
@@ -492,10 +503,10 @@ impl Torii {
     ) -> impl warp::Filter<Extract = impl warp::Reply> + Clone + Send {
         let get_router = warp::path(uri::HEALTH)
             .and_then(|| async { Ok::<_, Infallible>(handle_health().await) })
-            .or(endpoint2(
+            .or(endpoint3(
                 handle_pending_transactions,
                 warp::path(uri::PENDING_TRANSACTIONS)
-                    .and(add_state!(self.queue))
+                    .and(add_state!(self.queue, self.sumeragi))
                     .and(paginate()),
             ))
             .or(endpoint2(
@@ -509,10 +520,10 @@ impl Torii {
         let get_router = get_router.or(warp::path(uri::SCHEMA)
             .and_then(|| async { Ok::<_, Infallible>(handle_schema().await) }));
 
-        let post_router = endpoint3(
+        let post_router = endpoint4(
             handle_instructions,
             warp::path(uri::TRANSACTION)
-                .and(add_state!(self.iroha_cfg, self.queue))
+                .and(add_state!(self.iroha_cfg, self.queue, self.sumeragi))
                 .and(warp::body::content_length_limit(
                     self.iroha_cfg.torii.max_content_len.into(),
                 ))
@@ -521,7 +532,7 @@ impl Torii {
         .or(endpoint5(
             handle_queries,
             warp::path(uri::QUERY)
-                .and(add_state!(self.wsv, self.query_judge))
+                .and(add_state!(self.sumeragi, self.query_judge))
                 .and(paginate())
                 .and(sorting())
                 .and(body::query()),
@@ -554,11 +565,11 @@ impl Torii {
             });
 
         let blocks_ws_router = block_ws_router_path
-            .and(add_state!(self.wsv))
+            .and(add_state!(self.sumeragi))
             .and(warp::ws())
-            .map(|wsv: Arc<_>, ws: Ws| {
+            .map(|sumeragi: Arc<_>, ws: Ws| {
                 ws.on_upgrade(|this_ws| async move {
-                    if let Err(error) = handle_blocks_stream(&wsv, this_ws).await {
+                    if let Err(error) = handle_blocks_stream(sumeragi, this_ws).await {
                         iroha_logger::error!(%error, "Failed to subscribe to blocks stream");
                     }
                 })

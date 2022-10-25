@@ -55,7 +55,7 @@ pub struct Consumer {
 }
 
 impl Consumer {
-    /// Constructs `Consumer`, which consumes `Event`s and forwards it through the `stream`.
+    /// Constructs [`Consumer`], which consumes `Event`s and forwards it through the `stream`.
     ///
     /// # Errors
     /// Can fail due to timeout or without message at websocket or during decoding request
@@ -106,7 +106,7 @@ impl Consumer {
             if message.is_close() {
                 return Ok(());
             }
-            iroha_logger::trace!("Unexpected message received: {:?}", message);
+            iroha_logger::warn!("Unexpected message received: {:?}", message);
         }
         Err(Error::CantReceiveMessage)
     }

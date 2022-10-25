@@ -2,13 +2,13 @@
 //! transactions and assets.
 
 #[cfg(not(feature = "std"))]
-use alloc::{alloc::alloc, boxed::Box, collections::btree_map, format, string::String, vec::Vec};
+use alloc::{boxed::Box, collections::btree_map, format, string::String, vec::Vec};
 use core::borrow::Borrow;
 #[cfg(feature = "std")]
-use std::{alloc::alloc, collections::btree_map};
+use std::collections::btree_map;
 
 use derive_more::Display;
-use iroha_ffi::{IntoFfi, TryFromReprC};
+use iroha_ffi::FfiType;
 use iroha_schema::IntoSchema;
 use parity_scale_codec::{Decode, Encode};
 use serde::{Deserialize, Serialize};
@@ -85,13 +85,16 @@ impl Limits {
     Encode,
     Deserialize,
     Serialize,
-    IntoFfi,
-    TryFromReprC,
+    FfiType,
     IntoSchema,
+    Hash,
 )]
+#[repr(transparent)]
 #[serde(transparent)]
-#[allow(clippy::multiple_inherent_impl)]
+// SAFETY: Metadata has no trap representations in BTreeMap
+#[ffi_type(unsafe {robust})]
 #[display(fmt = "Metadata")]
+#[allow(clippy::multiple_inherent_impl)]
 pub struct Metadata {
     map: btree_map::BTreeMap<Name, Value>,
 }

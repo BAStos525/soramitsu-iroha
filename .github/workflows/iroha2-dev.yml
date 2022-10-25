@@ -12,7 +12,7 @@ env:
 # `ubuntu-latest` and not `[self-hosted, Linux]`.
 jobs:
   dockerhub:
-    runs-on: [self-hosted,macOS,ARM64,mac-common-1,iroha]
+    runs-on: [self-hosted,macOS,ARM64,iroha-mac1]
     # container:
     #   image: 7272721/i2-ci:nightly
     steps:
@@ -45,8 +45,11 @@ jobs:
           tags: bastos525/iroha2:m1-dev
           labels: commit=${{ github.sha }}
           build-args: TAG=dev
+          file: Dockerfile
           # This context specification is required
           context: .
+    #      cache-from: type=gha
+    #      cache-to: type=gha,mode=max
 
   # load-rs:
   #   runs-on: ubuntu-latest

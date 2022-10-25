@@ -16,26 +16,29 @@ const DEFAULT_ACTOR_CHANNEL_CAPACITY: u32 = 100;
 #[config(env_prefix = "KURA_")]
 pub struct Configuration {
     /// Initialization mode: `strict` or `fast`.
-    #[serde(default)]
     pub init_mode: Mode,
     /// Path to the existing block store folder or path to create new folder.
-    #[serde(default = "default_block_store_path")]
     pub block_store_path: String,
     /// Maximum number of blocks to write into a single storage file.
-    #[serde(default = "default_blocks_per_storage_file")]
     pub blocks_per_storage_file: NonZeroU64,
     /// Default buffer capacity of actor's MPSC channel.
-    #[serde(default = "default_actor_channel_capacity")]
     pub actor_channel_capacity: u32,
+    /// Whether or not new blocks be outputted to a file called blocks.json.
+    pub debug_output_new_blocks: bool,
 }
 
-impl Default for Configuration {
+impl Default for ConfigurationProxy {
+    #[allow(clippy::expect_used)]
     fn default() -> Self {
         Self {
-            init_mode: Mode::default(),
-            block_store_path: default_block_store_path(),
-            blocks_per_storage_file: default_blocks_per_storage_file(),
-            actor_channel_capacity: default_actor_channel_capacity(),
+            init_mode: Some(Mode::default()),
+            block_store_path: Some(DEFAULT_BLOCK_STORE_PATH.to_owned()),
+            blocks_per_storage_file: Some(
+                NonZeroU64::new(DEFAULT_BLOCKS_PER_STORAGE_FILE)
+                    .expect("BLOCKS_PER_STORAGE cannot be set to a non-positive value."),
+            ),
+            actor_channel_capacity: Some(DEFAULT_ACTOR_CHANNEL_CAPACITY),
+            debug_output_new_blocks: Some(false),
         }
     }
 }
@@ -54,20 +57,6 @@ impl Configuration {
     }
 }
 
-fn default_block_store_path() -> String {
-    DEFAULT_BLOCK_STORE_PATH.to_owned()
-}
-
-fn default_blocks_per_storage_file() -> NonZeroU64 {
-    #![allow(clippy::expect_used)]
-    NonZeroU64::new(DEFAULT_BLOCKS_PER_STORAGE_FILE)
-        .expect("BLOCKS_PER_STORAGE cannot be set to a non-positive value.")
-}
-
-const fn default_actor_channel_capacity() -> u32 {
-    DEFAULT_ACTOR_CHANNEL_CAPACITY
-}
-
 /// Kura initialization mode.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -81,5 +70,27 @@ pub enum Mode {
 impl Default for Mode {
     fn default() -> Self {
         Mode::Strict
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    prop_compose! {
+        #[allow(clippy::expect_used)]
+        pub fn arb_proxy()
+            (
+                init_mode in prop::option::of(Just(Mode::default())),
+                block_store_path in prop::option::of(Just(DEFAULT_BLOCK_STORE_PATH.into())),
+                blocks_per_storage_file in prop::option::of(Just(NonZeroU64::new(DEFAULT_BLOCKS_PER_STORAGE_FILE).expect("Cannot be set to a negative value"))),
+                actor_channel_capacity in prop::option::of(Just(DEFAULT_ACTOR_CHANNEL_CAPACITY)),
+                debug_output_new_blocks in prop::option::of(Just(false))
+            )
+            -> ConfigurationProxy {
+            ConfigurationProxy { init_mode, block_store_path, blocks_per_storage_file, actor_channel_capacity, debug_output_new_blocks }
+        }
     }
 }

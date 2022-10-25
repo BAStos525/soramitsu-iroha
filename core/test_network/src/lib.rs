@@ -15,11 +15,9 @@ use iroha_config::{
     sumeragi::Configuration as SumeragiConfiguration, torii::Configuration as ToriiConfiguration,
 };
 use iroha_core::{
-    block_sync::{BlockSynchronizer, BlockSynchronizerTrait},
     genesis::{GenesisNetwork, GenesisNetworkTrait, RawGenesisBlock},
     prelude::*,
     smartcontracts::permissions::judge::{InstructionJudgeBoxed, QueryJudgeBoxed},
-    sumeragi::{Sumeragi, SumeragiTrait},
 };
 use iroha_data_model::{peer::Peer as DataModelPeer, prelude::*};
 use iroha_logger::{Configuration as LoggerConfiguration, InstrumentFutures};
@@ -55,17 +53,11 @@ macro_rules! prepare_test_for_nextest {
 struct ShutdownRuntime;
 
 /// Network of peers
-pub struct Network<G = GenesisNetwork, S = Sumeragi<G>, B = BlockSynchronizer<S>>
-where
-    G: GenesisNetworkTrait,
-
-    S: SumeragiTrait<GenesisNetwork = G>,
-    B: BlockSynchronizerTrait<Sumeragi = S>,
-{
+pub struct Network {
     /// Genesis peer which sends genesis block to everyone
-    pub genesis: Peer<G, S, B>,
+    pub genesis: Peer,
     /// Peers excluding the `genesis` peer. Use [`Network::peers`] function to get all instead.
-    pub peers: HashMap<PeerId, Peer<G, S, B>>,
+    pub peers: HashMap<PeerId, Peer>,
 }
 
 /// Get a standardised key-pair from the hard-coded literals.
@@ -92,7 +84,7 @@ pub trait TestGenesis: Sized {
     fn test(submit_genesis: bool) -> Option<Self>;
 }
 
-impl<G: GenesisNetworkTrait> TestGenesis for G {
+impl TestGenesis for GenesisNetwork {
     fn test(submit_genesis: bool) -> Option<Self> {
         let cfg = Configuration::test();
         let mut genesis = RawGenesisBlock::new(
@@ -143,7 +135,7 @@ impl<G: GenesisNetworkTrait> TestGenesis for G {
 
         configure_world();
 
-        G::from_configuration(
+        GenesisNetwork::from_configuration(
             submit_genesis,
             genesis,
             Some(&cfg.genesis),
@@ -155,20 +147,14 @@ impl<G: GenesisNetworkTrait> TestGenesis for G {
 
 fn configure_world() {}
 
-impl<G, S, B> Network<G, S, B>
-where
-    G: GenesisNetworkTrait,
-
-    S: SumeragiTrait<GenesisNetwork = G>,
-    B: BlockSynchronizerTrait<Sumeragi = S>,
-{
+impl Network {
     /// Send message to an actor instance on peers.
     ///
     /// # Panics
     /// Programmer error. `self.peers()` should already have `iroha`.
     pub async fn send_to_actor_on_peers<M, A>(
         &self,
-        select_actor: impl Fn(&Iroha<G, S, B>) -> &Addr<A>,
+        select_actor: impl Fn(&Iroha) -> &Addr<A>,
         msg: M,
     ) -> Vec<(M::Result, PeerId)>
     where
@@ -221,6 +207,7 @@ where
     ) -> (Self, Client) {
         let mut configuration = Configuration::test();
         configuration.queue.maximum_transactions_in_block = max_txs_in_block;
+        configuration.logger.max_log_level = iroha_logger::Level::INFO.into();
         let network = Network::new_with_offline_peers(Some(configuration), n_peers, offline_peers)
             .await
             .expect("Failed to init peers");
@@ -288,7 +275,7 @@ where
         offline_peers: u32,
     ) -> Result<Self> {
         let n_peers = n_peers - 1;
-        let mut genesis = Peer::<G, S, B>::new()?;
+        let mut genesis = Peer::new()?;
         let mut peers = (0..n_peers)
             .map(|_| Peer::new())
             .map(|result| result.map(|peer| (peer.id.clone(), peer)))
@@ -305,8 +292,8 @@ where
         let online_peers = n_peers - offline_peers;
         let futures = FuturesUnordered::new();
 
-        let builder = PeerBuilder::<G>::new()
-            .with_into_genesis(G::test(true))
+        let builder = PeerBuilder::new()
+            .with_into_genesis(GenesisNetwork::test(true))
             .with_configuration(configuration.clone());
 
         futures.push(builder.start_with_peer(&mut genesis));
@@ -314,8 +301,8 @@ where
             .values_mut()
             .choose_multiple(rng, online_peers as usize)
         {
-            let builder = PeerBuilder::<G>::new()
-                .with_into_genesis(G::test(false))
+            let builder = PeerBuilder::new()
+                .with_into_genesis(GenesisNetwork::test(false))
                 .with_configuration(configuration.clone());
 
             futures.push(builder.start_with_peer(peer));
@@ -328,7 +315,7 @@ where
     }
 
     /// Returns all peers.
-    pub fn peers(&self) -> impl Iterator<Item = &Peer<G, S, B>> + '_ {
+    pub fn peers(&self) -> impl Iterator<Item = &Peer> + '_ {
         std::iter::once(&self.genesis).chain(self.peers.values())
     }
 
@@ -340,7 +327,7 @@ where
     }
 
     /// Get peer by its Id.
-    pub fn peer_by_id(&self, id: &PeerId) -> Option<&Peer<G, S, B>> {
+    pub fn peer_by_id(&self, id: &PeerId) -> Option<&Peer> {
         self.peers.get(id).or(if self.genesis.id == *id {
             Some(&self.genesis)
         } else {
@@ -355,7 +342,7 @@ where
 /// When unsuccessful after `MAX_RETRIES`.
 pub fn wait_for_genesis_committed(clients: &[Client], offline_peers: u32) {
     const POLL_PERIOD: Duration = Duration::from_millis(1000);
-    const MAX_RETRIES: u32 = 60 * 3; // 3 minutes
+    const MAX_RETRIES: u32 = 10;
 
     for _ in 0..MAX_RETRIES {
         let without_genesis_peers = clients.iter().fold(0_u32, |acc, client| {
@@ -381,13 +368,7 @@ pub fn wait_for_genesis_committed(clients: &[Client], offline_peers: u32) {
 }
 
 /// Peer structure
-pub struct Peer<G = GenesisNetwork, S = Sumeragi<G>, B = BlockSynchronizer<S>>
-where
-    G: GenesisNetworkTrait,
-
-    S: SumeragiTrait<GenesisNetwork = G>,
-    B: BlockSynchronizerTrait<Sumeragi = S>,
-{
+pub struct Peer {
     /// The id of the peer
     pub id: PeerId,
     /// API address
@@ -403,7 +384,7 @@ where
     /// Shutdown handle
     shutdown: Option<JoinHandle<()>>,
     /// Iroha itself
-    pub iroha: Option<Iroha<G, S, B>>,
+    pub iroha: Option<Iroha>,
     /// Temporary directory
     // Note: last field to be dropped after Iroha (struct fields drops in FIFO RFC 1857)
     temp_dir: Option<Arc<TempDir>>,
@@ -423,13 +404,7 @@ impl std::cmp::PartialEq for Peer {
 
 impl std::cmp::Eq for Peer {}
 
-impl<G, S, B> Drop for Peer<G, S, B>
-where
-    G: GenesisNetworkTrait,
-
-    S: SumeragiTrait<GenesisNetwork = G>,
-    B: BlockSynchronizerTrait<Sumeragi = S>,
-{
+impl Drop for Peer {
     fn drop(&mut self) {
         iroha_logger::info!(
             p2p_addr = %self.p2p_address,
@@ -444,13 +419,7 @@ where
     }
 }
 
-impl<G, S, B> Peer<G, S, B>
-where
-    G: GenesisNetworkTrait,
-
-    S: SumeragiTrait<GenesisNetwork = G>,
-    B: BlockSynchronizerTrait<Sumeragi = S>,
-{
+impl Peer {
     /// Returns per peer config with all addresses, keys, and id set up.
     fn get_config(&self, configuration: Configuration) -> Configuration {
         Configuration {
@@ -479,7 +448,7 @@ where
     async fn start(
         &mut self,
         configuration: Configuration,
-        genesis: Option<G>,
+        genesis: Option<GenesisNetwork>,
         instruction_judge: InstructionJudgeBoxed,
         query_judge: QueryJudgeBoxed,
         temp_dir: Arc<TempDir>,
@@ -502,7 +471,7 @@ where
 
         let handle = task::spawn(
             async move {
-                let mut iroha = <Iroha<G, S, B>>::with_genesis(
+                let mut iroha = <Iroha>::with_genesis(
                     genesis,
                     configuration,
                     instruction_judge,
@@ -560,23 +529,23 @@ where
 /// `WithGenesis` structure.
 ///
 /// Options for setting up the genesis network for `PeerBuilder`.
-pub enum WithGenesis<G> {
+pub enum WithGenesis {
     /// Use the default genesis network.
     Default,
     /// Do not use any genesis networks.
     None,
     /// Use the given genesis network.
-    Has(G),
+    Has(GenesisNetwork),
 }
 
-impl<G> Default for WithGenesis<G> {
+impl Default for WithGenesis {
     fn default() -> Self {
         Self::Default
     }
 }
 
-impl<G> From<Option<G>> for WithGenesis<G> {
-    fn from(x: Option<G>) -> Self {
+impl From<Option<GenesisNetwork>> for WithGenesis {
+    fn from(x: Option<GenesisNetwork>) -> Self {
         match x {
             None => Self::None,
             Some(genesis) => Self::Has(genesis),
@@ -584,90 +553,81 @@ impl<G> From<Option<G>> for WithGenesis<G> {
     }
 }
 
-/// `PeerBuilder` structure that helps to create a peer.
-pub struct PeerBuilder<G = GenesisNetwork>
-where
-    G: GenesisNetworkTrait,
-{
+/// `PeerBuilder`.
+#[derive(Default)]
+pub struct PeerBuilder {
     configuration: Option<Configuration>,
-    genesis: WithGenesis<G>,
+    genesis: WithGenesis,
     instruction_judge: Option<InstructionJudgeBoxed>,
     query_judge: Option<QueryJudgeBoxed>,
     temp_dir: Option<Arc<TempDir>>,
 }
 
-impl<G> PeerBuilder<G>
-where
-    G: GenesisNetworkTrait,
-{
-    /// Creates [`PeerBuilder`].
+impl PeerBuilder {
+    /// Create [`PeerBuilder`].
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Sets the optional genesis network.
+    /// Set the optional genesis network.
     #[must_use]
-    pub fn with_into_genesis(mut self, genesis: impl Into<WithGenesis<G>>) -> Self {
+    pub fn with_into_genesis(mut self, genesis: impl Into<WithGenesis>) -> Self {
         self.genesis = genesis.into();
         self
     }
 
-    /// Sets the genesis network.
+    /// Set the genesis network.
     #[must_use]
-    pub fn with_genesis(mut self, genesis: G) -> Self {
-        self.genesis = WithGenesis::<G>::Has(genesis);
+    pub fn with_genesis(mut self, genesis: GenesisNetwork) -> Self {
+        self.genesis = WithGenesis::Has(genesis);
         self
     }
 
-    /// Sets the test genesis network.
+    /// Set the test genesis network.
     #[must_use]
     pub fn with_test_genesis(self, submit_genesis: bool) -> Self {
-        self.with_into_genesis(G::test(submit_genesis))
+        self.with_into_genesis(GenesisNetwork::test(submit_genesis))
     }
 
-    /// Sets Iroha configuration
+    /// Set Iroha configuration
     #[must_use]
     pub fn with_configuration(mut self, configuration: Configuration) -> Self {
         self.configuration.replace(configuration);
         self
     }
 
-    /// Sets permissions for instructions.
+    /// Set permissions for instructions.
     #[must_use]
     pub fn with_instruction_judge(mut self, instruction_judge: InstructionJudgeBoxed) -> Self {
         self.instruction_judge.replace(instruction_judge);
         self
     }
 
-    /// Sets permissions for queries.
+    /// Set permissions for queries.
     #[must_use]
     pub fn with_query_judge(mut self, query_judge: QueryJudgeBoxed) -> Self {
         self.query_judge.replace(query_judge);
         self
     }
 
-    /// Sets the directory to be used as a stub.
+    /// Set the directory to be used as a stub.
     #[must_use]
     pub fn with_dir(mut self, temp_dir: Arc<TempDir>) -> Self {
         self.temp_dir.replace(temp_dir);
         self
     }
 
-    /// Accepts a peer and starts it.
-    pub async fn start_with_peer<S, B>(self, peer: &mut Peer<G, S, B>)
-    where
-        S: SumeragiTrait<GenesisNetwork = G>,
-        B: BlockSynchronizerTrait<Sumeragi = S>,
-    {
+    /// Accept a peer and starts it.
+    pub async fn start_with_peer(self, peer: &mut Peer) {
         let configuration = self.configuration.unwrap_or_else(|| {
             let mut config = Configuration::test();
             config.sumeragi.trusted_peers.peers = std::iter::once(peer.id.clone()).collect();
             config
         });
         let genesis = match self.genesis {
-            WithGenesis::<G>::Default => G::test(true),
-            WithGenesis::<G>::None => None,
-            WithGenesis::<G>::Has(genesis) => Some(genesis),
+            WithGenesis::Default => GenesisNetwork::test(true),
+            WithGenesis::None => None,
+            WithGenesis::Has(genesis) => Some(genesis),
         };
         let instruction_validator = self.instruction_judge.unwrap_or_else(|| {
             iroha_permissions_validators::public_blockchain::default_permissions()
@@ -689,17 +649,15 @@ where
         .await;
     }
 
-    /// Creates and starts a peer with preapplied arguments.
-    pub async fn start(self) -> Peer<G, Sumeragi<G>, BlockSynchronizer<Sumeragi<G>>> {
+    /// Create and start a peer with preapplied arguments.
+    pub async fn start(self) -> Peer {
         let mut peer = Peer::new().expect("Failed to create a peer.");
         self.start_with_peer(&mut peer).await;
         peer
     }
 
-    /// Creates and starts a peer, creates a client and connects it to the peer and returns both.
-    pub async fn start_with_client(
-        self,
-    ) -> (Peer<G, Sumeragi<G>, BlockSynchronizer<Sumeragi<G>>>, Client) {
+    /// Create and start a peer, create a client and connect it to the peer and return both.
+    pub async fn start_with_client(self) -> (Peer, Client) {
         let configuration = self
             .configuration
             .clone()
@@ -717,34 +675,15 @@ where
         (peer, client)
     }
 
-    /// Creates a peer with a client, creates a runtime, and synchronously starts the peer on the runtime.
-    pub fn start_with_runtime(self) -> PeerWithRuntimeAndClient<G> {
+    /// Create a peer with a client, create a runtime, and synchronously start the peer on the runtime.
+    pub fn start_with_runtime(self) -> PeerWithRuntimeAndClient {
         let rt = Runtime::test();
         let (peer, client) = rt.block_on(self.start_with_client());
         (rt, peer, client)
     }
 }
 
-type PeerWithRuntimeAndClient<G> = (
-    Runtime,
-    Peer<G, Sumeragi<G>, BlockSynchronizer<Sumeragi<G>>>,
-    Client,
-);
-
-impl<G> Default for PeerBuilder<G>
-where
-    G: GenesisNetworkTrait,
-{
-    fn default() -> Self {
-        Self {
-            genesis: WithGenesis::<G>::default(),
-            configuration: None,
-            instruction_judge: None,
-            query_judge: None,
-            temp_dir: None,
-        }
-    }
-}
+type PeerWithRuntimeAndClient = (Runtime, Peer, Client);
 
 fn local_unique_port() -> Result<String> {
     Ok(format!(
@@ -755,7 +694,7 @@ fn local_unique_port() -> Result<String> {
 
 /// Runtime used for testing.
 pub trait TestRuntime {
-    /// Creates test runtime
+    /// Create test runtime
     fn test() -> Self;
 }
 
@@ -777,13 +716,13 @@ pub trait TestClientConfiguration {
 
 /// Client mocking trait
 pub trait TestClient: Sized {
-    /// Creates test client from api url
+    /// Create test client from api url
     fn test(api_url: &str, telemetry_url: &str) -> Self;
 
-    /// Creates test client from api url and keypair
+    /// Create test client from api url and keypair
     fn test_with_key(api_url: &str, telemetry_url: &str, keys: KeyPair) -> Self;
 
-    /// Creates test client from api url, keypair, and account id
+    /// Create test client from api url, keypair, and account id
     fn test_with_account(
         api_url: &str,
         telemetry_url: &str,
@@ -791,10 +730,10 @@ pub trait TestClient: Sized {
         account_id: &AccountId,
     ) -> Self;
 
-    /// loops for events with filter and handler function
+    /// Loop for events with filter and handler function
     fn for_each_event(self, event_filter: FilterBox, f: impl Fn(Result<Event>));
 
-    /// Submits instruction with polling
+    /// Submit instruction with polling
     ///
     /// # Errors
     /// If predicate is not satisfied, after maximum retries.
@@ -896,6 +835,8 @@ impl TestRuntime for Runtime {
 }
 
 use std::collections::HashSet;
+
+use iroha_config::base::proxy::LoadFromEnv;
 
 impl TestConfiguration for Configuration {
     fn test() -> Self {

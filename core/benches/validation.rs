@@ -5,7 +5,6 @@ use std::{collections::BTreeSet, str::FromStr as _, sync::Arc};
 use criterion::{criterion_group, criterion_main, Criterion};
 use iroha_core::{
     prelude::*,
-    sumeragi::view_change,
     tx::{AcceptedTransaction, TransactionValidator},
     wsv::World,
 };
@@ -125,14 +124,17 @@ fn validate_transaction(criterion: &mut Criterion) {
             TRANSACTION_LIMITS,
             Arc::new(AllowAll::new()),
             Arc::new(AllowAll::new()),
-            Arc::new(build_test_wsv(keys.clone())),
         );
-        b.iter(
-            || match transaction_validator.validate(transaction.clone(), false) {
+        b.iter(|| {
+            match transaction_validator.validate(
+                transaction.clone(),
+                false,
+                &Arc::new(build_test_wsv(keys.clone())),
+            ) {
                 Ok(_) => success_count += 1,
                 Err(_) => failure_count += 1,
-            },
-        );
+            }
+        });
     });
     println!(
         "Success count: {}, Failure count: {}",
@@ -151,12 +153,9 @@ fn chain_blocks(criterion: &mut Criterion) {
     let _ = criterion.bench_function("chain_block", |b| {
         b.iter(|| {
             success_count += 1;
-            let new_block = block.clone().chain(
-                success_count,
-                previous_block_hash.transmute(),
-                view_change::ProofChain::empty(),
-                Vec::new(),
-            );
+            let new_block = block
+                .clone()
+                .chain(success_count, previous_block_hash.transmute());
             previous_block_hash = new_block.hash();
         });
     });
@@ -174,11 +173,10 @@ fn sign_blocks(criterion: &mut Criterion) {
         TRANSACTION_LIMITS,
         Arc::new(AllowAll::new()),
         Arc::new(AllowAll::new()),
-        Arc::new(build_test_wsv(keys)),
     );
     let block = PendingBlock::new(vec![transaction.into()], Vec::new())
         .chain_first()
-        .validate(&transaction_validator);
+        .validate(&transaction_validator, &Arc::new(build_test_wsv(keys)));
     let key_pair = KeyPair::generate().expect("Failed to generate KeyPair.");
     let mut success_count = 0;
     let mut failures_count = 0;
@@ -217,10 +215,17 @@ fn validate_blocks(criterion: &mut Criterion) {
         TRANSACTION_LIMITS,
         Arc::new(AllowAll::new()),
         Arc::new(AllowAll::new()),
-        Arc::new(WorldStateView::new(World::with([domain], BTreeSet::new()))),
     );
     let _ = criterion.bench_function("validate_block", |b| {
-        b.iter(|| block.clone().validate(&transaction_validator));
+        b.iter(|| {
+            block.clone().validate(
+                &transaction_validator,
+                &Arc::new(WorldStateView::new(World::with(
+                    [domain.clone()],
+                    BTreeSet::new(),
+                ))),
+            )
+        });
     });
 }
 
@@ -228,7 +233,12 @@ criterion_group!(
     transactions,
     accept_transaction,
     sign_transaction,
-    validate_transaction
+    validate_transaction,
+    validate_blocks
 );
-criterion_group!(blocks, chain_blocks, sign_blocks, validate_blocks);
+criterion_group!(
+    blocks,
+    chain_blocks,
+    sign_blocks, // validate_blocks
+);
 criterion_main!(transactions, blocks);

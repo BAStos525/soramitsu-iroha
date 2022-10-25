@@ -6,7 +6,8 @@
     clippy::unwrap_in_result,
     clippy::std_instead_of_alloc,
     clippy::arithmetic,
-    clippy::trait_duplication_in_bounds
+    clippy::trait_duplication_in_bounds,
+    clippy::extra_unused_lifetimes // Thanks to `EnumKind` not knowing how to write a derive macro.
 )]
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -15,7 +16,6 @@ extern crate alloc;
 
 #[cfg(not(feature = "std"))]
 use alloc::{
-    alloc::alloc,
     borrow::{Cow, ToOwned as _},
     boxed::Box,
     format,
@@ -24,7 +24,7 @@ use alloc::{
 };
 use core::{convert::AsRef, fmt, fmt::Debug, ops::RangeInclusive};
 #[cfg(feature = "std")]
-use std::{alloc::alloc, borrow::Cow};
+use std::borrow::Cow;
 
 use block_value::{BlockHeaderValue, BlockValue};
 #[cfg(not(target_arch = "aarch64"))]
@@ -32,7 +32,7 @@ use derive_more::Into;
 use derive_more::{AsRef, Deref, Display, From};
 use events::FilterBox;
 use iroha_crypto::{Hash, PublicKey};
-use iroha_ffi::{IntoFfi, TryFromReprC};
+use iroha_ffi::FfiType;
 use iroha_macro::{error::ErrorTryFromEnum, FromVariant};
 use iroha_primitives::{
     fixed,
@@ -263,10 +263,12 @@ impl<EXPECTED: Debug, GOT: Debug> std::error::Error for EnumTryAsError<EXPECTED,
     Eq,
     PartialOrd,
     Ord,
+    Hash,
     Decode,
     Encode,
     Deserialize,
     Serialize,
+    FfiType,
     IntoSchema,
 )]
 pub enum Parameter {
@@ -293,13 +295,16 @@ pub enum Parameter {
     Eq,
     PartialOrd,
     Ord,
+    Hash,
     Decode,
     Encode,
     Deserialize,
     Serialize,
     FromVariant,
+    FfiType,
     IntoSchema,
 )]
+#[ffi_type(local)]
 #[allow(clippy::enum_variant_names)]
 pub enum IdBox {
     /// [`DomainId`](`domain::Id`) variant.
@@ -324,7 +329,17 @@ pub enum IdBox {
 
 /// Sized container for constructors of all [`Identifiable`]s that can be registered via transaction
 #[derive(
-    Debug, Clone, PartialEq, Eq, Decode, Encode, Deserialize, Serialize, FromVariant, IntoSchema,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    Deserialize,
+    Serialize,
+    FromVariant,
+    IntoSchema,
+    Hash,
 )]
 pub enum RegistrableBox {
     /// [`Peer`](`peer::Peer`) variant.
@@ -355,12 +370,14 @@ pub enum RegistrableBox {
     PartialEq,
     Eq,
     PartialOrd,
+    Hash,
     Ord,
     Decode,
     Encode,
     Deserialize,
     Serialize,
     FromVariant,
+    FfiType,
     IntoSchema,
 )]
 pub enum IdentifiableBox {
@@ -454,13 +471,12 @@ pub type ValueBox = Box<Value>;
     Eq,
     PartialOrd,
     Ord,
+    Hash,
     Decode,
     Encode,
     Deserialize,
     Serialize,
     FromVariant,
-    IntoFfi,
-    TryFromReprC,
     IntoSchema,
     enum_kinds::EnumKind,
 )]
@@ -469,7 +485,6 @@ pub type ValueBox = Box<Value>;
     derive(Display, Decode, Encode, Serialize, Deserialize, IntoSchema)
 )]
 #[allow(clippy::enum_variant_names)]
-#[repr(u8)]
 pub enum Value {
     /// [`u32`] integer.
     U32(u32),
@@ -519,49 +534,62 @@ pub enum Value {
     Ipv6Addr(iroha_primitives::addr::Ipv6Addr),
 }
 
-/// Cross-platform wrapper for `BlockValue`.
 #[cfg(not(target_arch = "aarch64"))]
-#[derive(
-    AsRef,
-    Clone,
-    Debug,
-    Decode,
-    Deref,
-    Deserialize,
-    Encode,
-    Eq,
-    From,
-    Into,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-)]
-#[serde(transparent)]
-pub struct BlockValueWrapper(BlockValue);
+ffi::declare_item! {
+    /// Cross-platform wrapper for `BlockValue`.
+    #[derive(
+        AsRef,
+        Clone,
+        Debug,
+        Decode,
+        Deref,
+        Deserialize,
+        Encode,
+        Eq,
+        From,
+        Into,
+        Ord,
+        PartialEq,
+        PartialOrd,
+        Hash,
+        Serialize,
+        FfiType,
+    )]
+    #[repr(transparent)]
+    #[serde(transparent)]
+    // SAFETY: BlockValueWrapper has no trap representations in BlockValue
+    #[ffi_type(unsafe {robust})]
+    pub struct BlockValueWrapper(BlockValue);
+}
 
-/// Cross-platform wrapper for `BlockValue`.
 #[cfg(target_arch = "aarch64")]
-#[derive(
-    AsRef,
-    Clone,
-    Debug,
-    Decode,
-    Deref,
-    Deserialize,
-    Encode,
-    Eq,
-    From,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-)]
-#[as_ref(forward)]
-#[deref(forward)]
-#[from(forward)]
-#[serde(transparent)]
-pub struct BlockValueWrapper(Box<BlockValue>);
+ffi::declare_item! {
+    /// Cross-platform wrapper for `BlockValue`.
+    #[derive(
+        AsRef,
+        Clone,
+        Debug,
+        Decode,
+        Deref,
+        Deserialize,
+        Encode,
+        Eq,
+        From,
+        Ord,
+        PartialEq,
+        PartialOrd,
+        Hash,
+        Serialize,
+        FfiType,
+    )]
+    #[as_ref(forward)]
+    #[deref(forward)]
+    #[from(forward)]
+    #[ffi_type(unsafe {robust})]
+    #[repr(transparent)]
+    #[serde(transparent)]
+    pub struct BlockValueWrapper(Box<BlockValue>);
+}
 
 #[cfg(target_arch = "aarch64")]
 impl From<BlockValueWrapper> for BlockValue {
@@ -909,15 +937,13 @@ where
     }
 }
 
-/// This trait marks entity that implement it as identifiable with an
-/// `Id` type. `Id`s are unique, which is relevant for `PartialOrd`
-/// and `PartialCmp` implementations.
-pub trait Identifiable: Debug {
-    /// The type of the `Id` of the entity.
-    type Id;
+/// Uniquely identifiable entity ([`Domain`], [`Account`], etc.).
+/// This trait should always be derived with [`IdOrdEqHash`]
+pub trait Identifiable: Ord + Eq + core::hash::Hash {
+    /// Type of the entity identifier
+    type Id: Ord + Eq + core::hash::Hash;
 
-    /// Get reference to the type's `Id`. There should be no other
-    /// inherent `impl` with the same name (e.g. `getset`).
+    /// Get reference to the type identifier
     fn id(&self) -> &Self::Id;
 }
 
@@ -994,7 +1020,7 @@ pub mod ffi {
 
     use super::*;
 
-    macro_rules! ffi_item {
+    macro_rules! declare_item {
         ($it: item) => {
             #[cfg(not(feature = "ffi_import"))]
             $it
@@ -1014,7 +1040,6 @@ pub mod ffi {
                 metadata::Metadata,
                 permission::Token,
                 role::Role,
-                Name,
             }
             iroha_ffi::$macro_name! { pub Eq:
                 account::Account,
@@ -1023,15 +1048,14 @@ pub mod ffi {
                 metadata::Metadata,
                 permission::Token,
                 role::Role,
-                Name,
             }
             iroha_ffi::$macro_name! { pub Ord:
                 account::Account,
                 asset::Asset,
                 domain::Domain,
+                metadata::Metadata,
                 permission::Token,
                 role::Role,
-                Name,
             }
             iroha_ffi::$macro_name! { pub Drop:
                 account::Account,
@@ -1040,7 +1064,6 @@ pub mod ffi {
                 metadata::Metadata,
                 permission::Token,
                 role::Role,
-                Name,
             }
         };
     }
@@ -1052,7 +1075,6 @@ pub mod ffi {
         metadata::Metadata,
         permission::Token,
         role::Role,
-        Name,
     }
 
     #[cfg(feature = "ffi_import")]
@@ -1060,7 +1082,7 @@ pub mod ffi {
     #[cfg(all(feature = "ffi_export", not(feature = "ffi_import")))]
     ffi_fn! {def_ffi_fn}
 
-    pub(crate) use ffi_item;
+    pub(crate) use declare_item;
 }
 
 pub mod prelude {

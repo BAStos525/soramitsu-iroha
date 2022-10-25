@@ -14,9 +14,7 @@ use std::{collections::BTreeSet, error::Error, iter, marker::PhantomData};
 
 use dashmap::{mapref::one::Ref as MapRef, DashMap};
 use eyre::{eyre, Context, Result};
-use iroha_config::sumeragi::{
-    DEFAULT_BLOCK_TIME_MS, DEFAULT_COMMIT_TIME_LIMIT_MS, DEFAULT_TX_RECEIPT_TIME_LIMIT_MS,
-};
+use iroha_config::sumeragi::{DEFAULT_BLOCK_TIME_MS, DEFAULT_COMMIT_TIME_LIMIT_MS};
 use iroha_crypto::{HashOf, KeyPair, MerkleTree, SignatureOf, SignaturesOf};
 use iroha_data_model::{
     block_value::{BlockHeaderValue, BlockValue},
@@ -27,26 +25,21 @@ use iroha_data_model::{
 use iroha_schema::IntoSchema;
 use iroha_version::{declare_versioned_with_scale, version_with_scale};
 use parity_scale_codec::{Decode, Encode};
+use serde::Serialize;
 
 use crate::{
     prelude::*,
-    sumeragi::{
-        network_topology::Topology,
-        view_change::{Proof, ProofChain as ViewChangeProofs},
-    },
+    sumeragi::network_topology::Topology,
     tx::{TransactionValidator, VersionedAcceptedTransaction},
 };
-
-const PIPELINE_TIME_MS: u64 =
-    DEFAULT_BLOCK_TIME_MS + DEFAULT_COMMIT_TIME_LIMIT_MS + DEFAULT_TX_RECEIPT_TIME_LIMIT_MS;
 
 /// Default estimation of consensus duration
 #[allow(clippy::integer_division)]
 pub const DEFAULT_CONSENSUS_ESTIMATION_MS: u64 =
-    (DEFAULT_COMMIT_TIME_LIMIT_MS + PIPELINE_TIME_MS) / 2;
+    DEFAULT_BLOCK_TIME_MS + (DEFAULT_COMMIT_TIME_LIMIT_MS / 2);
 
 /// The chain of the previous block hash. If there is no previous
-/// block - the blockchain is empty.
+/// block, the blockchain is empty.
 #[derive(Debug, Clone, Copy)]
 pub struct EmptyChainHash<T>(PhantomData<T>);
 
@@ -218,8 +211,6 @@ impl PendingBlock {
         self,
         height: u64,
         previous_block_hash: HashOf<VersionedCommittedBlock>,
-        view_change_proofs: ViewChangeProofs,
-        invalidated_blocks_hashes: Vec<HashOf<VersionedValidBlock>>,
     ) -> ChainedBlock {
         ChainedBlock {
             transactions: self.transactions,
@@ -231,8 +222,6 @@ impl PendingBlock {
                 previous_block_hash,
                 transactions_hash: Hash::zeroed().typed(),
                 rejected_transactions_hash: Hash::zeroed().typed(),
-                view_change_proofs,
-                invalidated_blocks_hashes,
                 genesis_topology: None,
             },
         }
@@ -250,8 +239,6 @@ impl PendingBlock {
                 previous_block_hash: EmptyChainHash::default().into(),
                 transactions_hash: Hash::zeroed().typed(),
                 rejected_transactions_hash: Hash::zeroed().typed(),
-                view_change_proofs: ViewChangeProofs::empty(),
-                invalidated_blocks_hashes: Vec::new(),
                 genesis_topology: Some(genesis_topology),
             },
         }
@@ -269,8 +256,6 @@ impl PendingBlock {
                 previous_block_hash: EmptyChainHash::default().into(),
                 transactions_hash: Hash::zeroed().typed(),
                 rejected_transactions_hash: Hash::zeroed().typed(),
-                view_change_proofs: ViewChangeProofs::empty(),
-                invalidated_blocks_hashes: Vec::new(),
                 genesis_topology: None,
             },
         }
@@ -289,7 +274,7 @@ pub struct ChainedBlock {
 }
 
 /// Header of the block. The hash should be taken from its byte representation.
-#[derive(Debug, Clone, Decode, Encode, IntoSchema)]
+#[derive(Debug, Clone, Decode, Encode, IntoSchema, Serialize)]
 pub struct BlockHeader {
     /// Unix time (in milliseconds) of block forming by a peer.
     pub timestamp: u128,
@@ -304,10 +289,6 @@ pub struct BlockHeader {
     pub transactions_hash: HashOf<MerkleTree<VersionedSignedTransaction>>,
     /// Hash of merkle tree root of the tree of rejected transactions' hashes.
     pub rejected_transactions_hash: HashOf<MerkleTree<VersionedSignedTransaction>>,
-    /// Number of view changes after the previous block was committed and before this block was committed.
-    pub view_change_proofs: ViewChangeProofs,
-    /// Hashes of the blocks that were rejected by consensus.
-    pub invalidated_blocks_hashes: Vec<HashOf<VersionedValidBlock>>,
     /// Genesis topology
     pub genesis_topology: Option<Topology>,
 }
@@ -322,12 +303,16 @@ impl BlockHeader {
 
 impl ChainedBlock {
     /// Validate block transactions against current state of the world.
-    pub fn validate(self, transaction_validator: &TransactionValidator) -> VersionedValidBlock {
+    pub fn validate(
+        self,
+        transaction_validator: &TransactionValidator,
+        wsv: &WorldStateView,
+    ) -> VersionedValidBlock {
         let mut txs = Vec::new();
         let mut rejected = Vec::new();
 
         for tx in self.transactions {
-            match transaction_validator.validate(tx.into_v1(), self.header.is_genesis()) {
+            match transaction_validator.validate(tx.into_v1(), self.header.is_genesis(), wsv) {
                 Ok(tx) => txs.push(tx),
                 Err(tx) => {
                     iroha_logger::warn!(
@@ -410,8 +395,12 @@ impl VersionedValidBlock {
 
     /// Validate block transactions against current state of the world.
     #[must_use]
-    pub fn revalidate(self, transaction_validator: &TransactionValidator) -> Self {
-        self.into_v1().revalidate(transaction_validator).into()
+    pub fn revalidate(
+        self,
+        transaction_validator: &TransactionValidator,
+        wsv: &WorldStateView,
+    ) -> Self {
+        self.into_v1().revalidate(transaction_validator, wsv).into()
     }
 
     /// Calculate hash of the current block.
@@ -457,7 +446,6 @@ impl VersionedValidBlock {
         &self,
         wsv: &WorldStateView,
         latest_block: &HashOf<VersionedCommittedBlock>,
-        latest_view_change: &HashOf<Proof>,
         block_height: u64,
         limits: &TransactionLimits,
     ) -> Result<(), eyre::Report> {
@@ -474,17 +462,10 @@ impl VersionedValidBlock {
                 &self.header().previous_block_hash
             ));
         }
-        if latest_view_change != &self.header().view_change_proofs.latest_hash() {
-            return Err(eyre!(
-                "Latest view change doesn't match the view change proofs. Expected: {}, actual {}",
-                latest_view_change,
-                &self.header().view_change_proofs.latest_hash()
-            ));
-        }
         if block_height + 1 != self.header().height {
             return Err(eyre!(
                 "Block heights are in an inconsistent state. Expected: {}, actual: {}",
-                block_height,
+                block_height + 1,
                 self.header().height
             ));
         }
@@ -527,7 +508,6 @@ impl ValidBlock {
     }
 
     /// Commit block to the store.
-    //TODO: pass block store and block sender as parameters?
     pub fn commit(self) -> CommittedBlock {
         let Self {
             header,
@@ -553,7 +533,11 @@ impl ValidBlock {
 
     /// Validate block transactions against current state of the world.
     #[must_use]
-    pub fn revalidate(self, transaction_validator: &TransactionValidator) -> Self {
+    pub fn revalidate(
+        self,
+        transaction_validator: &TransactionValidator,
+        wsv: &WorldStateView,
+    ) -> Self {
         Self {
             signatures: self.signatures,
             ..ChainedBlock {
@@ -566,7 +550,7 @@ impl ValidBlock {
                     .chain(self.rejected_transactions.into_iter().map(Into::into))
                     .collect(),
             }
-            .validate(transaction_validator)
+            .validate(transaction_validator, wsv)
             .into_v1()
         }
     }
@@ -626,8 +610,6 @@ impl ValidBlock {
                 previous_block_hash: EmptyChainHash::default().into(),
                 transactions_hash: EmptyChainHash::default().into(),
                 rejected_transactions_hash: EmptyChainHash::default().into(),
-                view_change_proofs: ViewChangeProofs::empty(),
-                invalidated_blocks_hashes: Vec::new(),
                 genesis_topology: None,
             },
             rejected_transactions: Vec::new(),
@@ -677,7 +659,7 @@ impl From<&ValidBlock> for Vec<Event> {
     }
 }
 
-declare_versioned_with_scale!(VersionedCommittedBlock 1..2, Debug, Clone, iroha_macro::FromVariant, IntoSchema);
+declare_versioned_with_scale!(VersionedCommittedBlock 1..2, Debug, Clone, iroha_macro::FromVariant, IntoSchema, Serialize);
 
 impl VersionedCommittedBlock {
     /// Converts from `&VersionedCommittedBlock` to V1 reference
@@ -736,7 +718,6 @@ impl VersionedCommittedBlock {
             previous_block_hash,
             transactions_hash,
             rejected_transactions_hash,
-            invalidated_blocks_hashes,
             ..
         } = header;
 
@@ -746,7 +727,7 @@ impl VersionedCommittedBlock {
             previous_block_hash: *previous_block_hash,
             transactions_hash,
             rejected_transactions_hash,
-            invalidated_blocks_hashes: invalidated_blocks_hashes.into_iter().map(|h| *h).collect(),
+            invalidated_blocks_hashes: Vec::new(),
             current_block_hash: Hash::from(current_block_hash),
         };
 
@@ -762,7 +743,7 @@ impl VersionedCommittedBlock {
 /// When Kura receives `ValidBlock`, the block is stored and
 /// then sent to later stage of the pipeline as `CommittedBlock`.
 #[version_with_scale(n = 1, versioned = "VersionedCommittedBlock")]
-#[derive(Debug, Clone, Decode, Encode, IntoSchema)]
+#[derive(Debug, Clone, Decode, Encode, IntoSchema, Serialize)]
 pub struct CommittedBlock {
     /// Header
     pub header: BlockHeader,
@@ -845,22 +826,6 @@ impl From<&CommittedBlock> for Vec<Event> {
             )
             .into()
         });
-        let invalid_blocks = block
-            .header
-            .invalidated_blocks_hashes
-            .iter()
-            .copied()
-            .map(|hash| {
-                PipelineEvent::new(
-                    PipelineEntityKind::Block,
-                    //TODO: store rejection reasons for blocks?
-                    PipelineStatus::Rejected(PipelineRejectionReason::Block(
-                        BlockRejectionReason::ConsensusBlockRejection,
-                    )),
-                    hash.into(),
-                )
-                .into()
-            });
         let current_block: iter::Once<Event> = iter::once(
             PipelineEvent::new(
                 PipelineEntityKind::Block,
@@ -870,10 +835,7 @@ impl From<&CommittedBlock> for Vec<Event> {
             .into(),
         );
 
-        tx.chain(rejected_tx)
-            .chain(invalid_blocks)
-            .chain(current_block)
-            .collect()
+        tx.chain(rejected_tx).chain(current_block).collect()
     }
 }
 

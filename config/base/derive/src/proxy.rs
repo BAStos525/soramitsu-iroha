@@ -7,23 +7,27 @@ use crate::utils;
 
 pub fn impl_proxy(ast: StructWithFields) -> TokenStream {
     // somewhat awkward conversion, could it be better?
-    let parent_name = ast.ident.clone();
+    let parent_name = &ast.ident;
     let parent_ty: Type = parse_quote! { #parent_name };
     let proxy_struct = gen_proxy_struct(ast);
     let loadenv_derive = quote! { ::iroha_config_base::derive::LoadFromEnv };
     let disk_derive = quote! { ::iroha_config_base::derive::LoadFromDisk };
     let builder_derive = quote! { ::iroha_config_base::derive::Builder };
     let combine_derive = quote! { ::iroha_config_base::derive::Combine };
+    let documented_derive = quote! { ::iroha_config_base::derive::Documented };
     quote! {
         /// Proxy configuration structure to be used as an intermediate
         /// for config loading
-        #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize,
+        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize,
                  #builder_derive,
                  #loadenv_derive,
                  #disk_derive,
-                 #combine_derive)]
+                 #combine_derive,
+                 #documented_derive
+        )]
         #[builder(parent = #parent_ty)]
         #proxy_struct
+
     }
     .into()
 }
@@ -55,29 +59,26 @@ pub fn impl_load_from_env(ast: &StructWithFields) -> TokenStream {
             let as_str_attr = field.has_as_str;
             let ident = &field.ident;
             let field_env = &field.env_str;
-            let is_string = if let Type::Path(TypePath { path, .. }) = ty {
-                path.is_ident("String")
-            } else {
-                false
-            };
 
-            let set_field = if is_string {
-                quote! { #l_value = var }
-            } else if as_str_attr {
+            let set_field = {
+                let inner_ty = field.has_option.then(|| get_inner_type("Option", ty)).unwrap_or(ty);
+                let is_string = if let Type::Path(TypePath { path, .. }) = inner_ty {
+                    path.is_ident("String")
+                } else {
+                    false
+                };
+                let inner = if is_string {
+                    quote! { Ok(var) }
+                } else if as_str_attr {
+                    quote! { serde_json::from_value(var.into()) }
+                } else {
+                    quote! { serde_json::from_str(&var) }
+                };
                 quote! {
-                    #l_value = serde_json::from_value(var.into())
-                        .map_err(|e| ::iroha_config_base::derive::Error::field_error(stringify!(#ident), e))?
-                }
-            } else if field.has_option {
-                quote! {
-                    #l_value = Some(serde_json::from_value(var.into())
-                        .map_err(|e| ::iroha_config_base::derive::Error::field_error(stringify!(#ident), e))?)
-                }
-            }
-            else {
-                quote! {
-                    #l_value = serde_json::from_str(&var)
-                        .map_err(|e| ::iroha_config_base::derive::Error::field_error(stringify!(#ident), e))?
+                    let inner: Result<#inner_ty, _> = #inner;
+                    #l_value = <#ty as From<#inner_ty>>::from(
+                        inner.map_err(|e| ::iroha_config_base::derive::Error::field_error(stringify!(#ident), e))?
+                    );
                 }
             };
 
@@ -99,7 +100,7 @@ pub fn impl_load_from_env(ast: &StructWithFields) -> TokenStream {
 
             quote! {
                 if let Ok(var) = std::env::var(#field_env) {
-                    #set_field;
+                    #set_field
                 }
                 #inner_thing2
             }
@@ -128,9 +129,12 @@ pub fn impl_load_from_disk(ast: &StructWithFields) -> TokenStream {
         impl #disk_trait for #proxy_name {
             type Error = #error_ty;
             fn from_path<P: AsRef<std::path::Path> + std::fmt::Debug + Clone>(path: P) -> Result<Self, Self::Error> {
-                let file = std::fs::File::open(path)?;
-                let reader = std::io::BufReader::new(file);
-                serde_json::from_reader(reader)?
+                let mut file = std::fs::File::open(path)?;
+                // String has better parsing speed, see [issue](https://github.com/serde-rs/json/issues/160#issuecomment-253446892)
+                let mut s = String::new();
+                std::io::Read::read_to_string(&mut file, &mut s)?;
+                let res: Self = serde_json::from_str(&s)?;
+                Ok(res)
             }
         }
     }.into()
@@ -154,13 +158,20 @@ fn gen_proxy_struct(mut ast: StructWithFields) -> StructWithFields {
         field.ty = parse_quote! {
             Option<#ty>
         };
+        // Fields that already wrap an option should have a
+        // custom deserializer so that json `null` becomes
+        // `Some(None)` and not just `None`
+        if field.has_option {
+            let de_helper = stringify! { ::iroha_config_base::proxy::some_option };
+            let serde_attr: syn::Attribute =
+                parse_quote! { #[serde(default, deserialize_with = #de_helper)] };
+            field.attrs.push(serde_attr);
+        }
         field.has_option = true;
-        // Also remove `#[serde(default = ..)]` if present
-        // as it breaks proxy deserialization
-        utils::remove_attr(&mut field.attrs, "serde");
     });
     ast.ident = format_ident!("{}Proxy", ast.ident);
-    // Removing as `..Proxy` has its own doc
+    // Removing struct-level docs as `..Proxy` has its own doc,
+    // but not the field documentation as they stay the same
     utils::remove_attr(&mut ast.attrs, "doc");
     ast
 }

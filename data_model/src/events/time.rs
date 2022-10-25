@@ -3,12 +3,16 @@
 
 use core::{ops::Range, time::Duration};
 
+use iroha_ffi::FfiType;
+
 use super::*;
 
 /// Special event that is emitted when `WSV` is ready for handling time-triggers
 ///
 /// Contains time interval which is used to identify time-triggers to be executed
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, Serialize, Deserialize, IntoSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Decode, Encode, Serialize, Deserialize, IntoSchema,
+)]
 pub struct Event {
     /// Previous block timestamp and consensus durations estimation.
     /// `None` if it's first block commit
@@ -42,7 +46,12 @@ impl Event {
     Hash,
     Serialize,
     Deserialize,
+    FfiType,
 )]
+#[repr(transparent)]
+#[serde(transparent)]
+// SAFETY: EventFilter has no trap representations in ExecutionTime
+#[ffi_type(unsafe {robust})]
 pub struct EventFilter(pub ExecutionTime);
 
 impl Filter for EventFilter {
@@ -134,6 +143,7 @@ fn multiply_duration_by_u128(duration: Duration, n: u128) -> Duration {
     Serialize,
     Deserialize,
     IntoSchema,
+    FfiType,
     Hash,
 )]
 pub enum ExecutionTime {
@@ -157,6 +167,7 @@ pub enum ExecutionTime {
     Serialize,
     Deserialize,
     IntoSchema,
+    FfiType,
     Hash,
 )]
 pub struct Schedule {

@@ -1,4 +1,4 @@
-//! Iroha - A simple, enterprise-grade decentralized ledger.
+//! Iroha — A simple, enterprise-grade decentralized ledger.
 
 pub mod block;
 pub mod block_sync;
@@ -21,7 +21,7 @@ use tokio::sync::broadcast;
 
 use crate::{
     block_sync::message::VersionedMessage as BlockSyncMessage, prelude::*,
-    sumeragi::message::VersionedMessage as SumeragiMessage,
+    sumeragi::message::VersionedPacket as SumeragiPacket,
 };
 
 /// The interval at which sumeragi checks if there are tx in the `queue`.
@@ -33,36 +33,27 @@ pub type IrohaNetwork = iroha_p2p::Network<NetworkMessage>;
 /// Ids of peers.
 pub type PeersIds = DashSet<<Peer as Identifiable>::Id>;
 
-/// Provides an API to work with collection of key([`DomainId`]) - value([`Domain`]) pairs.
+/// API to work with collections of [`DomainId`] : [`Domain`] mappings.
 pub type DomainsMap = DashMap<<Domain as Identifiable>::Id, Domain>;
 
-/// `RolesMap` provides an API to work with a collection of key(`RoleId`) - value(`Role`) pairs.
+/// API to work with a collections of [`RoleId`]: [`Role`] mappings.
 pub type RolesMap = DashMap<<Role as Identifiable>::Id, Role>;
 
-/// `PermissionTokensMap` provides an API to work with a collection of key(`AccountId`) - value(`Set<PermissionToken>`) pairs.
+/// API to work with a collections of [`AccountId`] [`Permissions`] mappings.
 pub type PermissionTokensMap = DashMap<<Account as Identifiable>::Id, Permissions>;
 
-/// `PermissionTokenDefinitionsMap` provides an API to work with a collection of key(`PermissionTokenDefinitionId`) - value(`PermissionTokenDefinition`) pairs.
+/// API to work with a collections of [`PermissionTokenDefinitionId`] : [`PermissionTokenDefinition`] mappings.
 pub type PermissionTokenDefinitionsMap =
     DashMap<<PermissionTokenDefinition as Identifiable>::Id, PermissionTokenDefinition>;
 
 /// Type of `Sender<Event>` which should be used for channels of `Event` messages.
 pub type EventsSender = broadcast::Sender<Event>;
-/// Type of `Receiver<Event>` which should be used for channels of `Event` messages.
-pub type EventsReceiver = broadcast::Receiver<Event>;
-
-/// Send `event` and log error if failure occurred.
-fn send_event(events_sender: &EventsSender, event: Event) {
-    if let Err(error) = events_sender.send(event) {
-        iroha_logger::debug!(%error, event = ?error.0, "Failed send event");
-    }
-}
 
 /// The network message
 #[derive(Clone, Debug, Encode, Decode, iroha_actor::Message)]
 pub enum NetworkMessage {
     /// Blockchain message
-    SumeragiMessage(Box<SumeragiMessage>),
+    SumeragiPacket(Box<SumeragiPacket>),
     /// Block sync message
     BlockSync(Box<BlockSyncMessage>),
     /// Health check message

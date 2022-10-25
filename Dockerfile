@@ -7,7 +7,7 @@ WORKDIR /iroha
 COPY . .
 #RUN brew install FiloSottile/musl-cross/musl-cross
 RUN rm -f rust-toolchain.toml
-RUN TARGET_CC=x86_64-linux-musl-gcc cross build --profile deploy --target x86_64-unknown-linux-musl --features vendored
+RUN cargo build --profile deploy --target x86_64-unknown-linux-musl --features vendored
 
 # final image
 FROM alpine:3.16

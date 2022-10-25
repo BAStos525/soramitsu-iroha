@@ -59,7 +59,12 @@ pub mod isi {
             wsv.modify_account(&account_id, |account| {
                 account
                     .remove_asset(&asset_id)
-                    .map(|asset| AccountEvent::Asset(AssetEvent::Removed(asset.id().clone())))
+                    .map(|asset| {
+                        AccountEvent::Asset(AssetEvent::Removed(AssetChanged {
+                            asset_id: asset.id().clone(),
+                            amount: asset.value().clone(),
+                        }))
+                    })
                     .ok_or_else(|| Error::Find(Box::new(FindError::Asset(asset_id))))
             })
         }
@@ -149,16 +154,20 @@ pub mod isi {
         ) -> Result<(), Self::Error> {
             let account_id = self.object_id;
 
-            wsv.modify_account(&account_id, |account| {
-                let account_metadata_limits = wsv.config.account_metadata_limits;
+            let account_metadata_limits = wsv.config.account_metadata_limits;
 
+            wsv.modify_account(&account_id, |account| {
                 account.metadata_mut().insert_with_limits(
-                    self.key,
-                    self.value,
+                    self.key.clone(),
+                    self.value.clone(),
                     account_metadata_limits,
                 )?;
 
-                Ok(AccountEvent::MetadataInserted(account_id.clone()))
+                Ok(AccountEvent::MetadataInserted(MetadataChanged {
+                    target_id: account_id.clone(),
+                    key: self.key.clone(),
+                    value: Box::new(self.value),
+                }))
             })
         }
     }
@@ -175,12 +184,16 @@ pub mod isi {
             let account_id = self.object_id;
 
             wsv.modify_account(&account_id, |account| {
-                account
+                let value = account
                     .metadata_mut()
                     .remove(&self.key)
-                    .ok_or(FindError::MetadataKey(self.key))?;
+                    .ok_or_else(|| FindError::MetadataKey(self.key.clone()))?;
 
-                Ok(AccountEvent::MetadataRemoved(account_id.clone()))
+                Ok(AccountEvent::MetadataRemoved(MetadataChanged {
+                    target_id: account_id.clone(),
+                    key: self.key,
+                    value: Box::new(value),
+                }))
             })
         }
     }
@@ -212,8 +225,13 @@ pub mod isi {
                     return Err(ValidationError::new("Permission already exists").into());
                 }
 
+                let permission_id = permission.definition_id().clone();
+
                 wsv.add_account_permission(id, permission);
-                Ok(AccountEvent::PermissionAdded(id.clone()))
+                Ok(AccountEvent::PermissionAdded(AccountPermissionChanged {
+                    account_id: id.clone(),
+                    permission_id,
+                }))
             })
         }
     }
@@ -226,18 +244,20 @@ pub mod isi {
             let account_id = self.destination_id;
             let permission = self.object;
 
-            wsv.modify_account(&account_id, |account| {
+            wsv.modify_account(&account_id, |_| {
                 if !wsv
                     .permission_token_definitions()
                     .contains_key(permission.definition_id())
                 {
                     error!(%permission, "Revoking non-existent token");
                 }
-                let id = account.id();
-                if !wsv.remove_account_permission(id, &permission) {
+                if !wsv.remove_account_permission(&account_id, &permission) {
                     return Err(ValidationError::new("Permission not found").into());
                 }
-                Ok(AccountEvent::PermissionRemoved(id.clone()))
+                Ok(AccountEvent::PermissionRemoved(AccountPermissionChanged {
+                    account_id: account_id.clone(),
+                    permission_id: permission.definition_id().clone(),
+                }))
             })
         }
     }
@@ -259,15 +279,34 @@ pub mod isi {
                 .get(&role_id)
                 .ok_or_else(|| FindError::Role(role_id.clone()))?;
 
-            wsv.modify_account(&account_id.clone(), |account| {
+            wsv.modify_account_multiple_events(&account_id, |account| {
                 if !account.add_role(role_id.clone()) {
                     return Err(Error::Repetition(
                         InstructionType::Grant,
                         IdBox::RoleId(role_id),
                     ));
                 }
+                let events: Vec<_> = wsv
+                    .roles()
+                    .get(&role_id)
+                    .iter()
+                    .flat_map(|role| role.permissions())
+                    .map(PermissionToken::definition_id)
+                    .cloned()
+                    .map(|permission_id| AccountPermissionChanged {
+                        account_id: account_id.clone(),
+                        permission_id,
+                    })
+                    .map(AccountEvent::PermissionAdded)
+                    .chain(std::iter::once(AccountEvent::RoleGranted(
+                        AccountRoleChanged {
+                            account_id: account_id.clone(),
+                            role_id,
+                        },
+                    )))
+                    .collect();
 
-                Ok(AccountEvent::RoleGranted(account_id))
+                Ok(events)
             })
         }
     }
@@ -285,12 +324,31 @@ pub mod isi {
                 .get(&role_id)
                 .ok_or_else(|| FindError::Role(role_id.clone()))?;
 
-            wsv.modify_account(&account_id.clone(), |account| {
+            wsv.modify_account_multiple_events(&account_id, |account| {
                 if !account.remove_role(&role_id) {
-                    return Err(FindError::Account(account_id).into());
+                    return Err(FindError::Role(role_id).into());
                 }
+                let events: Vec<_> = wsv
+                    .roles()
+                    .get(&role_id)
+                    .iter()
+                    .flat_map(|role| role.permissions())
+                    .map(PermissionToken::definition_id)
+                    .cloned()
+                    .map(|permission_id| AccountPermissionChanged {
+                        account_id: account_id.clone(),
+                        permission_id,
+                    })
+                    .map(AccountEvent::PermissionRemoved)
+                    .chain(std::iter::once(AccountEvent::RoleRevoked(
+                        AccountRoleChanged {
+                            account_id: account_id.clone(),
+                            role_id,
+                        },
+                    )))
+                    .collect();
 
-                Ok(AccountEvent::RoleRevoked(account_id))
+                Ok(events)
             })
         }
     }

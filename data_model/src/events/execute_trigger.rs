@@ -1,10 +1,12 @@
 //! Trigger execution event and filter
 
+use iroha_ffi::FfiType;
+
 use super::*;
 use crate::prelude::*;
 
 /// Trigger execution event. Produced every time the `ExecuteTrigger` instruction is executed.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, Serialize, Deserialize, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Decode, Encode, Serialize, Deserialize, IntoSchema)]
 pub struct Event {
     /// Id of trigger to be executed
     pub trigger_id: TriggerId,
@@ -36,6 +38,7 @@ impl Event {
     Hash,
     Serialize,
     Deserialize,
+    FfiType,
 )]
 pub struct EventFilter {
     /// Id of trigger catch executions of

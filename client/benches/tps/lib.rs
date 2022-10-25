@@ -92,14 +92,15 @@ impl Config {
         // Sleep to let the blocks to be committed on all peers
         thread::sleep(core::time::Duration::from_secs(5));
         let blocks_out_of_measure = 1 + MeasurerUnit::PREPARATION_BLOCKS_NUMBER * self.peers;
-        let mut blocks = network
+        let blocks_wsv = network
             .genesis
             .iroha
             .as_ref()
             .expect("Must be some")
-            .wsv
-            .blocks()
-            .skip(blocks_out_of_measure as usize);
+            .sumeragi
+            .wsv_mutex_access()
+            .clone();
+        let mut blocks = blocks_wsv.blocks().skip(blocks_out_of_measure as usize);
         let (txs_accepted, txs_rejected) = (0..self.blocks)
             .map(|_| {
                 let block = blocks
@@ -112,10 +113,6 @@ impl Config {
         #[allow(clippy::float_arithmetic, clippy::cast_precision_loss)]
         let tps = txs_accepted as f64 / elapsed_secs;
         iroha_logger::info!(%tps, %txs_accepted, %elapsed_secs, %txs_rejected);
-        if txs_rejected > 0 {
-            return Err(eyre::eyre!("{txs_rejected} transactions were rejected"));
-        }
-
         Ok(tps)
     }
 }

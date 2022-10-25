@@ -18,43 +18,33 @@ impl Arg {
         &self.type_
     }
     pub fn src_type_resolved(&self) -> Type {
-        resolve_src_type(self.self_ty.as_ref(), self.type_.clone())
+        resolve_type(self.self_ty.as_ref(), self.type_.clone())
     }
     pub fn ffi_type_resolved(&self, is_output: bool) -> Type {
-        let mut arg_type = self.type_.clone();
-
-        ImplTraitResolver.visit_type_mut(&mut arg_type);
-        if let Some(self_ty) = self.self_ty.as_ref() {
-            SelfResolver::new(self_ty).visit_type_mut(&mut arg_type);
-        }
-
-        if is_output {
-            if let Some(result_type) = unwrap_result_type(&arg_type) {
-                return parse_quote! {<#result_type as iroha_ffi::IntoFfi>::Target};
-            }
-
-            return parse_quote! {<#arg_type as iroha_ffi::IntoFfi>::Target};
-        }
-
-        if let Type::Reference(ref_type) = &arg_type {
-            let elem = &ref_type.elem;
-
-            return if ref_type.mutability.is_some() {
-                parse_quote! {<&'__iroha_ffi_itm mut #elem as iroha_ffi::TryFromReprC<'__iroha_ffi_itm>>::Source}
+        let src_type = if let Type::Array(array) = &self.type_ {
+            if is_output {
+                self.type_.clone()
             } else {
-                parse_quote! {<&'__iroha_ffi_itm #elem as iroha_ffi::TryFromReprC<'__iroha_ffi_itm>>::Source}
-            };
-        }
+                let elem = &array.elem;
+                parse_quote! {&mut #elem}
+            }
+        } else {
+            self.type_.clone()
+        };
 
-        parse_quote! {<#arg_type as iroha_ffi::TryFromReprC<'__iroha_ffi_itm>>::Source}
+        let arg_type = resolve_type(self.self_ty.as_ref(), src_type);
+        parse_quote! {<#arg_type as iroha_ffi::FfiType>::ReprC}
     }
 }
 
-fn resolve_src_type(self_type: Option<&syn::Path>, mut arg_type: Type) -> Type {
+fn resolve_type(self_type: Option<&syn::Path>, mut arg_type: Type) -> Type {
     ImplTraitResolver.visit_type_mut(&mut arg_type);
 
     if let Some(self_ty) = self_type {
         SelfResolver::new(self_ty).visit_type_mut(&mut arg_type);
+    }
+    if let Some(result_type) = unwrap_result_type(&arg_type) {
+        arg_type = result_type.clone();
     }
 
     arg_type
@@ -454,10 +444,7 @@ impl VisitMut for ImplTraitResolver {
                                     if binding.ident == "Item" {
                                         let mut ty = binding.ty.clone();
                                         ImplTraitResolver.visit_type_mut(&mut ty);
-
-                                        new_node = Some(parse_quote! {
-                                            Vec<#ty>
-                                        });
+                                        new_node = Some(parse_quote! { Vec<#ty> });
                                     }
                                 }
                             }

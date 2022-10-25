@@ -1,13 +1,11 @@
 //! This module contains [`Name`](`crate::name::Name`) structure
 //! and related implementations and trait implementations.
 #[cfg(not(feature = "std"))]
-use alloc::{alloc::alloc, boxed::Box, format, string::String, vec::Vec};
+use alloc::{boxed::Box, format, string::String, vec::Vec};
 use core::{ops::RangeInclusive, str::FromStr};
-#[cfg(feature = "std")]
-use std::alloc::alloc;
 
 use derive_more::{DebugCustom, Display};
-use iroha_ffi::{IntoFfi, TryFromReprC};
+use iroha_ffi::FfiType;
 use iroha_primitives::conststr::ConstString;
 use iroha_schema::IntoSchema;
 use parity_scale_codec::{Decode, Encode, Input};
@@ -29,11 +27,11 @@ use crate::{ParseError, ValidationError};
     Hash,
     Encode,
     Serialize,
-    IntoFfi,
-    TryFromReprC,
+    FfiType,
     IntoSchema,
 )]
-// FIXME: #[repr(transparent)] (https://github.com/hyperledger/iroha/issues/2645)
+#[repr(transparent)]
+#[serde(transparent)]
 pub struct Name(ConstString);
 
 impl Name {
@@ -124,6 +122,18 @@ impl Decode for Name {
         Self::validate_str(&name)
             .map(|_| Self(name))
             .map_err(|error| error.reason.into())
+    }
+}
+
+#[allow(unsafe_code)]
+// SAFETY: `Name` is transmutable into `ConstString`
+// and `is_valid` is not returning false positives
+unsafe impl iroha_ffi::ir::Transmute for Name {
+    type Target = ConstString;
+
+    #[inline]
+    unsafe fn is_valid(inner: &Self::Target) -> bool {
+        Self::validate_str(inner).is_ok()
     }
 }
 

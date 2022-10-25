@@ -7,19 +7,17 @@
 
 use impl_visitor::{FnDescriptor, ImplDescriptor};
 use proc_macro::TokenStream;
-use proc_macro2::TokenStream as TokenStream2;
 use proc_macro_error::abort;
 use quote::quote;
-use syn::{parse_macro_input, Item, NestedMeta};
+use syn::{parse_macro_input, parse_quote, Item, NestedMeta};
 
-use crate::convert::{derive_into_ffi, derive_try_from_repr_c};
+use crate::convert::derive_ffi_type;
 
 mod convert;
 mod ffi_fn;
 mod impl_visitor;
 mod util;
-// TODO: Should be enabled in https://github.com/hyperledger/iroha/issues/2231
-//mod wrapper;
+mod wrapper;
 
 struct FfiItems(Vec<syn::DeriveInput>);
 
@@ -42,7 +40,7 @@ impl quote::ToTokens for FfiItems {
     }
 }
 
-/// Replace struct/enum definition with opaque pointer. This applies to structs/enums that
+/// Replace struct/enum/union definition with opaque pointer. This applies to types that
 /// are converted to an opaque pointer when sent across FFI but does not affect any other
 /// item wrapped with this macro (e.g. fieldless enums). This is so that most of the time
 /// users can safely wrap all of their structs with this macro and not be concerned with the
@@ -50,40 +48,32 @@ impl quote::ToTokens for FfiItems {
 #[proc_macro]
 #[proc_macro_error::proc_macro_error]
 pub fn ffi(input: TokenStream) -> TokenStream {
-    let items = parse_macro_input!(input as FfiItems).0;
+    let mut items = parse_macro_input!(input as FfiItems).0;
 
-    // TODO: Should be fixed in https://github.com/hyperledger/iroha/issues/2231
-    //items
-    //    .iter_mut()
-    //    .filter(|item| is_opaque(item))
-    //    .for_each(|item| item.attrs.push(syn::parse_quote! {#[opaque_wrapper]}));
-    //let items = items.iter().map(|item| {
-    //    if is_opaque(item) {
-    //        wrapper::wrap_as_opaque(item)
-    //    } else {
-    //        quote! {#item}
-    //    }
-    //});
+    items
+        .iter_mut()
+        .filter(|item| is_opaque(item))
+        .map(|item| &mut item.attrs)
+        .for_each(|attrs| attrs.push(parse_quote! {#[ffi_type(r#extern)]}));
+
+    let items = items.iter().map(|item| {
+        if is_extern(&item.attrs) {
+            wrapper::wrap_as_opaque(item)
+        } else {
+            quote! {#item}
+        }
+    });
 
     quote! { #(#items)* }.into()
 }
 
 /// Derive implementations of traits required to convert to and from an FFI-compatible type
-#[proc_macro_derive(IntoFfi, attributes(opaque_wrapper))]
+#[proc_macro_derive(FfiType, attributes(ffi_type))]
 #[proc_macro_error::proc_macro_error]
-pub fn into_ffi_derive(input: TokenStream) -> TokenStream {
+pub fn ffi_type_derive(input: TokenStream) -> TokenStream {
     let item = parse_macro_input!(input as syn::DeriveInput);
-    let into_ffi_derive = derive_into_ffi(&item);
-    quote! { #into_ffi_derive }.into()
-}
-
-/// Derive implementation of [`TryFromReprC`] trait
-#[proc_macro_derive(TryFromReprC, attributes(opaque_wrapper))]
-#[proc_macro_error::proc_macro_error]
-pub fn try_from_repr_c_derive(input: TokenStream) -> TokenStream {
-    let item = parse_macro_input!(input as syn::DeriveInput);
-    let try_from_repr_c_derive = derive_try_from_repr_c(&item);
-    quote! { #try_from_repr_c_derive }.into()
+    let ffi_type_derive = derive_ffi_type(item);
+    quote! { #ffi_type_derive }.into()
 }
 
 /// Generate FFI functions
@@ -93,10 +83,10 @@ pub fn try_from_repr_c_derive(input: TokenStream) -> TokenStream {
 /// use std::alloc::alloc;
 ///
 /// use getset::Getters;
-/// use iroha_ffi::{slice::OutSliceRef, FfiReturn, IntoFfi, TryFromReprC};
+/// use iroha_ffi::{FfiReturn, FfiType};
 ///
 /// // For a struct such as:
-/// #[derive(Clone, Getters, IntoFfi, TryFromReprC)]
+/// #[derive(Clone, Getters, FfiType)]
 /// #[iroha_ffi::ffi_export]
 /// #[getset(get = "pub")]
 /// pub struct Foo {
@@ -123,7 +113,7 @@ pub fn try_from_repr_c_derive(input: TokenStream) -> TokenStream {
 ///     /* function implementation */
 ///     FfiReturn::Ok
 /// }
-/// extern "C" fn Foo__bar(handle: *const Foo, output: OutSliceRef<u8>) -> FfiReturn {
+/// extern "C" fn Foo__bar(handle: *const Foo, output: *mut SliceRef<u8>) -> FfiReturn {
 ///     /* function implementation */
 ///     FfiReturn::Ok
 /// }
@@ -134,9 +124,13 @@ pub fn try_from_repr_c_derive(input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 #[proc_macro_error::proc_macro_error]
-pub fn ffi_export(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn ffi_export(attr: TokenStream, item: TokenStream) -> TokenStream {
     match parse_macro_input!(item) {
         Item::Impl(item) => {
+            if !attr.is_empty() {
+                abort!(item, "Unknown tokens in the attribute");
+            }
+
             let impl_descriptor = ImplDescriptor::from_impl(&item);
             let ffi_fns = impl_descriptor.fns.iter().map(ffi_fn::gen_definition);
 
@@ -149,6 +143,10 @@ pub fn ffi_export(_attr: TokenStream, item: TokenStream) -> TokenStream {
             let derived_methods = util::gen_derived_methods(&item);
             let ffi_fns = derived_methods.iter().map(ffi_fn::gen_definition);
 
+            let repr = find_attr(&item.attrs, "repr");
+            if is_repr_attr(&repr, "C") {
+                abort!(item.ident, "Only opaque structs can export FFI bindings");
+            }
             if !matches!(item.vis, syn::Visibility::Public(_)) {
                 abort!(item.vis, "Only public structs allowed in FFI");
             }
@@ -162,27 +160,28 @@ pub fn ffi_export(_attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
         Item::Fn(item) => {
+            if !attr.is_empty() {
+                abort!(item, "Unknown tokens in the attribute");
+            }
+
             if item.sig.asyncness.is_some() {
                 abort!(item.sig.asyncness, "Async functions are not supported");
             }
-
             if item.sig.unsafety.is_some() {
                 abort!(item.sig.unsafety, "You shouldn't specify function unsafety");
             }
-
             if item.sig.abi.is_some() {
                 abort!(item.sig.abi, "You shouldn't specify function ABI");
             }
-
             if !item.sig.generics.params.is_empty() {
                 abort!(item.sig.generics, "Generics are not supported");
             }
 
             let fn_descriptor = FnDescriptor::from_fn(&item);
             let ffi_fn = ffi_fn::gen_definition(&fn_descriptor);
+
             quote! {
                 #item
-
                 #ffi_fn
             }
         }
@@ -198,18 +197,17 @@ pub fn ffi_import(_attr: TokenStream, item: TokenStream) -> TokenStream {
         Item::Impl(item) => {
             let impl_descriptor = ImplDescriptor::from_impl(&item);
             let ffi_fns = impl_descriptor.fns.iter().map(ffi_fn::gen_declaration);
-
-            // TODO: Should be fixed in https://github.com/hyperledger/iroha/issues/2231
-            //let item = wrapper::wrap_impl_item(&impl_descriptor.fns);
+            let wrapped_item = wrapper::wrap_impl_item(&impl_descriptor.fns);
 
             quote! {
-                #item
+                #wrapped_item
                 #(#ffi_fns)*
             }
         }
         Item::Struct(item) => {
             let derived_methods = util::gen_derived_methods(&item);
             let ffi_fns = derived_methods.iter().map(ffi_fn::gen_declaration);
+            let impl_block = wrapper::wrap_impl_item(&derived_methods);
 
             if !matches!(item.vis, syn::Visibility::Public(_)) {
                 abort!(item.vis, "Only public structs allowed in FFI");
@@ -218,13 +216,9 @@ pub fn ffi_import(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 abort!(item.generics, "Generics are not supported");
             }
 
-            // TODO: Remove getset attributes to prevent code generation
-            // Should be fixed in https://github.com/hyperledger/iroha/issues/2231
-            //let impl_block = Some(wrapper::wrap_impl_item(&derived_methods));
-            //let impl_block: Option<TokenStream2> = None;
-
             quote! {
                 #item
+                #impl_block
                 #(#ffi_fns)*
             }
         }
@@ -232,15 +226,12 @@ pub fn ffi_import(_attr: TokenStream, item: TokenStream) -> TokenStream {
             if item.sig.asyncness.is_some() {
                 abort!(item.sig.asyncness, "Async functions are not supported");
             }
-
             if item.sig.unsafety.is_some() {
                 abort!(item.sig.unsafety, "You shouldn't specify function unsafety");
             }
-
             if item.sig.abi.is_some() {
                 abort!(item.sig.abi, "You shouldn't specify function ABI");
             }
-
             if !item.sig.generics.params.is_empty() {
                 abort!(item.sig.generics, "Generics are not supported");
             }
@@ -249,7 +240,6 @@ pub fn ffi_import(_attr: TokenStream, item: TokenStream) -> TokenStream {
             let ffi_fn = ffi_fn::gen_declaration(&fn_descriptor);
             quote! {
                 #item
-
                 #ffi_fn
             }
         }
@@ -258,39 +248,27 @@ pub fn ffi_import(_attr: TokenStream, item: TokenStream) -> TokenStream {
     .into()
 }
 
-fn is_opaque(input: &syn::DeriveInput) -> bool {
-    let repr = &find_attr(&input.attrs, "repr");
+fn is_extern(attrs: &[syn::Attribute]) -> bool {
+    let opaque_attr = parse_quote! {#[ffi_type(r#extern)]};
+    attrs.iter().any(|a| *a == opaque_attr)
+}
 
-    if let syn::Data::Enum(item) = &input.data {
-        if is_fieldless_enum(&input.ident, item, repr) {
-            return false;
-        }
+fn is_opaque(input: &syn::DeriveInput) -> bool {
+    if is_opaque_attr(&input.attrs) {
+        return true;
     }
 
-    !is_repr_attr(repr, "C") && !is_repr_attr(repr, "transparent")
+    // NOTE: Enums without defined representation, by default, are not opaque
+    !matches!(&input.data, syn::Data::Enum(_)) && without_repr(&input.attrs)
 }
 
-fn is_fieldless_enum(name: &syn::Ident, item: &syn::DataEnum, repr: &[NestedMeta]) -> bool {
-    enum_size(name, repr); // NOTE: Verifies that repr(Int) is defined
-
-    !item
-        .variants
-        .iter()
-        .any(|variant| !matches!(variant.fields, syn::Fields::Unit))
+fn is_opaque_attr(attrs: &[syn::Attribute]) -> bool {
+    let opaque_attr = parse_quote! {#[ffi_type(opaque)]};
+    attrs.iter().any(|a| *a == opaque_attr)
 }
 
-fn find_attr(attrs: &[syn::Attribute], name: &str) -> Vec<NestedMeta> {
-    attrs
-        .iter()
-        .filter_map(|attr| {
-            if let Ok(syn::Meta::List(meta_list)) = attr.parse_meta() {
-                return meta_list.path.is_ident(name).then_some(meta_list.nested);
-            }
-
-            None
-        })
-        .flatten()
-        .collect()
+fn without_repr(attrs: &[syn::Attribute]) -> bool {
+    find_attr(attrs, "repr").is_empty()
 }
 
 fn is_repr_attr(repr: &[NestedMeta], name: &str) -> bool {
@@ -310,16 +288,16 @@ fn is_repr_attr(repr: &[NestedMeta], name: &str) -> bool {
     })
 }
 
-fn enum_size(enum_name: &syn::Ident, repr: &[NestedMeta]) -> TokenStream2 {
-    if is_repr_attr(repr, "u8") {
-        quote! {u8}
-    } else if is_repr_attr(repr, "u16") {
-        quote! {u16}
-    } else if is_repr_attr(repr, "u32") {
-        quote! {u32}
-    } else if is_repr_attr(repr, "u64") {
-        quote! {u64}
-    } else {
-        abort!(enum_name, "Enum doesn't have a valid representation")
-    }
+fn find_attr(attrs: &[syn::Attribute], name: &str) -> syn::AttributeArgs {
+    attrs
+        .iter()
+        .filter_map(|attr| {
+            if let Ok(syn::Meta::List(meta_list)) = attr.parse_meta() {
+                return meta_list.path.is_ident(name).then_some(meta_list.nested);
+            }
+
+            None
+        })
+        .flatten()
+        .collect()
 }

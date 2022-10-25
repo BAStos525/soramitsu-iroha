@@ -16,29 +16,30 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use iroha_actor::broker::*;
 use iroha_config::kura::{Configuration, Mode};
 use iroha_crypto::HashOf;
 use iroha_logger::prelude::*;
 use iroha_version::scale::{DecodeVersioned, EncodeVersioned};
 use tokio::sync::mpsc::{channel, error::SendError, Receiver, Sender};
 
-use crate::{
-    block::VersionedCommittedBlock, block_sync::ContinueSync, handler::ThreadHandler, prelude::*,
-    sumeragi,
-};
+use crate::{block::VersionedCommittedBlock, handler::ThreadHandler};
 
 /// The interface of Kura subsystem
 pub struct Kura {
     // TODO: Kura doesn't have different initialisation modes!!!
     #[allow(dead_code)]
+    /// The mode of initialisation of [`Kura`].
     mode: Mode,
+    /// The block storage
     block_store: Mutex<Box<dyn BlockStoreTrait + Send>>,
+    /// The array of block hashes. This is normally recovered from the index file.
     block_hash_array: Mutex<Vec<HashOf<VersionedCommittedBlock>>>,
-    wsv: Arc<WorldStateView>,
-    broker: Broker,
+    /// The receiving actor for the [`VersionedCommittedBlock`]
     block_reciever: Mutex<Receiver<VersionedCommittedBlock>>,
+    /// The sending actor for the [`VersionedCommittedBlock`]
     block_sender: Sender<VersionedCommittedBlock>,
+    /// Path to file for plain text blocks.
+    block_plain_text_path: Option<PathBuf>,
 }
 
 impl Kura {
@@ -53,9 +54,9 @@ impl Kura {
     pub fn new(
         mode: Mode,
         block_store_path: &Path,
-        wsv: Arc<WorldStateView>,
-        broker: Broker,
+        // broker: Broker,
         block_channel_size: u32,
+        debug_output_new_blocks: bool,
     ) -> Result<Arc<Self>> {
         let (block_sender, block_reciever) = channel(
             block_channel_size
@@ -66,14 +67,20 @@ impl Kura {
         let mut block_store = StdFileBlockStore::new(block_store_path);
         block_store.create_files_if_they_do_not_exist()?;
 
+        let block_plain_text_path = debug_output_new_blocks.then(|| {
+            let mut path_buf = block_store_path.to_path_buf();
+            path_buf.push("blocks.json");
+            path_buf
+        });
+
         let kura = Arc::new(Self {
             mode,
             block_store: Mutex::new(Box::new(block_store)),
             block_hash_array: Mutex::new(Vec::new()),
-            wsv,
-            broker,
+            // broker,
             block_reciever: Mutex::new(block_reciever),
             block_sender,
+            block_plain_text_path,
         });
 
         Ok(kura)
@@ -101,17 +108,13 @@ impl Kura {
     /// Fails if there are filesystem errors when trying
     /// to access the block store indicated by the
     /// path in the configuration.
-    pub fn from_configuration(
-        configuration: &Configuration,
-        wsv: Arc<WorldStateView>,
-        broker: Broker,
-    ) -> Result<Arc<Self>> {
+    pub fn from_configuration(configuration: &Configuration) -> Result<Arc<Self>> {
         Self::new(
             configuration.init_mode,
             Path::new(&configuration.block_store_path),
-            wsv,
-            broker,
+            // broker,
             configuration.actor_channel_capacity,
+            configuration.debug_output_new_blocks,
         )
     }
 
@@ -174,23 +177,6 @@ impl Kura {
         Ok(blocks)
     }
 
-    // I think we should rethink this. Kura should not be the
-    // one to start other services. Kura should be a provider of
-    // block storage services only. - Concern tracked by #2406
-    /// Initialize Kura and world state view, then start Sumeragi.
-    /// # Panics
-    /// Panic if Kura initialization fails.
-    #[allow(clippy::unwrap_used)]
-    pub async fn async_init_all_important(&self) {
-        let blocks = self.init().unwrap();
-        self.wsv.init(blocks).await;
-        let last_block = self.wsv.latest_block_hash();
-        let height = self.wsv.height();
-        self.broker
-            .issue_send(sumeragi::message::Init { last_block, height })
-            .await;
-    }
-
     #[allow(clippy::expect_used, clippy::cognitive_complexity, clippy::panic)]
     fn kura_recieve_blocks_loop(
         kura: &Kura,
@@ -219,6 +205,17 @@ impl Kura {
                         iroha_logger::telemetry!(msg = iroha_telemetry::msg::SYSTEM_CONNECTED, genesis_hash = %new_block.hash());
                     }
 
+                    if let Some(path) = kura.block_plain_text_path.as_ref() {
+                        let mut plain_text_file = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(path)
+                            .expect("Couldn't create file for plain text blocks.");
+
+                        serde_json::to_writer_pretty(&mut plain_text_file, &new_block)
+                            .expect("Failed to write to plain text file for blocks.");
+                    }
+
                     let block_hash = new_block.hash();
                     let serialized_block: Vec<u8> = new_block.encode_versioned();
 
@@ -233,11 +230,10 @@ impl Kura {
                                 .lock()
                                 .expect("lock on block hash array")
                                 .push(block_hash);
-                            kura.broker.issue_send_sync(&ContinueSync);
                         }
                         Err(error) => {
-                            error!(%error, "Failed to write block. Kura will now init again.");
-                            panic!("It is unclear what we should do here.");
+                            error!("Failed to store block, ERROR = {}", error);
+                            panic!("Kura has encountered a fatal I/O error.");
                         }
                     }
                 }
@@ -560,7 +556,6 @@ pub enum Error {
 #[cfg(test)]
 mod tests {
 
-    use iroha_actor::broker::Broker;
     use tempfile::TempDir;
 
     use super::*;
@@ -675,15 +670,9 @@ mod tests {
     #[allow(clippy::expect_used)]
     async fn strict_init_kura() {
         let temp_dir = TempDir::new().unwrap();
-        Kura::new(
-            Mode::Strict,
-            temp_dir.path(),
-            Arc::default(),
-            Broker::new(),
-            100,
-        )
-        .unwrap()
-        .init()
-        .expect("Works");
+        Kura::new(Mode::Strict, temp_dir.path(), 100, false)
+            .unwrap()
+            .init()
+            .unwrap();
     }
 }

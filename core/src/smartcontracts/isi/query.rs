@@ -200,12 +200,14 @@ mod tests {
         Ok(World::with([domain], PeersIds::new()))
     }
 
+    // TODO: This doesn't need to be `async`
+    #[allow(clippy::unused_async)]
     async fn wsv_with_test_blocks_and_transactions(
         blocks: u64,
         valid_tx_per_block: usize,
         invalid_tx_per_block: usize,
-    ) -> Result<Arc<WorldStateView>> {
-        let wsv = Arc::new(WorldStateView::new(world_with_test_domains()));
+    ) -> Result<WorldStateView> {
+        let wsv = WorldStateView::new(world_with_test_domains());
 
         let limits = TransactionLimits {
             max_instruction_number: 1,
@@ -228,44 +230,43 @@ mod tests {
             crate::VersionedAcceptedTransaction::from_transaction(tx, &huge_limits)?
         };
 
-        let mut transactions = vec![valid_tx.clone(); valid_tx_per_block];
-        transactions.append(&mut vec![invalid_tx.clone(); invalid_tx_per_block]);
+        let mut transactions = vec![valid_tx; valid_tx_per_block];
+        transactions.append(&mut vec![invalid_tx; invalid_tx_per_block]);
 
         let first_block = PendingBlock::new(transactions.clone(), vec![])
             .chain_first()
-            .validate(&TransactionValidator::new(
-                limits,
-                Arc::new(AllowAll::new()),
-                Arc::new(AllowAll::new()),
-                Arc::clone(&wsv),
-            ))
+            .validate(
+                &TransactionValidator::new(
+                    limits,
+                    Arc::new(AllowAll::new()),
+                    Arc::new(AllowAll::new()),
+                ),
+                &wsv,
+            )
             .sign(ALICE_KEYS.clone())
             .expect("Failed to sign blocks.")
             .commit();
 
         let mut curr_hash = first_block.hash();
 
-        wsv.apply(first_block).await?;
+        wsv.apply(first_block)?;
 
         for height in 1u64..blocks {
             let block = PendingBlock::new(transactions.clone(), vec![])
-                .chain(
-                    height,
-                    curr_hash,
-                    crate::sumeragi::view_change::ProofChain::empty(),
-                    vec![],
+                .chain(height, curr_hash)
+                .validate(
+                    &TransactionValidator::new(
+                        limits,
+                        Arc::new(AllowAll::new()),
+                        Arc::new(AllowAll::new()),
+                    ),
+                    &wsv,
                 )
-                .validate(&TransactionValidator::new(
-                    limits,
-                    Arc::new(AllowAll::new()),
-                    Arc::new(AllowAll::new()),
-                    Arc::clone(&wsv),
-                ))
                 .sign(ALICE_KEYS.clone())
                 .expect("Failed to sign blocks.")
                 .commit();
             curr_hash = block.hash();
-            wsv.apply(block).await?;
+            wsv.apply(block)?;
         }
 
         Ok(wsv)
@@ -373,7 +374,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_transaction() -> Result<()> {
-        let wsv = Arc::new(WorldStateView::new(world_with_test_domains()));
+        let wsv = WorldStateView::new(world_with_test_domains());
 
         let tx = Transaction::new(ALICE_ID.clone(), Vec::<Instruction>::new().into(), 4000);
         let signed_tx = tx.sign(ALICE_KEYS.clone())?;
@@ -383,23 +384,24 @@ mod tests {
             max_wasm_size_bytes: 0,
         };
 
-        let va_tx =
-            crate::VersionedAcceptedTransaction::from_transaction(signed_tx.clone(), &tx_limits)?;
+        let va_tx = crate::VersionedAcceptedTransaction::from_transaction(signed_tx, &tx_limits)?;
 
         let mut block = PendingBlock::new(Vec::new(), Vec::new());
         block.transactions.push(va_tx.clone());
         let vcb = block
             .chain_first()
-            .validate(&TransactionValidator::new(
-                tx_limits,
-                Arc::new(AllowAll::new()),
-                Arc::new(AllowAll::new()),
-                Arc::clone(&wsv),
-            ))
+            .validate(
+                &TransactionValidator::new(
+                    tx_limits,
+                    Arc::new(AllowAll::new()),
+                    Arc::new(AllowAll::new()),
+                ),
+                &wsv,
+            )
             .sign(ALICE_KEYS.clone())
             .expect("Failed to sign blocks.")
             .commit();
-        wsv.apply(vcb).await?;
+        wsv.apply(vcb)?;
 
         let wrong_hash: Hash = HashOf::new(&2_u8).into();
         let not_found = FindTransactionByHash::new(wrong_hash).execute(&wsv);

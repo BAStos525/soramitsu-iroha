@@ -1,9 +1,9 @@
 //! This module contains [`struct@Configuration`] structure and related implementation.
 #![allow(clippy::std_instead_of_core)]
-use std::{fmt::Debug, fs::File, io::BufReader, path::Path};
+use std::fmt::Debug;
 
 use eyre::{Result, WrapErr};
-use iroha_config_base::derive::{view, Documented, LoadFromEnv, Proxy};
+use iroha_config_base::derive::{view, Documented, Error as ConfigError, LoadFromEnv, Proxy};
 use iroha_crypto::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -12,8 +12,7 @@ use super::*;
 // Generate `ConfigurationView` without the private key
 view! {
     /// Configuration parameters for a peer
-    #[derive(Debug, Clone, Deserialize, Serialize, Proxy, LoadFromEnv, Documented)]
-    #[serde(default)]
+    #[derive(Debug, Clone, Deserialize, Serialize, Proxy, Documented, LoadFromEnv, PartialEq, Eq)]
     #[serde(rename_all = "UPPERCASE")]
     #[config(env_prefix = "IROHA_")]
     pub struct Configuration {
@@ -60,66 +59,102 @@ view! {
     }
 }
 
-impl Default for Configuration {
+impl Default for ConfigurationProxy {
     fn default() -> Self {
-        let sumeragi_configuration = sumeragi::Configuration::default();
-        let (public_key, private_key) = sumeragi_configuration.key_pair.clone().into();
-
         Self {
-            public_key,
-            private_key,
-            disable_panic_terminal_colors: bool::default(),
-            kura: kura::Configuration::default(),
-            sumeragi: sumeragi_configuration,
-            torii: torii::Configuration::default(),
-            block_sync: block_sync::Configuration::default(),
-            queue: queue::Configuration::default(),
-            logger: logger::Configuration::default(),
-            genesis: genesis::Configuration::default(),
-            wsv: wsv::Configuration::default(),
-            network: network::Configuration::default(),
-            telemetry: telemetry::Configuration::default(),
+            public_key: None,
+            private_key: None,
+            disable_panic_terminal_colors: Some(bool::default()),
+            kura: Some(kura::ConfigurationProxy::default()),
+            sumeragi: Some(sumeragi::ConfigurationProxy::default()),
+            torii: Some(torii::ConfigurationProxy::default()),
+            block_sync: Some(block_sync::ConfigurationProxy::default()),
+            queue: Some(queue::ConfigurationProxy::default()),
+            logger: Some(logger::ConfigurationProxy::default()),
+            genesis: Some(genesis::ConfigurationProxy::default()),
+            wsv: Some(wsv::ConfigurationProxy::default()),
+            network: Some(network::ConfigurationProxy::default()),
+            telemetry: Some(telemetry::ConfigurationProxy::default()),
         }
     }
 }
 
-impl Configuration {
-    /// Construct [`struct@Self`] from a path-like object.
+impl ConfigurationProxy {
+    /// Finalise Iroha config proxy by instantiating mutually equivalent fields
+    /// via the uppermost Iroha config fields. Configuration fields provided in the
+    /// Iroha config always overwrite those in sumeragi even in case of discrepancy,
+    /// so proper care is advised.
     ///
     /// # Errors
-    /// - File not found.
-    /// - File found, but peer configuration parsing failed.
-    /// - The length of the array in raw JSON representation is different
-    /// from the length of the array in
-    /// [`self.sumeragi.trusted_peers.peers`], most likely due to two
-    /// (or more) peers having the same public key.
-    pub fn from_path<P: AsRef<Path> + Debug + Clone>(path: P) -> Result<Configuration> {
-        let file = File::open(path.clone())
-            .wrap_err(format!("Failed to open the config file {:?}", path))?;
-        let reader = BufReader::new(file);
-        let mut configuration: Configuration = serde_json::from_reader(reader).wrap_err(
-            format!("Failed to parse {:?} as Iroha peer configuration.", path),
-        )?;
-        configuration.finalize()?;
-        Ok(configuration)
-    }
-
-    fn finalize(&mut self) -> Result<()> {
-        self.sumeragi.key_pair = KeyPair::new(self.public_key.clone(), self.private_key.clone())?;
-        self.sumeragi.peer_id =
-            iroha_data_model::peer::Id::new(&self.torii.p2p_addr, &self.public_key.clone());
+    /// - If the relevant uppermost Iroha config fields were not provided.
+    #[allow(clippy::expect_used, clippy::unwrap_in_result)]
+    pub fn finish(&mut self) -> Result<()> {
+        if let Some(sumeragi_proxy) = &mut self.sumeragi {
+            // First, iroha public/private key and sumeragi keypair are interchangeable, but
+            // the user is allowed to provide only the former, and keypair is generated automatically,
+            // bailing out if key_pair provided in sumeragi no matter its value
+            if sumeragi_proxy.key_pair.is_some() {
+                eyre::bail!(ConfigError::ProxyBuildError(
+                    "Sumeragi should not be provided with `key_pair` directly as it is instantiated via Iroha config. Please set the `KEY_PAIR` to `null` or omit them entirely."
+                        .to_owned()))
+            }
+            if let (Some(public_key), Some(private_key)) = (&self.public_key, &self.private_key) {
+                sumeragi_proxy.key_pair =
+                    Some(KeyPair::new(public_key.clone(), private_key.clone())?);
+            } else {
+                eyre::bail!(ConfigError::ProxyBuildError(
+                    "Iroha public and private key not supplied, instantiating `sumeragi` keypair is impossible. Please provide `PRIVATE_KEY` and `PUBLIC_KEY` variables."
+                        .to_owned()
+                ))
+            }
+            // Second, torii gateway and sumeragi peer id are interchangeable too; the latter is derived from the
+            // former and overwritten silently in case of difference
+            if let Some(torii_proxy) = &mut self.torii {
+                if sumeragi_proxy.peer_id.is_none() {
+                    sumeragi_proxy.peer_id = Some(iroha_data_model::peer::Id::new(
+                        &torii_proxy.p2p_addr.clone().ok_or_else(|| {
+                            eyre::eyre!("Torii `p2p_addr` field has `None` value")
+                        })?,
+                        &self.public_key.clone().expect(
+                            "Iroha `public_key` should have been initialized above at the latest",
+                        ),
+                    ));
+                } else {
+                    // TODO: should we just warn the user that this value will be ignored?
+                    eyre::bail!(ConfigError::ProxyBuildError(
+                        "Sumeragi should not be provided with `peer_id` directly. It is computed from the other provided values.".to_owned()
+                    ))
+                }
+            } else {
+                eyre::bail!(ConfigError::ProxyBuildError(
+                    "Torii config should have at least `p2p_addr` provided for sumeragi finalisation"
+                        .to_owned()
+                ))
+            }
+            // Finally, if trusted peers were not supplied, we can fall back to inserting itself as
+            // the only trusted one
+            if sumeragi_proxy.trusted_peers.is_none() {
+                sumeragi_proxy.insert_self_as_trusted_peers()
+            }
+        }
 
         Ok(())
     }
 
-    /// Load configuration from the environment
+    /// The wrapper around the topmost Iroha `ConfigurationProxy`
+    /// that performs finalisation prior to building. For the uppermost
+    /// Iroha config, its `<Self as iroha_config_base::proxy::Builder>::build()`
+    /// method should never be used directly, as only this wrapper ensures final
+    /// coherence.
     ///
     /// # Errors
-    /// Fails if Configuration deserialization fails (e.g. if `TrustedPeers` contains entries with duplicate public keys)
-    pub fn load_environment(&mut self) -> Result<()> {
-        <Self as iroha_config_base::proxy::LoadFromEnv>::load_environment(self)?;
-        self.finalize()?;
-        Ok(())
+    /// - Finalisation fails
+    /// - Building fails, e.g. any of the inner fields had a `None` value when that
+    /// is not allowed by the defaults.
+    pub fn build(mut self) -> Result<Configuration> {
+        self.finish()?;
+        <Self as iroha_config_base::proxy::Builder>::build(self)
+            .wrap_err("Failed to build `Configuration` from `ConfigurationProxy`")
     }
 }
 
@@ -127,17 +162,92 @@ impl Configuration {
 mod tests {
     #![allow(clippy::restriction)]
 
-    use super::*;
-    use crate::sumeragi::TrustedPeers;
+    use proptest::prelude::*;
 
-    const CONFIGURATION_PATH: &str = "../configs/peer/config.json";
+    use super::*;
+    use crate::{base::proxy::LoadFromDisk, sumeragi::TrustedPeers};
+
+    const CONFIGURATION_PATH: &str = "./iroha_test_config.json";
+
+    /// Key-pair used for proptests generation
+    #[allow(clippy::expect_used)]
+    pub fn placeholder_keypair() -> KeyPair {
+        let public_key = "ed01201c61faf8fe94e253b93114240394f79a607b7fa55f9e5a41ebec74b88055768b"
+            .parse()
+            .expect("Public key not in mulithash format");
+        let private_key = PrivateKey::from_hex(
+            Algorithm::Ed25519,
+            "282ed9f3cf92811c3818dbc4ae594ed59dc1a2f78e4241e31924e101d6b1fb831c61faf8fe94e253b93114240394f79a607b7fa55f9e5a41ebec74b88055768b"
+        ).expect("Private key not hex encoded");
+
+        KeyPair::new(public_key, private_key).expect("Key pair mismatch")
+    }
+
+    fn arb_keys() -> BoxedStrategy<(Option<PublicKey>, Option<PrivateKey>)> {
+        let (pub_key, priv_key) = placeholder_keypair().into();
+        (
+            prop::option::of(Just(pub_key)),
+            prop::option::of(Just(priv_key)),
+        )
+            .boxed()
+    }
+
+    prop_compose! {
+        fn arb_proxy()(
+            (public_key, private_key) in arb_keys(),
+            disable_panic_terminal_colors in prop::option::of(Just(true)),
+            kura in prop::option::of(kura::tests::arb_proxy()),
+            sumeragi in prop::option::of(sumeragi::tests::arb_proxy()),
+            torii in prop::option::of(torii::tests::arb_proxy()),
+            block_sync in prop::option::of(block_sync::tests::arb_proxy()),
+            queue in prop::option::of(queue::tests::arb_proxy()),
+            logger in prop::option::of(logger::tests::arb_proxy()),
+            genesis in prop::option::of(genesis::tests::arb_proxy()),
+            wsv in prop::option::of(wsv::tests::arb_proxy()),
+            network in prop::option::of(network::tests::arb_proxy()),
+            telemetry in prop::option::of(telemetry::tests::arb_proxy()),
+            ) -> ConfigurationProxy {
+            ConfigurationProxy { public_key, private_key, disable_panic_terminal_colors, kura, sumeragi, torii, block_sync, queue,
+                                 logger, genesis, wsv, network, telemetry }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn iroha_proxy_build_fails_on_none(proxy in arb_proxy()) {
+            let cfg = proxy.build();
+            let example_cfg = ConfigurationProxy::from_path(CONFIGURATION_PATH)
+                .expect("Failed to read example config file").build().expect("Failed to build example Iroha config");
+            if cfg.is_ok() {
+                assert_eq!(cfg.unwrap(), example_cfg)
+            }
+        }
+    }
 
     #[test]
     fn parse_example_json() -> Result<()> {
-        let configuration = Configuration::from_path(CONFIGURATION_PATH)
+        let cfg_proxy = ConfigurationProxy::from_path(CONFIGURATION_PATH)
             .wrap_err("Failed to read configuration from example config")?;
-        assert_eq!("127.0.0.1:1337", configuration.torii.p2p_addr);
-        assert_eq!(1000, configuration.sumeragi.block_time_ms);
+        assert_eq!(
+            "./storage",
+            cfg_proxy.kura.unwrap().block_store_path.unwrap()
+        );
+        assert_eq!(
+            10000,
+            cfg_proxy
+                .block_sync
+                .expect("Block sync configuration was None")
+                .gossip_period_ms
+                .expect("Gossip period was None")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn example_json_proxy_builds() -> Result<()> {
+        let cfg_proxy = ConfigurationProxy::from_path(CONFIGURATION_PATH)
+            .wrap_err("Failed to read configuration from example config")?;
+        cfg_proxy.build()?;
         Ok(())
     }
 

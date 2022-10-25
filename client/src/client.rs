@@ -5,15 +5,16 @@
     clippy::std_instead_of_core,
     clippy::std_instead_of_alloc
 )]
-use std::{
-    collections::HashMap, fmt::Debug, marker::PhantomData, sync::mpsc, thread, time::Duration,
-};
+use std::{collections::HashMap, fmt::Debug, marker::PhantomData, thread, time::Duration};
 
 use derive_more::{DebugCustom, Display};
 use eyre::{eyre, Result, WrapErr};
-use http_default::WebSocketStream;
+use futures_util::StreamExt;
+use http_default::{AsyncWebSocketStream, WebSocketStream};
 use iroha_config::{client::Configuration, torii::uri, GetConfiguration, PostConfiguration};
-use iroha_core::smartcontracts::isi::query::Error as QueryError;
+use iroha_core::{
+    prelude::VersionedCommittedBlock, smartcontracts::isi::query::Error as QueryError,
+};
 use iroha_crypto::{HashOf, KeyPair};
 use iroha_data_model::{predicate::PredicateBox, prelude::*, query::SignedQueryRequest};
 use iroha_logger::prelude::*;
@@ -24,6 +25,7 @@ use parity_scale_codec::DecodeAll;
 use rand::Rng;
 use serde::de::DeserializeOwned;
 
+use self::{blocks_api::AsyncBlockStream, events_api::AsyncEventStream};
 use crate::{
     http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
     http_default::{self, DefaultRequestBuilder, WebSocketError, WebSocketMessage},
@@ -71,7 +73,9 @@ where
                     let res =
                         try_decode_all_or_just_decode!(VersionedPaginatedQueryResult, resp.body());
                     res.wrap_err(
-                        "Failed to decode the whole response body as `VersionedPaginatedQueryResult`",
+                        "Failed to decode response from Iroha. \
+                         You are likely using a version of the client library \
+                         that is incompatible with the version of the peer software",
                     )
                     .map_err(Into::into)
                 }
@@ -84,8 +88,11 @@ where
                         warn!("Can't decode query error, not all bytes were consumed");
                         res = QueryError::decode(&mut resp.body().as_ref());
                     }
-                    let err =
-                        res.wrap_err("Failed to decode the whole response body as `QueryError`")?;
+                    let err = res.wrap_err(
+                        "Failed to decode error-response from Iroha. \
+                         You are likely using a version of the client library \
+                         that is incompatible with the version of the peer software",
+                    )?;
                     Err(ClientQueryError::QueryError(err))
                 }
                 _ => Err(ResponseReport::with_msg("Unexpected query response", resp).into()),
@@ -197,6 +204,8 @@ where
     /// See [`iroha_data_model::prelude::PaginatedQueryResult`]
     pub pagination: Pagination,
     /// See [`iroha_data_model::prelude::PaginatedQueryResult`]
+    pub sorting: Sorting,
+    /// See [`iroha_data_model::prelude::PaginatedQueryResult`]
     pub total: u64,
 }
 
@@ -222,6 +231,7 @@ where
         PaginatedQueryResult {
             result,
             pagination,
+            sorting,
             total,
             filter,
         }: PaginatedQueryResult,
@@ -234,6 +244,7 @@ where
         Ok(Self {
             output,
             pagination,
+            sorting,
             total,
             filter,
         })
@@ -443,56 +454,79 @@ impl Client {
         &self,
         transaction: SignedTransaction,
     ) -> Result<HashOf<VersionedSignedTransaction>> {
-        let client = self.clone();
-        let (init_sender, init_receiver) = mpsc::channel();
+        let (init_sender, init_receiver) = tokio::sync::oneshot::channel();
         let hash = transaction.hash();
 
-        // TODO: use `std::thread::scope()` after update to Rust 1.63
-        let scope_res = crossbeam::scope(|spawner| {
-            let submitter_handle = spawner.spawn(move |_| -> Result<()> {
-                init_receiver
-                    .recv()
-                    .wrap_err("Failed to receive init message.")?;
-
-                self.submit_transaction(transaction)?;
+        thread::scope(|spawner| {
+            let submitter_handle = spawner.spawn(move || -> Result<()> {
+                // Do not submit transaction if event listener is failed to initialize
+                if init_receiver
+                    .blocking_recv()
+                    .wrap_err("Failed to receive init message.")?
+                {
+                    self.submit_transaction(transaction)?;
+                }
                 Ok(())
             });
 
-            let confirmation_res = client.listen_for_tx_confirmation(hash, &init_sender);
+            let confirmation_res = self.listen_for_tx_confirmation(init_sender, hash);
 
             match submitter_handle.join() {
                 Ok(Ok(())) => confirmation_res,
                 Ok(Err(e)) => Err(e).wrap_err("Transaction submitter thread exited with error"),
                 Err(_) => Err(eyre!("Transaction submitter thread panicked")),
             }
-        });
-
-        match scope_res {
-            Ok(res) => res,
-            Err(_) => Err(eyre!("Transaction submitter thread panicked")),
-        }
+        })
     }
 
-    // TODO: introduce timeout
     fn listen_for_tx_confirmation(
         &self,
+        init_sender: tokio::sync::oneshot::Sender<bool>,
         hash: HashOf<SignedTransaction>,
-        init_sender: &mpsc::Sender<()>,
     ) -> Result<HashOf<VersionedSignedTransaction>> {
-        let event_iterator = self
-            .listen_for_events(PipelineEventFilter::new().hash(hash.into()).into())
-            .wrap_err("Failed to establish event listener connection")?;
+        let deadline = tokio::time::Instant::now() + self.transaction_status_timeout;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
 
-        init_sender
-            .send(())
-            .wrap_err("Failed to send init message through init channel")?;
+        rt.block_on(async {
+            let mut event_iterator = {
+                let event_iterator_result = tokio::time::timeout_at(
+                    deadline,
+                    self.listen_for_events_async(
+                        PipelineEventFilter::new().hash(hash.into()).into(),
+                    ),
+                )
+                .await
+                .map_err(Into::into)
+                .and_then(std::convert::identity)
+                .wrap_err("Failed to establish event listener connection");
+                let _send_result = init_sender.send(event_iterator_result.is_ok());
+                event_iterator_result?
+            };
 
-        for event in event_iterator.flatten() {
-            if let Event::Pipeline(this_event) = event {
+            let result = tokio::time::timeout_at(
+                deadline,
+                Self::listen_for_tx_confirmation_loop(&mut event_iterator, hash),
+            )
+            .await
+            .map_err(Into::into)
+            .and_then(std::convert::identity);
+            event_iterator.close().await;
+            result
+        })
+    }
+
+    async fn listen_for_tx_confirmation_loop(
+        event_iterator: &mut AsyncEventStream,
+        hash: HashOf<SignedTransaction>,
+    ) -> Result<HashOf<VersionedSignedTransaction>> {
+        while let Some(event) = event_iterator.next().await {
+            if let Event::Pipeline(this_event) = event? {
                 match this_event.status {
                     PipelineStatus::Validating => {}
                     PipelineStatus::Rejected(reason) => {
-                        return Err(reason).wrap_err("Transaction rejected");
+                        return Err(reason).wrap_err("Transaction rejected")
                     }
                     PipelineStatus::Committed => return Ok(hash.transmute()),
                 }
@@ -796,16 +830,30 @@ impl Client {
             .map(ClientQueryOutput::only_output)
     }
 
-    /// Connects through `WebSocket` to listen for `Iroha` pipeline and data events.
+    /// Connect (through `WebSocket`) to listen for `Iroha` `pipeline` and `data` events.
     ///
     /// # Errors
-    /// Fails if subscribing to websocket fails
+    /// - Forwards from [`Self::events_handler`]
+    /// - Forwards from [`events_api::EventIterator::new`]
     pub fn listen_for_events(
         &self,
         event_filter: FilterBox,
     ) -> Result<impl Iterator<Item = Result<Event>>> {
         iroha_logger::trace!(?event_filter);
         events_api::EventIterator::new(self.events_handler(event_filter)?)
+    }
+
+    /// Connect asynchronously (through `WebSocket`) to listen for `Iroha` `pipeline` and `data` events.
+    ///
+    /// # Errors
+    /// - Forwards from [`Self::events_handler`]
+    /// - Forwards from [`events_api::AsyncEventStream::new`]
+    pub async fn listen_for_events_async(
+        &self,
+        event_filter: FilterBox,
+    ) -> Result<AsyncEventStream> {
+        iroha_logger::trace!(?event_filter, "Async listening with");
+        events_api::AsyncEventStream::new(self.events_handler(event_filter)?).await
     }
 
     /// Constructs an Events API handler. With it, you can use any WS client you want.
@@ -818,6 +866,40 @@ impl Client {
             event_filter,
             self.headers.clone(),
             &format!("{}/{}", &self.torii_url, uri::SUBSCRIPTION),
+        )
+    }
+
+    /// Connect (through `WebSocket`) to listen for `Iroha` blocks
+    ///
+    /// # Errors
+    /// - Forwards from [`Self::events_handler`]
+    /// - Forwards from [`blocks_api::BlockIterator::new`]
+    pub fn listen_for_blocks(
+        &self,
+        height: u64,
+    ) -> Result<impl Iterator<Item = Result<VersionedCommittedBlock>>> {
+        blocks_api::BlockIterator::new(self.blocks_handler(height)?)
+    }
+
+    /// Connect asynchronously (through `WebSocket`) to listen for `Iroha` blocks
+    ///
+    /// # Errors
+    /// - Forwards from [`Self::events_handler`]
+    /// - Forwards from [`blocks_api::BlockIterator::new`]
+    pub async fn listen_for_blocks_async(&self, height: u64) -> Result<AsyncBlockStream> {
+        blocks_api::AsyncBlockStream::new(self.blocks_handler(height)?).await
+    }
+
+    /// Construct a handler for Blocks API. With this handler you can use any WS client you want.
+    ///
+    /// # Errors
+    /// Fails if handler construction fails
+    #[inline]
+    pub fn blocks_handler(&self, height: u64) -> Result<blocks_api::flow::Init> {
+        blocks_api::flow::Init::new(
+            height,
+            self.headers.clone(),
+            &format!("{}/{}", &self.torii_url, uri::BLOCKS_STREAM),
         )
     }
 
@@ -985,8 +1067,207 @@ impl Client {
     }
 }
 
+/// Logic for `sync` and `async` Iroha websocket streams
+pub mod stream_api {
+    use futures_util::{FutureExt, SinkExt, Stream, StreamExt};
+
+    use super::*;
+    use crate::{
+        http::ws::conn_flow::{EventData, Events, Handshake, Init, InitData},
+        http_default::DefaultWebSocketRequestBuilder,
+    };
+
+    /// Iterator for getting messages from the `WebSocket` stream.
+    pub(super) struct SyncIterator<E> {
+        stream: WebSocketStream,
+        handler: E,
+    }
+
+    impl<E> SyncIterator<E> {
+        /// Construct `SyncIterator` and send the subscription request.
+        ///
+        /// # Errors
+        /// - Request failed to build
+        /// - `connect` failed
+        /// - Sending failed
+        /// - Message not received in stream during connection or subscription
+        /// - Message is an error
+        pub fn new<I: Init<DefaultWebSocketRequestBuilder>>(
+            handler: I,
+        ) -> Result<SyncIterator<<I::Next as Handshake>::Next>> {
+            trace!("Creating `SyncIterator`");
+            let InitData {
+                first_message,
+                req,
+                next: handler,
+            } = Init::<http_default::DefaultWebSocketRequestBuilder>::init(handler);
+
+            let mut stream = req.build()?.connect()?;
+            stream.write_message(WebSocketMessage::Binary(first_message))?;
+
+            let handler = loop {
+                let mes = stream.read_message();
+                trace!(?mes, "Received message");
+                match mes {
+                    Ok(WebSocketMessage::Binary(message)) => break handler.message(message)?,
+                    Ok(_) => continue,
+                    Err(WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed) => {
+                        return Err(eyre!("WebSocket connection closed."))
+                    }
+                    Err(err) => return Err(err.into()),
+                }
+            };
+            trace!("`SyncIterator` created successfully");
+            Ok(SyncIterator { stream, handler })
+        }
+    }
+
+    impl<E: Events> Iterator for SyncIterator<E> {
+        type Item = Result<E::Event>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            loop {
+                match self.stream.read_message() {
+                    Ok(WebSocketMessage::Binary(message)) => {
+                        return Some(self.handler.message(message).and_then(
+                            |EventData { reply, event }| {
+                                self.stream
+                                    .write_message(WebSocketMessage::Binary(reply))
+                                    .map(|_| event)
+                                    .wrap_err("Failed to reply")
+                            },
+                        ));
+                    }
+                    Ok(_) => continue,
+                    Err(WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed) => {
+                        return None
+                    }
+                    Err(err) => return Some(Err(err.into())),
+                }
+            }
+        }
+    }
+
+    impl<E> Drop for SyncIterator<E> {
+        fn drop(&mut self) {
+            let mut close = || -> eyre::Result<()> {
+                self.stream.close(None)?;
+                let mes = self.stream.read_message()?;
+                if !mes.is_close() {
+                    return Err(eyre!(
+                        "Server hasn't sent `Close` message for websocket handshake"
+                    ));
+                }
+                Ok(())
+            };
+
+            trace!("Closing WebSocket connection");
+            let _ = close().map_err(|e| error!(%e));
+            trace!("WebSocket connection closed");
+        }
+    }
+
+    /// Async stream for getting messages from the `WebSocket` stream.
+    pub struct AsyncStream<E> {
+        stream: AsyncWebSocketStream,
+        handler: E,
+    }
+
+    impl<E> AsyncStream<E> {
+        /// Construct [`AsyncStream`] and send the subscription request.
+        ///
+        /// # Errors
+        /// - Request failed to build
+        /// - `connect_async` failed
+        /// - Sending failed
+        /// - Message not received in stream during connection or subscription
+        /// - Message is an error
+        pub async fn new<I>(handler: I) -> Result<AsyncStream<<I::Next as Handshake>::Next>>
+        where
+            I: Init<DefaultWebSocketRequestBuilder> + Send,
+            I::Next: Send,
+            <I::Next as Handshake>::Next: Send,
+        {
+            trace!("Creating `AsyncStream`");
+            let InitData {
+                first_message,
+                req,
+                next: handler,
+            } = Init::<http_default::DefaultWebSocketRequestBuilder>::init(handler);
+
+            let mut stream = req.build()?.connect_async().await?;
+            stream.send(WebSocketMessage::Binary(first_message)).await?;
+
+            let handler = loop {
+                let mes = stream
+                    .next()
+                    .await
+                    .ok_or(eyre!("Expect to receive message"))?;
+                trace!(?mes, "Received message");
+                match mes {
+                    Ok(WebSocketMessage::Binary(message)) => break handler.message(message)?,
+                    Ok(_) => continue,
+                    Err(err) => return Err(err.into()),
+                }
+            };
+            trace!("`AsyncStream` created successfully");
+            Ok(AsyncStream { stream, handler })
+        }
+    }
+
+    impl<E: Send> AsyncStream<E> {
+        /// Close websocket
+        /// # Errors
+        /// - Server fails to send `Close` message
+        /// - Closing the websocket connection itself fails.
+        pub async fn close(mut self) {
+            let close = async {
+                self.stream.close(None).await?;
+                if let Some(mes) = self.stream.next().await {
+                    if !mes?.is_close() {
+                        eyre::bail!("Server hasn't sent `Close` message for websocket handshake");
+                    }
+                }
+                Ok(())
+            };
+
+            trace!("Closing WebSocket connection");
+            let _ = close.await.map_err(|e| error!(%e));
+            trace!("WebSocket connection closed");
+        }
+    }
+
+    impl<E: Events + Unpin> Stream for AsyncStream<E> {
+        type Item = Result<E::Event>;
+
+        fn poll_next(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            match futures_util::ready!(self.stream.poll_next_unpin(cx)) {
+                Some(Ok(WebSocketMessage::Binary(message))) => {
+                    match self.handler.message(message) {
+                        Ok(EventData { event, reply }) => {
+                            let mut send = self.stream.send(WebSocketMessage::Binary(reply));
+                            let result = futures_util::ready!(send.poll_unpin(cx))
+                                .map(|_| event)
+                                .wrap_err("Failed to reply");
+                            std::task::Poll::Ready(Some(result))
+                        }
+                        Err(err) => std::task::Poll::Ready(Some(Err(err))),
+                    }
+                }
+                Some(Ok(_)) => std::task::Poll::Pending,
+                Some(Err(err)) => std::task::Poll::Ready(Some(Err(err.into()))),
+                None => std::task::Poll::Ready(None),
+            }
+        }
+    }
+}
+
 /// Logic related to Events API client implementation.
 pub mod events_api {
+
     use super::*;
     use crate::http::ws::{
         conn_flow::{
@@ -995,7 +1276,7 @@ pub mod events_api {
         transform_ws_url,
     };
 
-    /// Events API flow. For documentation and example usage please follow to [`crate::http::ws::conn_flow`].
+    /// Events API flow. For documentation and usage examples, refer to [`crate::http::ws::conn_flow`].
     pub mod flow {
         use super::*;
 
@@ -1050,7 +1331,7 @@ pub mod events_api {
             }
         }
 
-        /// Events API flow handshake handler
+        /// Handshake handler for Events API flow
         #[derive(Copy, Clone)]
         pub struct Handshake;
 
@@ -1072,7 +1353,7 @@ pub mod events_api {
             }
         }
 
-        /// Events API flow events handler
+        /// Events handler for Events API flow
         #[derive(Debug, Copy, Clone)]
         pub struct Events;
 
@@ -1097,89 +1378,132 @@ pub mod events_api {
     }
 
     /// Iterator for getting events from the `WebSocket` stream.
-    #[derive(Debug)]
-    pub(super) struct EventIterator {
-        stream: WebSocketStream,
-        handler: flow::Events,
-    }
+    pub(super) type EventIterator = stream_api::SyncIterator<flow::Events>;
 
-    impl EventIterator {
-        /// Constructs `EventIterator` and sends the subscription request.
-        ///
-        /// # Errors
-        /// Fails if connecting and sending subscription to web socket fails
-        pub fn new(handler: flow::Init) -> Result<Self> {
-            debug!("Creating `EventIterator`");
-            let InitData {
-                first_message,
-                req,
-                next: handler,
-            } = FlowInit::<http_default::DefaultWebSocketRequestBuilder>::init(handler);
+    /// Async stream for getting events from the `WebSocket` stream.
+    pub type AsyncEventStream = stream_api::AsyncStream<flow::Events>;
+}
 
-            let mut stream = req.build()?.connect()?;
-            stream.write_message(WebSocketMessage::Binary(first_message))?;
+mod blocks_api {
+    use super::*;
+    use crate::http::ws::{
+        conn_flow::{
+            EventData, Events as FlowEvents, Handshake as FlowHandshake, Init as FlowInit, InitData,
+        },
+        transform_ws_url,
+    };
 
-            let handler = loop {
-                let mes = stream.read_message();
-                debug!(?mes, "Received message");
-                match mes {
-                    Ok(WebSocketMessage::Binary(message)) => break handler.message(message)?,
-                    Ok(_) => continue,
-                    Err(WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed) => {
-                        return Err(eyre!("WebSocket connection closed."))
-                    }
-                    Err(err) => return Err(err.into()),
-                }
-            };
-            debug!("`EventIterator` created successfully");
-            Ok(Self { stream, handler })
+    /// Blocks API flow. For documentation and usage examples, refer to [`crate::http::ws::conn_flow`].
+    pub mod flow {
+        use iroha_core::block::stream::{
+            BlockPublisherMessage, BlockSubscriberMessage, VersionedBlockPublisherMessage,
+            VersionedBlockSubscriberMessage,
+        };
+
+        use super::*;
+
+        /// Initialization struct for Blocks API flow.
+        pub struct Init {
+            /// Block height from which to start streaming blocks
+            height: u64,
+            /// HTTP request headers
+            headers: HashMap<String, String>,
+            /// TORII URL
+            url: String,
         }
-    }
 
-    impl Iterator for EventIterator {
-        type Item = Result<Event>;
+        impl Init {
+            /// Construct new item with provided headers and url.
+            ///
+            /// # Errors
+            /// If [`transform_ws_url`] fails.
+            #[inline]
+            pub(in super::super) fn new(
+                height: u64,
+                headers: HashMap<String, String>,
+                url: impl AsRef<str>,
+            ) -> Result<Self> {
+                Ok(Self {
+                    height,
+                    headers,
+                    url: transform_ws_url(url.as_ref())?,
+                })
+            }
+        }
 
-        fn next(&mut self) -> Option<Self::Item> {
-            loop {
-                match self.stream.read_message() {
-                    Ok(WebSocketMessage::Binary(message)) => {
-                        return Some(self.handler.message(message).and_then(
-                            |EventData { reply, event }| {
-                                self.stream
-                                    .write_message(WebSocketMessage::Binary(reply))
-                                    .map(|_| event)
-                                    .wrap_err("Failed to reply")
-                            },
-                        ));
-                    }
-                    Ok(_) => continue,
-                    Err(WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed) => {
-                        return None
-                    }
-                    Err(err) => return Some(Err(err.into())),
+        impl<R: RequestBuilder> FlowInit<R> for Init {
+            type Next = Handshake;
+
+            fn init(self) -> InitData<R, Self::Next> {
+                let Self {
+                    height,
+                    headers,
+                    url,
+                } = self;
+
+                let msg =
+                    VersionedBlockSubscriberMessage::from(BlockSubscriberMessage::from(height))
+                        .encode_versioned();
+
+                InitData::new(
+                    R::new(HttpMethod::GET, url).headers(headers),
+                    msg,
+                    Handshake,
+                )
+            }
+        }
+
+        //// Handshake handler for Blocks API flow
+        #[derive(Copy, Clone)]
+        pub struct Handshake;
+
+        impl FlowHandshake for Handshake {
+            type Next = Events;
+
+            fn message(self, message: Vec<u8>) -> Result<Self::Next>
+            where
+                Self::Next: FlowEvents,
+            {
+                if let BlockPublisherMessage::SubscriptionAccepted =
+                    try_decode_all_or_just_decode!(VersionedBlockPublisherMessage, &message)?
+                        .into_v1()
+                {
+                    Ok(Events)
+                } else {
+                    Err(eyre!("Expected `SubscriptionAccepted`."))
                 }
+            }
+        }
+
+        /// Events handler for Blocks API flow
+        #[derive(Debug, Copy, Clone)]
+        pub struct Events;
+
+        impl FlowEvents for Events {
+            type Event = iroha_core::prelude::VersionedCommittedBlock;
+
+            fn message(&self, message: Vec<u8>) -> Result<EventData<Self::Event>> {
+                let block_socket_message =
+                    try_decode_all_or_just_decode!(VersionedBlockPublisherMessage, &message)?
+                        .into_v1();
+                let block = match block_socket_message {
+                    BlockPublisherMessage::Block(block) => block,
+                    msg => return Err(eyre!("Expected Event but got {:?}", msg)),
+                };
+                let versioned_message =
+                    VersionedBlockSubscriberMessage::from(BlockSubscriberMessage::BlockReceived)
+                        .encode_versioned();
+
+                Ok(EventData::new(block, versioned_message))
             }
         }
     }
 
-    impl Drop for EventIterator {
-        fn drop(&mut self) {
-            let mut close = || -> eyre::Result<()> {
-                self.stream.close(None)?;
-                let mes = self.stream.read_message()?;
-                if !mes.is_close() {
-                    return Err(eyre!(
-                        "Server hasn't sent `Close` message for websocket handshake"
-                    ));
-                }
-                Ok(())
-            };
+    /// Iterator for getting blocks from the `WebSocket` stream.
+    pub(super) type BlockIterator = stream_api::SyncIterator<flow::Events>;
 
-            debug!("Closing WebSocket connection");
-            let _ = close().map_err(|e| error!(%e));
-            debug!("WebSocket connection closed");
-        }
-    }
+    /// Async stream for getting blocks from the `WebSocket` stream.
+    pub type AsyncBlockStream = stream_api::AsyncStream<flow::Events>;
 }
 
 pub mod account {
@@ -1357,7 +1681,10 @@ mod tests {
     #![allow(clippy::restriction)]
     use std::str::FromStr;
 
-    use iroha_config::client::{BasicAuth, WebLogin};
+    use iroha_config::{
+        client::{BasicAuth, ConfigurationProxy, WebLogin},
+        torii::{uri::DEFAULT_API_URL, DEFAULT_TORII_TELEMETRY_URL},
+    };
 
     use super::*;
 
@@ -1370,12 +1697,21 @@ mod tests {
     fn txs_same_except_for_nonce_have_different_hashes() {
         let (public_key, private_key) = KeyPair::generate().unwrap().into();
 
-        let cfg = Configuration {
-            public_key,
-            private_key,
-            add_transaction_nonce: true,
-            ..Configuration::default()
-        };
+        let cfg = ConfigurationProxy {
+            public_key: Some(public_key),
+            private_key: Some(private_key),
+            account_id: Some(
+                "alice@wonderland"
+                    .parse()
+                    .expect("This account ID should be valid"),
+            ),
+            torii_api_url: Some(SmallStr::from_str(DEFAULT_API_URL)),
+            torii_telemetry_url: Some(SmallStr::from_str(DEFAULT_TORII_TELEMETRY_URL)),
+            add_transaction_nonce: Some(true),
+            ..ConfigurationProxy::default()
+        }
+        .build()
+        .expect("Client config should build as all required fields were provided");
         let client = Client::new(&cfg).expect("Invalid client configuration");
 
         let build_transaction = || {
@@ -1399,10 +1735,28 @@ mod tests {
             password: SmallStr::from_str(PASSWORD),
         };
 
-        let cfg = Configuration {
-            basic_auth: Some(basic_auth),
-            ..Configuration::default()
-        };
+        let cfg = ConfigurationProxy {
+            public_key: Some(
+                "ed01207233bfc89dcbd68c19fde6ce6158225298ec1131b6a130d1aeb454c1ab5183c0"
+                    .parse()
+                    .expect("Public key not in mulithash format"),
+            ),
+            private_key: Some(iroha_crypto::PrivateKey::from_hex(
+            iroha_crypto::Algorithm::Ed25519,
+            "9ac47abf59b356e0bd7dcbbbb4dec080e302156a48ca907e47cb6aea1d32719e7233bfc89dcbd68c19fde6ce6158225298ec1131b6a130d1aeb454c1ab5183c0"
+            ).expect("Private key not hex encoded")),
+            account_id: Some(
+                "alice@wonderland"
+                    .parse()
+                    .expect("This account ID should be valid"),
+            ),
+            torii_api_url: Some(SmallStr::from_str(DEFAULT_API_URL)),
+            torii_telemetry_url: Some(SmallStr::from_str(DEFAULT_TORII_TELEMETRY_URL)),
+            basic_auth: Some(Some(basic_auth)),
+            ..ConfigurationProxy::default()
+        }
+        .build()
+        .expect("Client config should build as all required fields were provided");
         let client = Client::new(&cfg).expect("Invalid client configuration");
 
         let value = client

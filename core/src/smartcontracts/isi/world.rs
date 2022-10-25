@@ -85,7 +85,6 @@ pub mod isi {
                 Ok(DomainEvent::Created(domain_id).into())
             })?;
 
-            wsv.metrics.domains.inc();
             Ok(())
         }
     }
@@ -109,7 +108,6 @@ pub mod isi {
                 Ok(DomainEvent::Deleted(domain_id).into())
             })?;
 
-            wsv.metrics.domains.dec();
             Ok(())
         }
     }
@@ -157,7 +155,7 @@ pub mod isi {
         #[metrics("unregister_role")]
         fn execute(
             self,
-            _authority: <Account as Identifiable>::Id,
+            authority: <Account as Identifiable>::Id,
             wsv: &WorldStateView,
         ) -> Result<(), Self::Error> {
             let role_id = self.object_id;
@@ -176,13 +174,11 @@ pub mod isi {
             }
 
             for account_id in accounts_with_role {
-                wsv.modify_account(&account_id.clone(), |account| {
-                    if !account.remove_role(&role_id) {
-                        error!(%role_id, "role not found - this is a bug");
-                    }
-
-                    Ok(AccountEvent::RoleRevoked(account_id))
-                })?;
+                let revoke: Revoke<Account, RoleId> = Revoke {
+                    object: role_id.clone(),
+                    destination_id: account_id,
+                };
+                revoke.execute(authority.clone(), wsv)?
             }
 
             wsv.modify_world(|world| {
@@ -280,7 +276,7 @@ pub mod isi {
                     })
                     .into())
                 } else {
-                    error!(%role_id, "role not found - this is a bug");
+                    error!(%role_id, "role not found. This is a bug");
                     Err(FindError::Role(role_id.clone()).into())
                 }
             })?;
@@ -314,10 +310,13 @@ pub mod isi {
                 wsv.modify_account(&account_id, |account| {
                     let id = account.id();
                     if !wsv.remove_account_permission(id, &token) {
-                        error!(%token, "token not found - this is a bug");
+                        error!(%token, "token not found. This is a bug");
                     }
 
-                    Ok(AccountEvent::PermissionRemoved(id.clone()))
+                    Ok(AccountEvent::PermissionRemoved(AccountPermissionChanged {
+                        account_id: id.clone(),
+                        permission_id: token.definition_id().clone(),
+                    }))
                 })?;
             }
         }

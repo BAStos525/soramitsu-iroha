@@ -13,20 +13,24 @@ use std::{panic, path::PathBuf, sync::Arc};
 
 use color_eyre::eyre::{eyre, Result, WrapErr};
 use iroha_actor::{broker::*, prelude::*};
-use iroha_config::iroha::Configuration;
+use iroha_config::{
+    base::proxy::{LoadFromDisk, LoadFromEnv},
+    iroha::{Configuration, ConfigurationProxy},
+};
 use iroha_core::{
-    block_sync::{BlockSynchronizer, BlockSynchronizerTrait},
+    block_sync::BlockSynchronizer,
     genesis::{GenesisNetwork, GenesisNetworkTrait, RawGenesisBlock},
     handler::ThreadHandler,
     kura::Kura,
     prelude::{World, WorldStateView},
     queue::Queue,
     smartcontracts::permissions::judge::{InstructionJudgeBoxed, QueryJudgeBoxed},
-    sumeragi::{Sumeragi, SumeragiTrait},
+    sumeragi::Sumeragi,
     tx::{PeerId, TransactionValidator},
     IrohaNetwork,
 };
 use iroha_data_model::prelude::*;
+use iroha_p2p::network::NetworkBaseRelayOnlinePeers;
 use tokio::{
     signal,
     sync::{broadcast, Notify},
@@ -39,7 +43,8 @@ pub mod samples;
 mod stream;
 pub mod torii;
 
-/// Arguments for Iroha2 - usually parsed from cli.
+/// Arguments for Iroha2.
+/// Configuration for arguments is parsed from environment variables and then the appropriate object is constructed.
 #[derive(Debug)]
 pub struct Arguments {
     /// Set this flag on the peer that should submit genesis on the network initial start.
@@ -66,46 +71,71 @@ impl Default for Arguments {
 
 /// Iroha is an [Orchestrator](https://en.wikipedia.org/wiki/Orchestration_%28computing%29) of the
 /// system. It configures, coordinates and manages transactions and queries processing, work of consensus and storage.
-pub struct Iroha<G = GenesisNetwork, S = Sumeragi<G>, B = BlockSynchronizer<S>>
-where
-    G: GenesisNetworkTrait,
-    S: SumeragiTrait<GenesisNetwork = G>,
-    B: BlockSynchronizerTrait<Sumeragi = S>,
-{
-    /// World state view
-    pub wsv: Arc<WorldStateView>,
+pub struct Iroha {
     /// Queue of transactions
     pub queue: Arc<Queue>,
     /// Sumeragi consensus
-    pub sumeragi: AlwaysAddr<S>,
-    /// Kura - block storage
+    pub sumeragi: Arc<Sumeragi>,
+    /// Kura — block storage
     pub kura: Arc<Kura>,
     /// Block synchronization actor
-    pub block_sync: AlwaysAddr<B>,
+    pub block_sync: AlwaysAddr<BlockSynchronizer>,
     /// Torii web server
     pub torii: Option<Torii>,
     /// Thread handlers
     thread_handlers: Vec<ThreadHandler>,
+    /// Relay that redirects messages from the network subsystem to core subsystems.
+    _sumeragi_relay: AlwaysAddr<FromNetworkBaseRelay>, // TODO: figure out if truly unused.
 }
 
-impl<G, S, B> Drop for Iroha<G, S, B>
-where
-    G: GenesisNetworkTrait,
-    S: SumeragiTrait<GenesisNetwork = G>,
-    B: BlockSynchronizerTrait<Sumeragi = S>,
-{
+impl Drop for Iroha {
     fn drop(&mut self) {
         // Drop thread handles first
         let _thread_handles = core::mem::take(&mut self.thread_handlers);
     }
 }
 
-impl<G, S, B> Iroha<G, S, B>
-where
-    G: GenesisNetworkTrait,
-    S: SumeragiTrait<GenesisNetwork = G>,
-    B: BlockSynchronizerTrait<Sumeragi = S>,
-{
+struct FromNetworkBaseRelay {
+    sumeragi: Arc<Sumeragi>,
+    broker: Broker,
+}
+
+#[async_trait::async_trait]
+impl Actor for FromNetworkBaseRelay {
+    async fn on_start(&mut self, ctx: &mut iroha_actor::prelude::Context<Self>) {
+        // to start connections
+        self.broker.subscribe::<NetworkBaseRelayOnlinePeers, _>(ctx);
+        self.broker.subscribe::<iroha_core::NetworkMessage, _>(ctx);
+    }
+}
+
+#[async_trait::async_trait]
+impl Handler<NetworkBaseRelayOnlinePeers> for FromNetworkBaseRelay {
+    type Result = ();
+
+    async fn handle(&mut self, msg: NetworkBaseRelayOnlinePeers) {
+        self.sumeragi.update_online_peers(msg.online_peers);
+    }
+}
+
+#[async_trait::async_trait]
+impl Handler<iroha_core::NetworkMessage> for FromNetworkBaseRelay {
+    type Result = ();
+
+    async fn handle(&mut self, msg: iroha_core::NetworkMessage) -> Self::Result {
+        use iroha_core::NetworkMessage::*;
+
+        match msg {
+            SumeragiPacket(data) => {
+                self.sumeragi.incoming_message(data.into_v1());
+            }
+            BlockSync(data) => self.broker.issue_send(data.into_v1()).await,
+            Health => {}
+        }
+    }
+}
+
+impl Iroha {
     /// To make `Iroha` peer work all actors should be started first.
     /// After that moment it you can start it with listening to torii events.
     ///
@@ -124,18 +154,16 @@ where
         query_judge: QueryJudgeBoxed,
     ) -> Result<Self> {
         let broker = Broker::new();
-        let mut config = match Configuration::from_path(&args.config_path) {
-            Ok(config) => config,
-            Err(_) => Configuration::default(),
-        };
-        config.load_environment()?;
+        let mut proxy = ConfigurationProxy::from_path(&args.config_path)?;
+        proxy.load_environment()?;
+        let config = proxy.build()?;
 
         let telemetry = iroha_logger::init(&config.logger)?;
         iroha_logger::info!("Hyperledgerいろは2にようこそ！");
         iroha_logger::info!("(translation) Welcome to Hyperledger Iroha 2!");
 
         let genesis = if let Some(genesis_path) = &args.genesis_path {
-            G::from_configuration(
+            GenesisNetwork::from_configuration(
                 args.submit_genesis,
                 RawGenesisBlock::from_path(genesis_path)?,
                 Some(&config.genesis),
@@ -179,7 +207,8 @@ where
 
             iroha_logger::error!(%panic_message, %location, "A panic occured, shutting down");
 
-            notify_shutdown.notify_one();
+            // NOTE: shutdown all currently listening waiters
+            notify_shutdown.notify_waiters();
         }));
     }
 
@@ -190,7 +219,7 @@ where
     /// - telemetry setup
     /// - Initialization of [`Sumeragi`]
     pub async fn with_genesis(
-        genesis: Option<G>,
+        genesis: Option<GenesisNetwork>,
         config: Configuration,
         instruction_judge: InstructionJudgeBoxed,
         query_judge: QueryJudgeBoxed,
@@ -215,16 +244,14 @@ where
         .wrap_err("Unable to start P2P-network")?;
         let network_addr = network.start().await;
 
-        let (events_sender, _) = broadcast::channel(100);
+        let (events_sender, _) = broadcast::channel(10000);
         let world = World::with(
             domains(&config),
             config.sumeragi.trusted_peers.peers.clone(),
         );
-        let wsv = Arc::new(WorldStateView::from_configuration(
-            config.wsv,
-            world,
-            events_sender.clone(),
-        ));
+
+        let kura = Kura::from_configuration(&config.kura)?;
+        let wsv = WorldStateView::from_configuration(config.wsv, world);
 
         let query_judge = Arc::from(query_judge);
 
@@ -232,46 +259,56 @@ where
             config.sumeragi.transaction_limits,
             Arc::from(instruction_judge),
             Arc::clone(&query_judge),
-            Arc::clone(&wsv),
         );
 
         // Validate every transaction in genesis block
         if let Some(ref genesis) = genesis {
             transaction_validator
-                .validate_every(genesis.iter().cloned())
+                .validate_every(genesis.iter().cloned(), &wsv)
                 .wrap_err("Transaction validation failed in genesis block")?;
         }
 
+        wsv.init(kura.init()?);
+
         let notify_shutdown = Arc::new(Notify::new());
 
-        let queue = Arc::new(Queue::from_configuration(&config.queue, Arc::clone(&wsv)));
-        let telemetry_started = Self::start_telemetry(telemetry, &config).await?;
-        let kura = Kura::from_configuration(&config.kura, Arc::clone(&wsv), broker.clone())?;
+        let queue = Arc::new(Queue::from_configuration(&config.queue));
+        if Self::start_telemetry(telemetry, &config).await? {
+            iroha_logger::info!("Telemetry started")
+        } else {
+            iroha_logger::error!("Telemetry did not start")
+        }
 
         let kura_thread_handler = Kura::start(Arc::clone(&kura));
 
-        let sumeragi: AlwaysAddr<_> = S::from_configuration(
-            &config.sumeragi,
-            events_sender.clone(),
-            Arc::clone(&wsv),
-            transaction_validator,
-            telemetry_started,
-            genesis,
-            Arc::clone(&queue),
-            broker.clone(),
-            Arc::clone(&kura),
-            network_addr.clone(),
-        )
-        .wrap_err("Failed to initialize Sumeragi.")?
+        let sumeragi = Arc::new(
+            // TODO: No function needs 10 parameters. It should accept one struct.
+            Sumeragi::new(
+                &config.sumeragi,
+                events_sender.clone(),
+                wsv,
+                transaction_validator,
+                Arc::clone(&queue),
+                broker.clone(),
+                Arc::clone(&kura),
+                network_addr.clone(),
+            ),
+        );
+
+        let sumeragi_relay = FromNetworkBaseRelay {
+            sumeragi: Arc::clone(&sumeragi),
+            broker: broker.clone(),
+        }
         .start()
         .await
         .expect_running();
 
-        kura.async_init_all_important().await;
-        let block_sync = B::from_configuration(
+        let sumeragi_thread_handler =
+            Sumeragi::initialize_and_start_thread(Arc::clone(&sumeragi), genesis);
+
+        let block_sync = BlockSynchronizer::from_configuration(
             &config.block_sync,
-            Arc::clone(&wsv),
-            sumeragi.clone(),
+            Arc::clone(&sumeragi),
             PeerId::new(&config.torii.p2p_addr, &config.public_key),
             broker.clone(),
         )
@@ -281,12 +318,12 @@ where
 
         let torii = Torii::from_configuration(
             config.clone(),
-            Arc::clone(&wsv),
             Arc::clone(&queue),
             query_judge,
             events_sender,
             network_addr.clone(),
             Arc::clone(&notify_shutdown),
+            Arc::clone(&sumeragi),
         );
 
         Self::start_listening_signal(Arc::clone(&notify_shutdown))?;
@@ -295,13 +332,13 @@ where
 
         let torii = Some(torii);
         Ok(Self {
-            wsv,
             queue,
             sumeragi,
             kura,
             block_sync,
             torii,
-            thread_handlers: vec![kura_thread_handler],
+            thread_handlers: vec![sumeragi_thread_handler, kura_thread_handler],
+            _sumeragi_relay: sumeragi_relay,
         })
     }
 
@@ -389,6 +426,7 @@ where
                 _ = sigterm.recv() => {},
             }
 
+            // NOTE: shutdown all currently listening waiters
             notify_shutdown.notify_waiters();
         });
 
@@ -407,24 +445,26 @@ fn domains(configuration: &Configuration) -> [Domain; 1] {
 
 #[cfg(test)]
 mod tests {
-    use std::{panic, thread};
+    use std::{iter::repeat, panic, thread};
 
+    use futures::future::join_all;
     use serial_test::serial;
 
     use super::*;
 
-    #[allow(clippy::panic)]
+    #[allow(clippy::panic, clippy::print_stdout)]
     #[tokio::test]
     #[serial]
     async fn iroha_should_notify_on_panic() {
         let notify = Arc::new(Notify::new());
         let hook = panic::take_hook();
         <crate::Iroha>::prepare_panic_hook(Arc::clone(&notify));
-        let _res = thread::spawn(move || {
+        let waiters: Vec<_> = repeat(()).take(10).map(|_| Arc::clone(&notify)).collect();
+        let handles: Vec<_> = waiters.iter().map(|waiter| waiter.notified()).collect();
+        thread::spawn(move || {
             panic!("Test panic");
-        })
-        .join();
-        notify.notified().await;
+        });
+        join_all(handles).await;
         panic::set_hook(hook);
     }
 }

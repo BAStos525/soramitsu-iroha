@@ -1,4 +1,4 @@
-//! This module provides the [`WorldStateView`] - in-memory representations of the current blockchain
+//! This module provides the [`WorldStateView`] — an in-memory representation of the current blockchain
 //! state.
 #![allow(
     clippy::new_without_default,
@@ -15,29 +15,24 @@ use dashmap::{
 };
 use eyre::Result;
 use getset::Getters;
-use iroha_config::wsv::Configuration;
+use iroha_config::{
+    base::proxy::Builder,
+    wsv::{Configuration, ConfigurationProxy},
+};
 use iroha_crypto::HashOf;
 use iroha_data_model::prelude::*;
 use iroha_logger::prelude::*;
 use iroha_primitives::small::SmallVec;
-use iroha_telemetry::metrics::Metrics;
-use tokio::{sync::broadcast, task};
 
 use crate::{
     block::Chain,
     prelude::*,
-    send_event,
     smartcontracts::{
         isi::{query::Error as QueryError, Error},
         wasm, Execute, FindError,
     },
-    DomainsMap, EventsSender, PeersIds,
+    DomainsMap, PeersIds,
 };
-
-/// Sender type of the new block notification channel
-pub type NewBlockNotificationSender = tokio::sync::watch::Sender<()>;
-/// Receiver type of the new block notification channel
-pub type NewBlockNotificationReceiver = tokio::sync::watch::Receiver<()>;
 
 /// The global entity consisting of `domains`, `triggers` and etc.
 /// For example registration of domain, will have this as an ISI target.
@@ -90,7 +85,7 @@ impl World {
 /// Current state of the blockchain aligned with `Iroha` module.
 #[derive(Debug)]
 pub struct WorldStateView {
-    /// The world - contains `domains`, `triggers`, etc..
+    /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
     pub world: World,
     /// Configuration of World State View.
     pub config: Configuration,
@@ -98,12 +93,12 @@ pub struct WorldStateView {
     blocks: Arc<Chain>,
     /// Hashes of transactions
     pub transactions: DashSet<HashOf<VersionedSignedTransaction>>,
-    /// Metrics for prometheus endpoint.
-    pub metrics: Arc<Metrics>,
-    /// Notifies subscribers when new block is applied
-    new_block_notifier: Arc<NewBlockNotificationSender>,
-    /// Transmitter to broadcast [`WorldStateView`]-related events.
-    events_sender: EventsSender,
+    /// Buffer containing events generated during `WorldStateView::apply`. Renewed on every block commit.
+    pub events_buffer: std::cell::RefCell<Vec<Event>>,
+    /// Accumulated amount of any asset that has been transacted.
+    pub metric_tx_amounts: std::cell::Cell<f64>,
+    /// Count of how many mints, transfers and burns have happened.
+    pub metric_tx_amounts_counter: std::cell::Cell<u64>,
 }
 
 impl Default for WorldStateView {
@@ -114,16 +109,15 @@ impl Default for WorldStateView {
 }
 
 impl Clone for WorldStateView {
-    #[allow(clippy::expect_used)]
     fn clone(&self) -> Self {
         Self {
             world: Clone::clone(&self.world),
             config: self.config,
             blocks: Arc::clone(&self.blocks),
             transactions: self.transactions.clone(),
-            metrics: Arc::clone(&self.metrics),
-            new_block_notifier: Arc::clone(&self.new_block_notifier),
-            events_sender: self.events_sender.clone(),
+            events_buffer: std::cell::RefCell::new(Vec::new()),
+            metric_tx_amounts: std::cell::Cell::new(0.0_f64),
+            metric_tx_amounts_counter: std::cell::Cell::new(0),
         }
     }
 }
@@ -133,10 +127,13 @@ impl WorldStateView {
     /// Construct [`WorldStateView`] with given [`World`].
     #[must_use]
     #[inline]
+    #[allow(clippy::expect_used)]
     pub fn new(world: World) -> Self {
         // Added to remain backward compatible with other code primary in tests
-        let (events_sender, _) = broadcast::channel(1);
-        Self::from_configuration(Configuration::default(), world, events_sender)
+        let config = ConfigurationProxy::default()
+            .build()
+            .expect("Wsv proxy always builds");
+        Self::from_configuration(config, world)
     }
 
     /// Get `Account`'s `Asset`s
@@ -148,9 +145,7 @@ impl WorldStateView {
     }
 
     /// Return a set of all permission tokens granted to this account.
-    #[allow(clippy::unused_self)]
     pub fn account_permission_tokens(&self, account: &Account) -> Vec<PermissionToken> {
-        #[allow(unused_mut)]
         let mut tokens: Vec<PermissionToken> =
             self.account_inherent_permission_tokens(account).collect();
         for role_id in account.roles() {
@@ -281,22 +276,20 @@ impl WorldStateView {
     /// you likely have data corruption.
     /// - If trigger execution fails
     /// - If timestamp conversion to `u64` fails
-    #[iroha_futures::telemetry_future]
-    #[log(skip(self, block))]
-    #[allow(clippy::expect_used)]
-    pub async fn apply(&self, block: VersionedCommittedBlock) -> Result<()> {
+    pub fn apply(&self, block: VersionedCommittedBlock) -> Result<()> {
         let time_event = self.create_time_event(block.as_v1())?;
-        self.produce_event(Event::Time(time_event));
+        self.events_buffer
+            .borrow_mut()
+            .push(Event::Time(time_event));
 
-        self.execute_transactions(block.as_v1()).await?;
+        self.execute_transactions(block.as_v1())?;
 
         self.world.triggers.handle_time_event(time_event);
 
         let res = self
             .world
             .triggers
-            .inspect_matched(|action, event| -> Result<()> { self.process_trigger(action, event) })
-            .await;
+            .inspect_matched(|action, event| -> Result<()> { self.process_trigger(action, event) });
 
         if let Err(errors) = res {
             warn!(
@@ -306,11 +299,6 @@ impl WorldStateView {
         }
 
         self.blocks.push(block);
-        self.block_commit_metrics_update_callback();
-        self.new_block_notifier.send_replace(());
-
-        // TODO: On block commit triggers
-        // TODO: Pass self.events to the next block
 
         Ok(())
     }
@@ -344,7 +332,7 @@ impl WorldStateView {
     ///
     /// # Errors
     /// Fails if transaction instruction execution fails
-    async fn execute_transactions(&self, block: &CommittedBlock) -> Result<()> {
+    fn execute_transactions(&self, block: &CommittedBlock) -> Result<()> {
         // TODO: Should this block panic instead?
         for tx in &block.transactions {
             self.process_executable(
@@ -352,7 +340,6 @@ impl WorldStateView {
                 tx.payload().account_id.clone(),
             )?;
             self.transactions.insert(tx.hash());
-            task::yield_now().await;
         }
         for tx in &block.rejected_transactions {
             self.transactions.insert(tx.hash());
@@ -376,15 +363,10 @@ impl WorldStateView {
         })?
     }
 
-    /// Send [`Event`]s to known subscribers.
-    fn produce_event(&self, event: impl Into<Event>) {
-        send_event(&self.events_sender, event.into());
-    }
-
-    /// Tries to get asset or inserts new with `default_asset_value`.
+    /// Get asset or inserts new with `default_asset_value`.
     ///
     /// # Errors
-    /// Fails if there is no account with such name.
+    /// - There is no account with such name.
     #[allow(clippy::missing_panics_doc)]
     pub fn asset_or_insert(
         &self,
@@ -411,35 +393,6 @@ impl WorldStateView {
         self.asset(id).map_err(Into::into)
     }
 
-    /// Update metrics; run when block commits.
-    fn block_commit_metrics_update_callback(&self) {
-        let last_block_txs_accepted = self
-            .blocks
-            .iter()
-            .last()
-            .map(|block| block.as_v1().transactions.len() as u64)
-            .unwrap_or_default();
-        let last_block_txs_rejected = self
-            .blocks
-            .iter()
-            .last()
-            .map(|block| block.as_v1().rejected_transactions.len() as u64)
-            .unwrap_or_default();
-        self.metrics
-            .txs
-            .with_label_values(&["accepted"])
-            .inc_by(last_block_txs_accepted);
-        self.metrics
-            .txs
-            .with_label_values(&["rejected"])
-            .inc_by(last_block_txs_rejected);
-        self.metrics
-            .txs
-            .with_label_values(&["total"])
-            .inc_by(last_block_txs_accepted + last_block_txs_rejected);
-        self.metrics.block_height.inc();
-    }
-
     // TODO: There could be just this one method `blocks` instead of
     // `blocks_from_height` and `blocks_after_height`. Also, this
     // method would return references instead of cloning blockchain
@@ -454,40 +407,53 @@ impl WorldStateView {
         self.blocks.iter()
     }
 
-    /// Returns iterator over blockchain blocks after the block with the given `hash`
+    /// Return a vector of blockchain blocks after the block with the given `hash`
     pub fn blocks_after_hash(
         &self,
         hash: HashOf<VersionedCommittedBlock>,
-    ) -> impl Iterator<Item = VersionedCommittedBlock> + '_ {
+    ) -> Vec<VersionedCommittedBlock> {
         self.blocks
             .iter()
             .skip_while(move |block_entry| block_entry.value().header().previous_block_hash != hash)
             .map(|block_entry| block_entry.value().clone())
+            .collect()
     }
 
-    /// Get `World` and pass it to closure to modify it
-    ///
-    /// Produces events in the `WSV` that are produced by `f` during execution.
-    /// Events are produced in the order of expanding scope: from specific to general.
-    /// Example: account events before domain events.
+    /// The same as [`Self::modify_world_multiple_events`] except closure `f` returns a single [`WorldEvent`].
     ///
     /// # Errors
-    /// Fails if `f` fails
-    ///
-    /// # Panics
-    /// (Rare) Panics if can't lock `self.events` for writing
-    #[allow(clippy::unwrap_in_result, clippy::expect_used)]
+    /// Forward errors from [`Self::modify_world_multiple_events`]
     pub fn modify_world(
         &self,
         f: impl FnOnce(&World) -> Result<WorldEvent, Error>,
     ) -> Result<(), Error> {
-        let world_event = f(&self.world)?;
-        let data_events: SmallVec<[DataEvent; 3]> = world_event.into();
+        self.modify_world_multiple_events(move |world| f(world).map(std::iter::once))
+    }
 
-        for event in data_events {
+    /// Get [`World`] and pass it to `closure` to modify it.
+    ///
+    /// The function puts events produced by `f` into `events_buffer`.
+    /// Events should be produced in the order of expanding scope: from specific to general.
+    /// Example: account events before domain events.
+    ///
+    /// # Errors
+    /// Forward errors from `f`
+    pub fn modify_world_multiple_events<I: IntoIterator<Item = WorldEvent>>(
+        &self,
+        f: impl FnOnce(&World) -> Result<I, Error>,
+    ) -> Result<(), Error> {
+        let world_events = f(&self.world)?;
+        let data_events: SmallVec<[DataEvent; 3]> = world_events
+            .into_iter()
+            .flat_map(WorldEvent::flatten)
+            .collect();
+
+        for event in data_events.iter() {
             self.world.triggers.handle_data_event(event.clone());
-            self.produce_event(event);
         }
+        self.events_buffer
+            .borrow_mut()
+            .extend(data_events.into_iter().map(Into::into));
 
         Ok(())
     }
@@ -499,14 +465,12 @@ impl WorldStateView {
     }
 
     /// Returns iterator over blockchain blocks starting with the block of the given `height`
-    pub fn blocks_from_height(
-        &self,
-        height: usize,
-    ) -> impl Iterator<Item = VersionedCommittedBlock> + '_ {
+    pub fn blocks_from_height(&self, height: usize) -> Vec<VersionedCommittedBlock> {
         self.blocks
             .iter()
             .skip(height.saturating_sub(1))
             .map(|block_entry| block_entry.value().clone())
+            .collect()
     }
 
     /// Get `Domain` without an ability to modify it.
@@ -565,21 +529,34 @@ impl WorldStateView {
         Ok(value)
     }
 
-    /// Get `Domain` and pass it to closure to modify it
+    /// The same as [`Self::modify_domain_multiple_events`] except closure `f` returns a single [`DomainEvent`].
     ///
     /// # Errors
-    /// Fails if there is no domain
+    /// Forward errors from [`Self::modify_domain_multiple_events`]
     pub fn modify_domain(
         &self,
         id: &<Domain as Identifiable>::Id,
         f: impl FnOnce(&mut Domain) -> Result<DomainEvent, Error>,
     ) -> Result<(), Error> {
-        self.modify_world(|world| {
+        self.modify_domain_multiple_events(id, move |domain| f(domain).map(std::iter::once))
+    }
+
+    /// Get [`Domain`] and pass it to `closure` to modify it
+    ///
+    /// # Errors
+    /// - If there is no domain
+    /// - Forward errors from `f`
+    pub fn modify_domain_multiple_events<I: IntoIterator<Item = DomainEvent>>(
+        &self,
+        id: &<Domain as Identifiable>::Id,
+        f: impl FnOnce(&mut Domain) -> Result<I, Error>,
+    ) -> Result<(), Error> {
+        self.modify_world_multiple_events(|world| {
             let mut domain = world
                 .domains
                 .get_mut(id)
                 .ok_or_else(|| FindError::Domain(id.clone()))?;
-            f(domain.value_mut()).map(Into::into)
+            f(domain.value_mut()).map(|events| events.into_iter().map(Into::into))
         })
     }
 
@@ -597,21 +574,15 @@ impl WorldStateView {
 
     /// Construct [`WorldStateView`] with specific [`Configuration`].
     #[inline]
-    pub fn from_configuration(
-        config: Configuration,
-        world: World,
-        events_sender: EventsSender,
-    ) -> Self {
-        let (new_block_notifier, _) = tokio::sync::watch::channel(());
-
+    pub fn from_configuration(config: Configuration, world: World) -> Self {
         Self {
             world,
             config,
             transactions: DashSet::new(),
             blocks: Arc::new(Chain::new()),
-            metrics: Arc::new(Metrics::default()),
-            new_block_notifier: Arc::new(new_block_notifier),
-            events_sender,
+            events_buffer: std::cell::RefCell::new(Vec::new()),
+            metric_tx_amounts: std::cell::Cell::new(0.0_f64),
+            metric_tx_amounts_counter: std::cell::Cell::new(0),
         }
     }
 
@@ -634,18 +605,18 @@ impl WorldStateView {
     /// Height of blockchain
     #[inline]
     pub fn height(&self) -> u64 {
-        self.metrics.block_height.get()
+        self.blocks.len() as u64
     }
 
     /// Initializes WSV with the blocks from block storage.
-    #[iroha_futures::telemetry_future]
-    pub async fn init(&self, blocks: Vec<VersionedCommittedBlock>) {
+    #[allow(clippy::expect_used)]
+    pub fn init(&self, blocks: Vec<VersionedCommittedBlock>) {
         for block in blocks {
-            #[allow(clippy::panic)]
-            if let Err(error) = self.apply(block).await {
-                error!(%error, "Initialization of WSV failed");
-                panic!("WSV initialization failed");
-            }
+            // TODO: If we cannot apply the block, it is preferred to
+            // signal failure and have the end user figure out what's
+            // wrong.
+            self.apply(block)
+                .expect("World state View failed to apply.");
         }
     }
 
@@ -670,61 +641,108 @@ impl WorldStateView {
         Ok(f(account))
     }
 
-    /// Get `Account` and pass it to closure to modify it
+    /// The same as [`Self::modify_account_multiple_events`] except closure `f` returns a single [`AccountEvent`].
     ///
     /// # Errors
-    /// Fails if there is no domain or account
+    /// Forward errors from [`Self::modify_account_multiple_events`]
     pub fn modify_account(
         &self,
         id: &AccountId,
         f: impl FnOnce(&mut Account) -> Result<AccountEvent, Error>,
     ) -> Result<(), Error> {
-        self.modify_domain(&id.domain_id, |domain| {
+        self.modify_account_multiple_events(id, move |account| f(account).map(std::iter::once))
+    }
+
+    /// Get [`Account`] and pass it to `closure` to modify it
+    ///
+    /// # Errors
+    /// - If there is no domain or account
+    /// - Forward errors from `f`
+    pub fn modify_account_multiple_events<I: IntoIterator<Item = AccountEvent>>(
+        &self,
+        id: &AccountId,
+        f: impl FnOnce(&mut Account) -> Result<I, Error>,
+    ) -> Result<(), Error> {
+        self.modify_domain_multiple_events(&id.domain_id, |domain| {
             let account = domain
                 .account_mut(id)
                 .ok_or_else(|| FindError::Account(id.clone()))?;
-            f(account).map(DomainEvent::Account)
+            f(account).map(|events| events.into_iter().map(DomainEvent::Account))
         })
     }
 
-    /// Get `Asset` by its id
+    /// The same as [`Self::modify_asset_multiple_events`] except closure `f` returns a single [`AssetEvent`].
     ///
     /// # Errors
-    /// Fails if there are no such asset or account
-    #[allow(clippy::missing_panics_doc)]
+    /// Forward errors from [`Self::modify_asset_multiple_events`]
     pub fn modify_asset(
         &self,
         id: &<Asset as Identifiable>::Id,
         f: impl FnOnce(&mut Asset) -> Result<AssetEvent, Error>,
     ) -> Result<(), Error> {
-        self.modify_account(&id.account_id, |account| {
+        self.modify_asset_multiple_events(id, move |asset| f(asset).map(std::iter::once))
+    }
+
+    /// Get [`Asset`] and pass it to `closure` to modify it.
+    /// If asset value hits 0 after modification, asset is removed from the [`Account`].
+    ///
+    /// # Errors
+    /// - If there are no such asset or account
+    /// - Forward errors from `f`
+    ///
+    /// # Panics
+    /// If removing asset from account failed
+    pub fn modify_asset_multiple_events<I: IntoIterator<Item = AssetEvent>>(
+        &self,
+        id: &<Asset as Identifiable>::Id,
+        f: impl FnOnce(&mut Asset) -> Result<I, Error>,
+    ) -> Result<(), Error> {
+        self.modify_account_multiple_events(&id.account_id, |account| {
             let asset = account
                 .asset_mut(id)
                 .ok_or_else(|| FindError::Asset(id.clone()))?;
 
-            let event_result = f(asset);
+            let events_result = f(asset);
             if asset.value().is_zero_value() {
                 assert!(account.remove_asset(id).is_some());
             }
 
-            event_result.map(AccountEvent::Asset)
+            events_result.map(|events| events.into_iter().map(AccountEvent::Asset))
         })
     }
 
-    /// Get `AssetDefinitionEntry` with an ability to modify it.
+    /// The same as [`Self::modify_asset_definition_multiple_events`] except closure `f` returns a single [`AssetDefinitionEvent`].
     ///
     /// # Errors
-    /// Fails if asset definition entry does not exist
+    /// Forward errors from [`Self::modify_asset_definition_entry_multiple_events`]
     pub fn modify_asset_definition_entry(
         &self,
         id: &<AssetDefinition as Identifiable>::Id,
         f: impl FnOnce(&mut AssetDefinitionEntry) -> Result<AssetDefinitionEvent, Error>,
     ) -> Result<(), Error> {
-        self.modify_domain(&id.domain_id, |domain| {
+        self.modify_asset_definition_entry_multiple_events(id, move |asset_definition| {
+            f(asset_definition).map(std::iter::once)
+        })
+    }
+
+    /// Get [`AssetDefinitionEntry`] and pass it to `closure` to modify it
+    ///
+    /// # Errors
+    /// - If asset definition entry does not exist
+    /// - Forward errors from `f`
+    pub fn modify_asset_definition_entry_multiple_events<
+        I: IntoIterator<Item = AssetDefinitionEvent>,
+    >(
+        &self,
+        id: &<AssetDefinition as Identifiable>::Id,
+        f: impl FnOnce(&mut AssetDefinitionEntry) -> Result<I, Error>,
+    ) -> Result<(), Error> {
+        self.modify_domain_multiple_events(&id.domain_id, |domain| {
             let asset_definition_entry = domain
                 .asset_definition_mut(id)
                 .ok_or_else(|| FindError::AssetDefinition(id.clone()))?;
-            f(asset_definition_entry).map(DomainEvent::AssetDefinition)
+            f(asset_definition_entry)
+                .map(|events| events.into_iter().map(DomainEvent::AssetDefinition))
         })
     }
 
@@ -752,14 +770,6 @@ impl WorldStateView {
             .asset_definition(asset_id)
             .ok_or_else(|| FindError::AssetDefinition(asset_id.clone()))
             .map(Clone::clone)
-    }
-
-    /// Returns receiving end of the mpsc channel through which
-    /// subscribers are notified when new block is added to the
-    /// blockchain(after block validation).
-    #[inline]
-    pub fn subscribe_to_new_block_notifications(&self) -> NewBlockNotificationReceiver {
-        self.new_block_notifier.subscribe()
     }
 
     /// Get all transactions
@@ -877,17 +887,29 @@ impl WorldStateView {
         &self.world.triggers
     }
 
-    /// Get trigger set and modify it with `f`
-    ///
-    /// Produces [`TriggerEvent`] event from `f`
+    /// The same as [`Self::modify_triggers_multiple_events`] except closure `f` returns a single `TriggerEvent`.
     ///
     /// # Errors
-    /// Throws `f` errors
+    /// Forward errors from [`Self::modify_triggers_multiple_events`]
     pub fn modify_triggers<F>(&self, f: F) -> Result<(), Error>
     where
         F: FnOnce(&TriggerSet) -> Result<TriggerEvent, Error>,
     {
-        self.modify_world(|world| f(&world.triggers).map(WorldEvent::Trigger))
+        self.modify_triggers_multiple_events(move |triggers| f(triggers).map(std::iter::once))
+    }
+
+    /// Get [`TriggerSet`] and pass it to `closure` to modify it
+    ///
+    /// # Errors
+    /// Forward errors from `f`
+    pub fn modify_triggers_multiple_events<I, F>(&self, f: F) -> Result<(), Error>
+    where
+        I: IntoIterator<Item = TriggerEvent>,
+        F: FnOnce(&TriggerSet) -> Result<I, Error>,
+    {
+        self.modify_world_multiple_events(|world| {
+            f(&world.triggers).map(|events| events.into_iter().map(WorldEvent::Trigger))
+        })
     }
 
     /// Execute trigger with `trigger_id` as id and `authority` as owner
@@ -904,20 +926,33 @@ impl WorldStateView {
         self.world
             .triggers
             .handle_execute_trigger_event(event.clone());
-        self.produce_event(event);
+        self.events_buffer.borrow_mut().push(event.into());
     }
 
-    /// Get chain of validators and modify it with `f`
-    ///
-    /// Produces [`PermissionValidatorEvent`] from `f`
+    /// The same as [`Self::modify_validator_multiple_events`] except closure `f` returns a single [`PermissionValidatorEvent`].
     ///
     /// # Errors
-    /// Throws `f` errors
+    /// Forward errors from [`Self::modify_validators_multiple_events`]
     pub fn modify_validators<F>(&self, f: F) -> Result<(), Error>
     where
         F: FnOnce(&crate::validator::Chain) -> Result<PermissionValidatorEvent, Error>,
     {
-        self.modify_world(|world| f(&world.validators).map(WorldEvent::PermissionValidator))
+        self.modify_validators_multiple_events(move |chain| f(chain).map(std::iter::once))
+    }
+
+    /// Get [`crate::validator::Chain`] and pass it to `closure` to modify it
+    ///
+    /// # Errors
+    /// Forward errors from `f`
+    pub fn modify_validators_multiple_events<I, F>(&self, f: F) -> Result<(), Error>
+    where
+        I: IntoIterator<Item = PermissionValidatorEvent>,
+        F: FnOnce(&crate::validator::Chain) -> Result<I, Error>,
+    {
+        self.modify_world_multiple_events(|world| {
+            f(&world.validators)
+                .map(|events| events.into_iter().map(WorldEvent::PermissionValidator))
+        })
     }
 
     /// Get constant view to the chain of validators.
@@ -934,8 +969,8 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
-    async fn get_blocks_after_hash() {
+    #[test]
+    fn get_blocks_after_hash() {
         const BLOCK_CNT: usize = 10;
 
         let mut block = ValidBlock::new_dummy().commit();
@@ -949,17 +984,18 @@ mod tests {
             }
             let block: VersionedCommittedBlock = block.clone().into();
             block_hashes.push(block.hash());
-            wsv.apply(block).await.unwrap();
+            wsv.apply(block).unwrap();
         }
 
         assert!(wsv
             .blocks_after_hash(block_hashes[6])
-            .map(|block| block.hash())
+            .iter()
+            .map(crate::block::VersionedCommittedBlock::hash)
             .eq(block_hashes.into_iter().skip(7)));
     }
 
-    #[tokio::test]
-    async fn get_blocks_from_height() {
+    #[test]
+    fn get_blocks_from_height() {
         const BLOCK_CNT: usize = 10;
 
         let mut block = ValidBlock::new_dummy().commit();
@@ -968,11 +1004,12 @@ mod tests {
         for i in 1..=BLOCK_CNT {
             block.header.height = i as u64;
             let block: VersionedCommittedBlock = block.clone().into();
-            wsv.apply(block).await.unwrap();
+            wsv.apply(block).unwrap();
         }
 
         assert_eq!(
             &wsv.blocks_from_height(8)
+                .iter()
                 .map(|block| block.header().height)
                 .collect::<Vec<_>>(),
             &[8, 9, 10]

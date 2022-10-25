@@ -7,25 +7,24 @@
 #![allow(clippy::std_instead_of_alloc)]
 
 #[cfg(not(feature = "std"))]
-use alloc::{alloc::alloc, boxed::Box, format, string::String, vec::Vec};
+use alloc::{boxed::Box, format, string::String, vec::Vec};
 use core::str::FromStr;
-#[cfg(feature = "std")]
-use std::alloc::alloc;
 
 use derive_more::{Display, FromStr};
 use getset::{Getters, MutGetters};
 use iroha_crypto::PublicKey;
 use iroha_data_model_derive::IdOrdEqHash;
-use iroha_ffi::{IntoFfi, TryFromReprC};
+use iroha_ffi::FfiType;
 use iroha_primitives::conststr::ConstString;
 use iroha_schema::IntoSchema;
 use parity_scale_codec::{Decode, Encode, Input};
 use serde::{Deserialize, Serialize};
+use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 use crate::{
     account::{Account, AccountsMap},
     asset::{AssetDefinition, AssetDefinitionEntry, AssetDefinitionsMap},
-    ffi::ffi_item,
+    ffi::declare_item,
     metadata::Metadata,
     HasMetadata, Identifiable, Name, ParseError, Registered,
 };
@@ -73,7 +72,7 @@ impl From<GenesisDomain> for Domain {
     }
 }
 
-ffi_item! {
+declare_item! {
     /// Builder which can be submitted in a transaction to create a new [`Domain`]
     #[derive(
         Debug,
@@ -84,11 +83,9 @@ ffi_item! {
         Encode,
         Deserialize,
         Serialize,
-        IntoFfi,
-        TryFromReprC,
+        FfiType,
         IntoSchema,
     )]
-    #[id(type = "<Domain as Identifiable>::Id")]
     #[display(fmt = "[{id}]")]
     pub struct NewDomain {
         /// The identification associated with the domain builder.
@@ -140,11 +137,6 @@ impl NewDomain {
         }
     }
 
-    /// Identification
-    pub(crate) fn id(&self) -> &<Domain as Identifiable>::Id {
-        &self.id
-    }
-
     /// Add [`logo`](IpfsPath) to the domain replacing previously defined value
     #[must_use]
     pub fn with_logo(mut self, logo: IpfsPath) -> Self {
@@ -160,7 +152,7 @@ impl NewDomain {
     }
 }
 
-ffi_item! {
+declare_item! {
     /// Named group of [`Account`] and [`Asset`](`crate::asset::Asset`) entities.
     #[derive(
         Debug,
@@ -173,18 +165,16 @@ ffi_item! {
         Encode,
         Deserialize,
         Serialize,
-        IntoFfi,
-        TryFromReprC,
+        FfiType,
         IntoSchema,
     )]
     #[cfg_attr(all(feature = "ffi_export", not(feature = "ffi_import")), iroha_ffi::ffi_export)]
     #[cfg_attr(feature = "ffi_import", iroha_ffi::ffi_import)]
     #[allow(clippy::multiple_inherent_impl)]
     #[display(fmt = "[{id}]")]
-    #[id(type = "Id")]
     pub struct Domain {
         /// Identification of this [`Domain`].
-        id: <Self as Identifiable>::Id,
+        id: Id,
         /// [`Account`]s of the domain.
         accounts: AccountsMap,
         /// [`Asset`](AssetDefinition)s defined of the `Domain`.
@@ -339,6 +329,7 @@ impl FromIterator<Domain> for crate::Value {
 /// Construct using [`FromStr::from_str`] method.
 #[derive(
     Debug,
+    Display,
     Clone,
     PartialEq,
     Eq,
@@ -346,9 +337,9 @@ impl FromIterator<Domain> for crate::Value {
     Ord,
     Hash,
     Encode,
-    Serialize,
-    IntoFfi,
-    TryFromReprC,
+    SerializeDisplay,
+    DeserializeFromStr,
+    FfiType,
     IntoSchema,
 )]
 pub struct IpfsPath(ConstString);
@@ -413,23 +404,6 @@ impl IpfsPath {
     }
 }
 
-impl<'de> Deserialize<'de> for IpfsPath {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[cfg(not(feature = "std"))]
-        use alloc::borrow::Cow;
-        #[cfg(feature = "std")]
-        use std::borrow::Cow;
-
-        use serde::de::Error as _;
-
-        let name = <Cow<str>>::deserialize(deserializer)?;
-        Self::from_str(&name).map_err(D::Error::custom)
-    }
-}
-
 impl Decode for IpfsPath {
     fn decode<I: Input>(input: &mut I) -> Result<Self, parity_scale_codec::Error> {
         let name = ConstString::decode(input)?;
@@ -450,10 +424,9 @@ impl Decode for IpfsPath {
     Hash,
     Decode,
     Encode,
-    Deserialize,
-    Serialize,
-    IntoFfi,
-    TryFromReprC,
+    DeserializeFromStr,
+    SerializeDisplay,
+    FfiType,
     IntoSchema,
 )]
 #[display(fmt = "{name}")]

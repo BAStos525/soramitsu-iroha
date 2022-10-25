@@ -3,35 +3,33 @@
 #![allow(clippy::std_instead_of_alloc)]
 
 #[cfg(not(feature = "std"))]
-use alloc::{alloc::alloc, boxed::Box, collections::btree_map, format, string::String, vec::Vec};
-use core::{cmp::Ordering, str::FromStr};
-#[cfg(feature = "std")]
-use std::alloc::alloc;
+use alloc::{boxed::Box, collections::btree_map, format, string::String, vec::Vec};
+use core::{cmp::Ordering, fmt, str::FromStr};
 #[cfg(feature = "std")]
 use std::collections::btree_map;
 
 use derive_more::Display;
 use getset::{Getters, MutGetters};
 use iroha_data_model_derive::IdOrdEqHash;
-use iroha_ffi::{IntoFfi, TryFromReprC};
+use iroha_ffi::FfiType;
 use iroha_macro::FromVariant;
 use iroha_primitives::{fixed, fixed::Fixed};
 use iroha_schema::IntoSchema;
 use parity_scale_codec::{Decode, Encode};
 use serde::{Deserialize, Serialize};
+use serde_with::{DeserializeFromStr, SerializeDisplay};
 use strum::EnumString;
 
 use crate::{
-    account::prelude::*, domain::prelude::*, ffi::ffi_item, metadata::Metadata, HasMetadata,
+    account::prelude::*, domain::prelude::*, ffi::declare_item, metadata::Metadata, HasMetadata,
     Identifiable, Name, ParseError, Registered, TryAsMut, TryAsRef, Value,
 };
 
-/// [`AssetsMap`] provides an API to work with collection of key ([`Id`]) - value
-/// ([`Asset`]) pairs.
+/// API to work with collections of [`Id`] : [`Asset`] mappings.
 pub type AssetsMap = btree_map::BTreeMap<<Asset as Identifiable>::Id, Asset>;
 
-/// [`AssetDefinitionsMap`] provides an API to work with collection of key ([`DefinitionId`]) - value
-/// (`AssetDefinition`) pairs.
+/// [`AssetDefinitionsMap`] provides an API to work with collection of key([`DefinitionId`])-value(`AssetDefinition`)
+/// pairs.
 pub type AssetDefinitionsMap =
     btree_map::BTreeMap<<AssetDefinition as Identifiable>::Id, AssetDefinitionEntry>;
 
@@ -49,7 +47,7 @@ pub enum MintabilityError {
 #[cfg(feature = "std")]
 impl std::error::Error for MintabilityError {}
 
-ffi_item! {
+declare_item! {
     /// An entry in [`AssetDefinitionsMap`].
     #[derive(
         Debug,
@@ -62,8 +60,7 @@ ffi_item! {
         Encode,
         Deserialize,
         Serialize,
-        IntoFfi,
-        TryFromReprC,
+        FfiType,
         IntoSchema,
     )]
     #[cfg_attr(all(feature = "ffi_export", not(feature = "ffi_import")), iroha_ffi::ffi_export)]
@@ -122,7 +119,7 @@ impl AssetDefinitionEntry {
     }
 }
 
-ffi_item! {
+declare_item! {
     /// Asset definition defines type of that asset.
     #[derive(
         Debug,
@@ -135,16 +132,14 @@ ffi_item! {
         Encode,
         Deserialize,
         Serialize,
-        IntoFfi,
-        TryFromReprC,
+        FfiType,
         IntoSchema,
     )]
     #[display(fmt = "{id} {value_type}{mintable}")]
     #[allow(clippy::multiple_inherent_impl)]
-    #[id(type = "DefinitionId")]
     pub struct AssetDefinition {
         /// An Identification of the [`AssetDefinition`].
-        id: <Self as Identifiable>::Id,
+        id: DefinitionId,
         /// Type of [`AssetValue`]
         #[getset(get = "pub")]
         value_type: AssetValueType,
@@ -179,8 +174,7 @@ impl HasMetadata for AssetDefinition {
     Encode,
     Deserialize,
     Serialize,
-    IntoFfi,
-    TryFromReprC,
+    FfiType,
     IntoSchema,
 )]
 #[repr(u8)]
@@ -197,7 +191,7 @@ pub enum Mintable {
     // TODO: Support more variants using bit-compacted tag, and `u32` mintability tokens.
 }
 
-ffi_item! {
+declare_item! {
     /// Asset represents some sort of commodity or value.
     /// All possible variants of [`Asset`] entity's components.
     #[derive(
@@ -210,19 +204,17 @@ ffi_item! {
         Encode,
         Deserialize,
         Serialize,
-        IntoFfi,
-        TryFromReprC,
+        FfiType,
         IntoSchema,
     )]
     #[cfg_attr(all(feature = "ffi_export", not(feature = "ffi_import")), iroha_ffi::ffi_export)]
     #[cfg_attr(feature = "ffi_import", iroha_ffi::ffi_import)]
     #[display(fmt = "{id}: {value}")]
     #[getset(get = "pub")]
-    #[id(type = "Id")]
     pub struct Asset {
         /// Component Identification.
         #[getset(skip)]
-        id: <Self as Identifiable>::Id,
+        id: Id,
         /// Asset's Quantity.
         value: AssetValue,
     }
@@ -243,8 +235,7 @@ ffi_item! {
     Encode,
     Deserialize,
     Serialize,
-    IntoFfi,
-    TryFromReprC,
+    FfiType,
     IntoSchema,
 )]
 #[repr(u8)]
@@ -270,16 +261,17 @@ pub enum AssetValueType {
     Clone,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
+    Hash,
     Decode,
     Encode,
     Deserialize,
     Serialize,
     FromVariant,
-    IntoFfi,
-    TryFromReprC,
+    FfiType,
     IntoSchema,
 )]
-#[repr(u8)]
 pub enum AssetValue {
     /// Asset's Quantity.
     #[display(fmt = "{_0}q")]
@@ -370,10 +362,9 @@ impl_try_as_for_asset_value! {
     Hash,
     Decode,
     Encode,
-    Deserialize,
-    Serialize,
-    IntoFfi,
-    TryFromReprC,
+    DeserializeFromStr,
+    SerializeDisplay,
+    FfiType,
     IntoSchema,
 )]
 #[display(fmt = "{name}#{domain_id}")]
@@ -384,10 +375,30 @@ pub struct DefinitionId {
     pub domain_id: <Domain as Identifiable>::Id,
 }
 
+/// Asset Definition Identification is represented by `name#domain_name` string.
+impl FromStr for DefinitionId {
+    type Err = ParseError;
+
+    fn from_str(string: &str) -> Result<Self, Self::Err> {
+        let mut split = string.split('#');
+        match (split.next(), split.next(), split.next()) {
+            (Some(""), _, _) => Err(ParseError {
+                reason: "Asset Definition ID cannot be empty",
+            }),
+            (Some(name), Some(domain_id), None) if !domain_id.is_empty() => Ok(Self {
+                name: name.parse()?,
+                domain_id: domain_id.parse()?,
+            }),
+            _ => Err(ParseError {
+                reason: "Asset Definition ID should have format `asset#domain`",
+            }),
+        }
+    }
+}
+
 /// Identification of an Asset's components include Entity Id ([`Asset::Id`]) and [`Account::Id`].
 #[derive(
     Debug,
-    Display,
     Clone,
     PartialEq,
     Eq,
@@ -396,13 +407,11 @@ pub struct DefinitionId {
     Hash,
     Decode,
     Encode,
-    Deserialize,
-    Serialize,
-    IntoFfi,
-    TryFromReprC,
+    DeserializeFromStr,
+    SerializeDisplay,
+    FfiType,
     IntoSchema,
 )]
-#[display(fmt = "{definition_id}@{account_id}")] // TODO: change this?
 pub struct Id {
     /// Entity Identification.
     pub definition_id: <AssetDefinition as Identifiable>::Id,
@@ -410,7 +419,55 @@ pub struct Id {
     pub account_id: <Account as Identifiable>::Id,
 }
 
-ffi_item! {
+impl fmt::Display for Id {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.definition_id.domain_id == self.account_id.domain_id {
+            write!(f, "{}##{}", self.definition_id.name, self.account_id)
+        } else {
+            write!(f, "{}#{}", self.definition_id, self.account_id)
+        }
+    }
+}
+
+/// Asset Identification, represented by
+/// `name#asset_domain#account_name@account_domain`. If the domains of
+/// the asset and account match, the name can be shortened to
+/// `asset##account@domain`.
+impl FromStr for Id {
+    type Err = ParseError;
+
+    fn from_str(string: &str) -> Result<Self, Self::Err> {
+        if let Some((asset_definition_candidate, account_id_candidate)) = string.rsplit_once('#') {
+            let account_id: <Account as Identifiable>::Id = account_id_candidate.parse()
+                .map_err(|_err| ParseError {
+                    reason: "Failed to parse the `account_id` part of the `asset_id`. Please ensure that it has the form `account@domain`"
+                })?;
+            let definition_id = {
+                if let Ok(def_id) = asset_definition_candidate.parse() {
+                    def_id
+                } else if let Some((name, "")) = asset_definition_candidate.rsplit_once('#') {
+                    DefinitionId::new(name.parse()
+                                      .map_err(|_e| ParseError {
+                                          reason: "The `name` part of the `definition_id` part of the `asset_id` failed to parse as a valid `Name`. You might have forbidden characters like `#` or `@` in the first part."
+                                      })?,
+                                      account_id.domain_id.clone())
+                } else {
+                    return Err(ParseError { reason: "The `definition_id` part of the `asset_id` failed to parse. Ensure that you have it in the right format: `name#domain_of_asset#account_name@domain_of_account`." });
+                }
+            };
+            Ok(Self {
+                definition_id,
+                account_id,
+            })
+        } else {
+            Err(ParseError {
+                reason: "The `AssetId` did not contain the `#` character. ",
+            })
+        }
+    }
+}
+
+declare_item! {
     /// Builder which can be submitted in a transaction to create a new [`AssetDefinition`]
     #[derive(
         Debug,
@@ -421,11 +478,9 @@ ffi_item! {
         Encode,
         Deserialize,
         Serialize,
-        IntoFfi,
-        TryFromReprC,
+        FfiType,
         IntoSchema,
     )]
-    #[id(type = "<AssetDefinition as Identifiable>::Id")]
     #[display(fmt = "{id} {mintable}{value_type}")]
     pub struct NewAssetDefinition {
         id: <AssetDefinition as Identifiable>::Id,
@@ -471,12 +526,6 @@ impl NewAssetDefinition {
             mintable: Mintable::Infinitely,
             metadata: Metadata::default(),
         }
-    }
-
-    /// Identification
-    #[inline]
-    pub(crate) fn id(&self) -> &<AssetDefinition as Identifiable>::Id {
-        &self.id
     }
 
     /// Set mintability to [`Mintable::Once`]
@@ -638,30 +687,6 @@ impl FromIterator<AssetDefinition> for Value {
             .map(Into::into)
             .collect::<Vec<Self>>()
             .into()
-    }
-}
-
-/// Asset Identification is represented by `name#domain_name` string.
-impl FromStr for DefinitionId {
-    type Err = ParseError;
-
-    fn from_str(string: &str) -> Result<Self, Self::Err> {
-        if string.is_empty() {
-            return Err(ParseError {
-                reason: "`DefinitionId` cannot be empty",
-            });
-        }
-
-        let vector: Vec<&str> = string.split('#').collect();
-        if vector.len() != 2 {
-            return Err(ParseError {
-                reason: "Asset definition ID should have format `name#domain_name`",
-            });
-        }
-        Ok(Self {
-            name: Name::from_str(vector[0])?,
-            domain_id: DomainId::from_str(vector[1])?,
-        })
     }
 }
 

@@ -8,13 +8,10 @@ use iroha_crypto::prelude::*;
 use iroha_data_model::{prelude::*, transaction};
 use serde::{Deserialize, Serialize};
 
-/// Default Amount of time peer waits for the `CreatedBlock` message
-/// after getting a `TransactionReceipt`.
+/// Default Amount of time peer waits for transactions before creating a block.
 pub const DEFAULT_BLOCK_TIME_MS: u64 = 1000;
-/// Default amount of time Peer waits for `CommitMessage` from the proxy tail.
+/// Default amount of time allocated for voting on a block before a peer can ask for a view change.
 pub const DEFAULT_COMMIT_TIME_LIMIT_MS: u64 = 2000;
-/// Default amount of time Peer waits for `TxReceipt` from the leader.
-pub const DEFAULT_TX_RECEIPT_TIME_LIMIT_MS: u64 = 500;
 const DEFAULT_ACTOR_CHANNEL_CAPACITY: u32 = 100;
 const DEFAULT_GOSSIP_PERIOD_MS: u64 = 1000;
 const DEFAULT_GOSSIP_BATCH_SIZE: u32 = 500;
@@ -24,13 +21,12 @@ view! {
     /// `Sumeragi` configuration.
     /// [`struct@Configuration`] provides an ability to define parameters such as `BLOCK_TIME_MS`
     /// and a list of `TRUSTED_PEERS`.
-    #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Documented, Proxy, LoadFromEnv)]
-    #[serde(default)]
+    #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Proxy, Documented, LoadFromEnv)]
     #[serde(rename_all = "UPPERCASE")]
     #[config(env_prefix = "SUMERAGI_")]
     pub struct Configuration {
         /// The key pair consisting of a private and a public key.
-        #[serde(skip)]
+        //TODO: consider putting a `#[serde(skip)]` on the proxy struct here
         #[view(ignore)]
         pub key_pair: KeyPair,
         /// Current Peer Identification.
@@ -41,8 +37,6 @@ view! {
         pub trusted_peers: TrustedPeers,
         /// The period of time a peer waits for `CommitMessage` from the proxy tail.
         pub commit_time_limit_ms: u64,
-        /// The period of time a peer waits for `TxReceipt` from the leader.
-        pub tx_receipt_time_limit_ms: u64,
         /// The limits to which transactions must adhere
         pub transaction_limits: TransactionLimits,
         /// Buffer capacity of actor's MPSC channel
@@ -54,69 +48,50 @@ view! {
     }
 }
 
-impl Default for Configuration {
+impl Default for ConfigurationProxy {
     fn default() -> Self {
         Self {
-            key_pair: Self::placeholder_keypair(),
-            peer_id: Self::placeholder_peer_id(),
-            trusted_peers: Self::placeholder_trusted_peers(),
-            block_time_ms: DEFAULT_BLOCK_TIME_MS,
-            commit_time_limit_ms: DEFAULT_COMMIT_TIME_LIMIT_MS,
-            tx_receipt_time_limit_ms: DEFAULT_TX_RECEIPT_TIME_LIMIT_MS,
-            transaction_limits: TransactionLimits {
+            key_pair: None,
+            peer_id: None,
+            trusted_peers: None,
+            block_time_ms: Some(DEFAULT_BLOCK_TIME_MS),
+            commit_time_limit_ms: Some(DEFAULT_COMMIT_TIME_LIMIT_MS),
+            transaction_limits: Some(TransactionLimits {
                 max_instruction_number: transaction::DEFAULT_MAX_INSTRUCTION_NUMBER,
                 max_wasm_size_bytes: transaction::DEFAULT_MAX_WASM_SIZE_BYTES,
-            },
-            actor_channel_capacity: DEFAULT_ACTOR_CHANNEL_CAPACITY,
-            gossip_batch_size: DEFAULT_GOSSIP_BATCH_SIZE,
-            gossip_period_ms: DEFAULT_GOSSIP_PERIOD_MS,
+            }),
+            actor_channel_capacity: Some(DEFAULT_ACTOR_CHANNEL_CAPACITY),
+            gossip_batch_size: Some(DEFAULT_GOSSIP_BATCH_SIZE),
+            gossip_period_ms: Some(DEFAULT_GOSSIP_PERIOD_MS),
         }
+    }
+}
+impl ConfigurationProxy {
+    /// To be used for proxy finalisation. Should only be
+    /// used if no peers are present.
+    ///
+    /// # Panics
+    /// The [`peer_id`] field of [`Self`]
+    /// has not been initialized prior to calling this method.
+    pub fn insert_self_as_trusted_peers(&mut self) {
+        let mut peers = HashSet::new();
+        #[allow(clippy::expect_used)]
+        let peer_id = self
+            .peer_id
+            .clone()
+            .expect("Insertion of `self` as `trusted_peers` implies that `peer_id` field should be initialized");
+        peers.insert(peer_id);
+        self.trusted_peers = Some(TrustedPeers { peers });
     }
 }
 
 impl Configuration {
-    /// Key-pair used by default for demo purposes
-    #[allow(clippy::expect_used)]
-    fn placeholder_keypair() -> KeyPair {
-        let public_key = "ed01201c61faf8fe94e253b93114240394f79a607b7fa55f9e5a41ebec74b88055768b"
-            .parse()
-            .expect("Public key not in mulithash format");
-        let private_key = PrivateKey::from_hex(
-            Algorithm::Ed25519,
-            "282ed9f3cf92811c3818dbc4ae594ed59dc1a2f78e4241e31924e101d6b1fb831c61faf8fe94e253b93114240394f79a607b7fa55f9e5a41ebec74b88055768b"
-        ).expect("Private key not hex encoded");
-
-        KeyPair::new(public_key, private_key).expect("Key pair mismatch")
-    }
-
-    fn placeholder_peer_id() -> PeerId {
-        let (public_key, _) = Self::placeholder_keypair().into();
-
-        PeerId {
-            address: "127.0.0.1:1337".to_owned(),
-            public_key,
-        }
-    }
-
-    fn placeholder_trusted_peers() -> TrustedPeers {
-        let mut peers = HashSet::new();
-        peers.insert(Self::placeholder_peer_id());
-        TrustedPeers { peers }
-    }
-
-    /// Set `trusted_peers` configuration parameter. Will overwrite
-    /// existing `trusted_peers` but does not check for duplication.
-    #[inline]
-    pub fn set_trusted_peers(&mut self, trusted_peers: Vec<PeerId>) {
-        self.trusted_peers.peers = trusted_peers.into_iter().collect();
-    }
-
     /// Time estimation from receiving a transaction to storing it in
     /// a block on all peers for the "sunny day" scenario.
     #[inline]
     #[must_use]
     pub const fn pipeline_time_ms(&self) -> u64 {
-        self.tx_receipt_time_limit_ms + self.block_time_ms + self.commit_time_limit_ms
+        self.block_time_ms + self.commit_time_limit_ms
     }
 }
 
@@ -125,6 +100,7 @@ impl Configuration {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "UPPERCASE")]
 #[serde(transparent)]
+#[repr(transparent)]
 pub struct TrustedPeers {
     /// Optional list of predefined trusted peers. Must contain unique
     /// entries. Custom deserializer raises error if duplicates found.
@@ -192,5 +168,42 @@ impl TrustedPeers {
         Ok(TrustedPeers {
             peers: trusted_peers,
         })
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    prop_compose! {
+        pub fn arb_proxy()
+            (key_pair in Just(None),
+             peer_id in Just(None),
+             block_time_ms in prop::option::of(Just(DEFAULT_BLOCK_TIME_MS)),
+             trusted_peers in Just(None),
+             commit_time_limit_ms in prop::option::of(Just(DEFAULT_COMMIT_TIME_LIMIT_MS)),
+             transaction_limits in prop::option::of(Just(TransactionLimits {
+                max_instruction_number: transaction::DEFAULT_MAX_INSTRUCTION_NUMBER,
+                max_wasm_size_bytes: transaction::DEFAULT_MAX_WASM_SIZE_BYTES,
+            })),
+             actor_channel_capacity in prop::option::of(Just(DEFAULT_ACTOR_CHANNEL_CAPACITY)),
+             gossip_batch_size in prop::option::of(Just(DEFAULT_GOSSIP_BATCH_SIZE)),
+             gossip_period_ms in prop::option::of(Just(DEFAULT_GOSSIP_PERIOD_MS)),
+            )
+            -> ConfigurationProxy {
+            ConfigurationProxy {
+                key_pair,
+                peer_id,
+                block_time_ms,
+                trusted_peers,
+                commit_time_limit_ms,
+                transaction_limits,
+                actor_channel_capacity,
+                gossip_batch_size,
+                gossip_period_ms
+            }
+        }
     }
 }

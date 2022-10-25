@@ -15,17 +15,17 @@ use eyre::{eyre, Result, WrapErr};
 use iroha_actor::Addr;
 use iroha_config::genesis::Configuration;
 use iroha_crypto::{KeyPair, PublicKey};
-use iroha_data_model::{asset::AssetDefinition, prelude::*};
+use iroha_data_model::{
+    asset::AssetDefinition,
+    prelude::{Metadata, *},
+};
 use iroha_primitives::small::{smallvec, SmallVec};
 use iroha_schema::prelude::*;
 use serde::{Deserialize, Serialize};
 use tokio::{time, time::Duration};
 
 use crate::{
-    sumeragi::{
-        fault::{FaultInjection, SumeragiWithFault},
-        network_topology::{GenesisBuilder as GenesisTopologyBuilder, Topology},
-    },
+    sumeragi::network_topology::{GenesisBuilder as GenesisTopologyBuilder, Topology},
     tx::VersionedAcceptedTransaction,
     IrohaNetwork,
 };
@@ -63,32 +63,6 @@ pub trait GenesisNetworkTrait:
         network_topology: Topology,
         network: Addr<IrohaNetwork>,
     ) -> Result<Topology>;
-
-    // FIXME: Having `ctx` reference and `sumaregi` reference here is
-    // not ideal.  The way it is currently designed, this function is
-    // called from sumeragi and then calls sumeragi, while being in an
-    // unrelated module.  This needs to be restructured.
-
-    /// Submits genesis transactions.
-    ///
-    /// # Errors
-    /// Returns error if waiting for peers or genesis round itself fails
-    async fn submit_transactions<F: FaultInjection>(
-        &self,
-        sumeragi: &mut SumeragiWithFault<Self, F>,
-        network: Addr<IrohaNetwork>,
-        ctx: &mut iroha_actor::Context<SumeragiWithFault<Self, F>>,
-    ) -> Result<()> {
-        iroha_logger::debug!("Starting submit genesis");
-        let genesis_topology = self
-            .wait_for_peers(sumeragi.peer_id.clone(), sumeragi.topology.clone(), network)
-            .await?;
-        time::sleep(Duration::from_millis(self.genesis_submission_delay_ms())).await;
-        iroha_logger::info!("Initializing iroha using the genesis block.");
-        sumeragi
-            .start_genesis_round(self.deref().clone(), genesis_topology, ctx)
-            .await
-    }
 
     /// See [`Configuration`] docs.
     fn genesis_submission_delay_ms(&self) -> u64;
@@ -260,6 +234,8 @@ pub struct RawGenesisBlock {
 }
 
 impl RawGenesisBlock {
+    const WARN_ON_GENESIS_GTE: u64 = 1024 * 1024 * 1024; // 1Gb
+
     /// Construct a genesis block from a `.json` file at the specified
     /// path-like object.
     ///
@@ -267,6 +243,13 @@ impl RawGenesisBlock {
     /// If file not found or deserialization from file fails.
     pub fn from_path<P: AsRef<Path> + Debug>(path: P) -> Result<Self> {
         let file = File::open(&path).wrap_err(format!("Failed to open {:?}", &path))?;
+        let size = file
+            .metadata()
+            .wrap_err("Unable to access genesis file metadata")?
+            .len();
+        if size >= Self::WARN_ON_GENESIS_GTE {
+            iroha_logger::warn!(%size, threshold = %Self::WARN_ON_GENESIS_GTE, "Genesis is quite large, it will take some time to apply it");
+        }
         let reader = BufReader::new(file);
         serde_json::from_reader(reader).wrap_err(format!(
             "Failed to deserialize raw genesis block from {:?}",
@@ -294,7 +277,7 @@ pub struct GenesisTransaction {
 }
 
 impl GenesisTransaction {
-    /// Convert `GenesisTransaction` into `AcceptedTransaction` with signature
+    /// Convert [`GenesisTransaction`] into [`AcceptedTransaction`] with signature
     ///
     /// # Errors
     /// Fails if signing or accepting fails
@@ -338,25 +321,41 @@ pub struct RawGenesisBlockBuilder {
 /// `Domain` subsection of the `RawGenesisBlockBuilder`. Makes
 /// it easier to create accounts and assets without needing to
 /// provide a `DomainId`.
+#[must_use]
 pub struct RawGenesisDomainBuilder {
     transaction: GenesisTransaction,
     domain_id: DomainId,
 }
 
 impl RawGenesisBlockBuilder {
-    /// Create a `RawGenesisBlockBuilder`.
+    /// Initiate the building process.
     pub fn new() -> Self {
+        // Do not add `impl Default`. While it can technically be
+        // regarded as a default constructor, this builder should not
+        // be used in contexts where `Default::default()` is likely to
+        // be called.
         RawGenesisBlockBuilder {
             transaction: GenesisTransaction {
                 isi: SmallVec::new(),
             },
         }
     }
+
     /// Create a domain and return a domain builder which can
     /// be used to create assets and accounts.
-    pub fn domain(mut self, domain_name: Name) -> RawGenesisDomainBuilder {
+    pub fn domain(self, domain_name: Name) -> RawGenesisDomainBuilder {
+        self.domain_with_metadata(domain_name, Metadata::default())
+    }
+
+    /// Create a domain and return a domain builder which can
+    /// be used to create assets and accounts.
+    pub fn domain_with_metadata(
+        mut self,
+        domain_name: Name,
+        metadata: Metadata,
+    ) -> RawGenesisDomainBuilder {
         let domain_id = DomainId::new(domain_name);
-        let new_domain = Domain::new(domain_id.clone());
+        let new_domain = Domain::new(domain_id.clone()).with_metadata(metadata);
         self.transaction
             .isi
             .push(Instruction::from(RegisterBox::new(new_domain)));
@@ -365,6 +364,7 @@ impl RawGenesisBlockBuilder {
             domain_id,
         }
     }
+
     /// Finish building and produce a `RawGenesisBlock`.
     pub fn build(self) -> RawGenesisBlock {
         RawGenesisBlock {
@@ -383,9 +383,8 @@ impl RawGenesisDomainBuilder {
     }
 
     /// Add an account to this domain without a public key.
-    /// Should only be used for testing.
-    #[must_use]
-    pub fn with_account_without_public_key(mut self, account_name: Name) -> Self {
+    #[cfg(test)]
+    pub fn account_without_public_key(mut self, account_name: Name) -> Self {
         let account_id = AccountId::new(account_name, self.domain_id.clone());
         self.transaction
             .isi
@@ -394,17 +393,26 @@ impl RawGenesisDomainBuilder {
     }
 
     /// Add an account to this domain
-    #[must_use]
-    pub fn with_account(mut self, account_name: Name, public_key: PublicKey) -> Self {
+    pub fn account(self, account_name: Name, public_key: PublicKey) -> Self {
+        self.account_with_metadata(account_name, public_key, Metadata::default())
+    }
+
+    /// Add an account (having provided `metadata`) to this domain.
+    pub fn account_with_metadata(
+        mut self,
+        account_name: Name,
+        public_key: PublicKey,
+        metadata: Metadata,
+    ) -> Self {
         let account_id = AccountId::new(account_name, self.domain_id.clone());
-        let register = RegisterBox::new(Account::new(account_id, [public_key]));
+        let register =
+            RegisterBox::new(Account::new(account_id, [public_key]).with_metadata(metadata));
         self.transaction.isi.push(register.into());
         self
     }
 
     /// Add [`AssetDefinition`] to current domain.
-    #[must_use]
-    pub fn with_asset(mut self, asset_name: Name, asset_value_type: AssetValueType) -> Self {
+    pub fn asset(mut self, asset_name: Name, asset_value_type: AssetValueType) -> Self {
         let asset_definition_id = AssetDefinitionId::new(asset_name, self.domain_id.clone());
         let asset_definition = match asset_value_type {
             AssetValueType::Quantity => AssetDefinition::quantity(asset_definition_id),
@@ -421,9 +429,12 @@ impl RawGenesisDomainBuilder {
 
 #[cfg(test)]
 mod tests {
+    use iroha_config::{base::proxy::Builder, genesis::ConfigurationProxy};
+
     use super::*;
 
     #[test]
+    #[allow(clippy::expect_used)]
     fn load_default_genesis_block() -> Result<()> {
         let (public_key, private_key) = KeyPair::generate()?.into();
         let tx_limits = TransactionLimits {
@@ -433,11 +444,15 @@ mod tests {
         let _genesis_block = GenesisNetwork::from_configuration(
             true,
             RawGenesisBlock::default(),
-            Some(&Configuration {
-                account_public_key: public_key,
-                account_private_key: Some(private_key),
-                ..Configuration::default()
-            }),
+            Some(
+                &ConfigurationProxy {
+                    account_public_key: Some(public_key),
+                    account_private_key: Some(Some(private_key)),
+                    ..ConfigurationProxy::default()
+                }
+                .build()
+                .expect("Default genesis config should build when provided the `public key`"),
+            ),
             &tx_limits,
         )?;
         Ok(())
@@ -451,15 +466,15 @@ mod tests {
 
         genesis_builder = genesis_builder
             .domain("wonderland".parse().unwrap())
-            .with_account_without_public_key("alice".parse().unwrap())
-            .with_account_without_public_key("bob".parse().unwrap())
+            .account_without_public_key("alice".parse().unwrap())
+            .account_without_public_key("bob".parse().unwrap())
             .finish_domain()
             .domain("tulgey_wood".parse().unwrap())
-            .with_account_without_public_key("Cheshire_Cat".parse().unwrap())
+            .account_without_public_key("Cheshire_Cat".parse().unwrap())
             .finish_domain()
             .domain("meadow".parse().unwrap())
-            .with_account("Mad_Hatter".parse().unwrap(), public_key.parse().unwrap())
-            .with_asset("hats".parse().unwrap(), AssetValueType::BigQuantity)
+            .account("Mad_Hatter".parse().unwrap(), public_key.parse().unwrap())
+            .asset("hats".parse().unwrap(), AssetValueType::BigQuantity)
             .finish_domain();
 
         let finished_genesis_block = genesis_builder.build();

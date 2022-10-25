@@ -6,13 +6,17 @@
     clippy::std_instead_of_core,
     clippy::std_instead_of_alloc
 )]
-use std::io::{stdout, BufWriter, Write};
+use std::{
+    io::{stdout, BufWriter, Write},
+    str::FromStr as _,
+};
 
 use clap::{ArgGroup, StructOpt};
 use color_eyre::eyre::WrapErr as _;
-use iroha_config::iroha::Configuration;
+use iroha_data_model::prelude::*;
 
-pub type Outcome = color_eyre::Result<()>;
+/// Outcome shorthand used throughout this crate
+pub(crate) type Outcome = color_eyre::Result<()>;
 
 // The reason for hard-coding this default is to ensure that the
 // algorithm is matched to the public key. If you need to change
@@ -45,8 +49,10 @@ pub enum Args {
     Crypto(Box<crypto::Args>),
     /// Generate the schema used for code generation in Iroha SDKs
     Schema(schema::Args),
-    /// Generate the default genesis block that is used in tests
+    /// Generate the genesis block that is used in tests
     Genesis(genesis::Args),
+    /// Generate the default client configuration
+    Client(client::Args),
     /// Generate a Markdown reference of configuration parameters
     Docs(Box<docs::Args>),
     /// Generate a list of predefined permission tokens and their parameters
@@ -61,6 +67,7 @@ impl<T: Write> RunArgs<T> for Args {
             Crypto(args) => args.run(writer),
             Schema(args) => args.run(writer),
             Genesis(args) => args.run(writer),
+            Client(args) => args.run(writer),
             Docs(args) => args.run(writer),
             Tokens(args) => args.run(writer),
         }
@@ -166,11 +173,209 @@ mod schema {
 }
 
 mod genesis {
+    use clap::{Parser, Subcommand};
     use iroha_core::{
         genesis::{RawGenesisBlock, RawGenesisBlockBuilder},
         tx::{AssetValueType, MintBox, RegisterBox},
     };
-    use iroha_permissions_validators::public_blockchain;
+    use iroha_data_model::{
+        metadata::Limits,
+        prelude::{AssetId, Value},
+        IdBox,
+    };
+    use iroha_permissions_validators::public_blockchain::{
+        self,
+        key_value::{CanRemoveKeyValueInUserMetadata, CanSetKeyValueInUserMetadata},
+    };
+
+    use super::*;
+
+    #[derive(Parser, Debug, Clone, Copy)]
+    pub struct Args {
+        #[clap(subcommand)]
+        mode: Option<Mode>,
+    }
+
+    #[derive(Subcommand, Debug, Clone, Copy, Default)]
+    pub enum Mode {
+        /// Generate default genesis
+        #[default]
+        Default,
+        /// Generate synthetic genesis with specified number of domains, accounts and assets.
+        Synthetic {
+            /// Number of domains in synthetic genesis.
+            #[clap(long, default_value_t)]
+            domains: u64,
+            /// Number of accounts per domains in synthetic genesis.
+            /// Total number of  accounts would be `domains * assets_per_domain`.
+            #[clap(long, default_value_t)]
+            accounts_per_domain: u64,
+            /// Number of assets per domains in synthetic genesis.
+            /// Total number of assets would be `domains * assets_per_domain`.
+            #[clap(long, default_value_t)]
+            assets_per_domain: u64,
+        },
+    }
+
+    impl<T: Write> RunArgs<T> for Args {
+        fn run(self, writer: &mut BufWriter<T>) -> Outcome {
+            let genesis = match self.mode.unwrap_or_default() {
+                Mode::Default => generate_default(),
+                Mode::Synthetic {
+                    domains,
+                    accounts_per_domain,
+                    assets_per_domain,
+                } => generate_synthetic(domains, accounts_per_domain, assets_per_domain),
+            }?;
+            writeln!(writer, "{}", serde_json::to_string_pretty(&genesis)?)
+                .wrap_err("Failed to write.")
+        }
+    }
+
+    pub fn generate_default() -> color_eyre::Result<RawGenesisBlock> {
+        let mut meta = Metadata::new();
+        meta.insert_with_limits(
+            "key".parse()?,
+            "value".to_owned().into(),
+            Limits::new(1024, 1024),
+        )?;
+
+        let mut result = RawGenesisBlockBuilder::new()
+            .domain_with_metadata("wonderland".parse()?, meta.clone())
+            .account_with_metadata(
+                "alice".parse()?,
+                crate::DEFAULT_PUBLIC_KEY.parse()?,
+                meta.clone(),
+            )
+            .account_with_metadata("bob".parse()?, crate::DEFAULT_PUBLIC_KEY.parse()?, meta) // TODO: This should fail under SS58
+            .asset("rose".parse()?, AssetValueType::Quantity)
+            .finish_domain()
+            .domain("garden_of_live_flowers".parse()?)
+            .account("carpenter".parse()?, crate::DEFAULT_PUBLIC_KEY.parse()?)
+            .asset("cabbage".parse()?, AssetValueType::Quantity)
+            .finish_domain()
+            .build();
+
+        let mint = MintBox::new(
+            Value::U32(13_u32),
+            IdBox::AssetId(AssetId::new(
+                "rose#wonderland".parse()?,
+                "alice@wonderland".parse()?,
+            )),
+        );
+        let mint_cabbage = MintBox::new(
+            Value::U32(44),
+            IdBox::AssetId(AssetId::new(
+                "cabbage#garden_of_live_flowers".parse()?,
+                "alice@wonderland".parse()?,
+            )),
+        );
+        let token = PermissionToken::new("allowed_to_do_stuff".parse()?);
+
+        let register_permission = RegisterBox::new(PermissionTokenDefinition::new(
+            token.definition_id().clone(),
+        ));
+        let register_role = RegisterBox::new(
+            Role::new("staff_that_does_stuff_in_genesis".parse()?).add_permission(token.clone()),
+        );
+
+        let register_user_metadata_access = RegisterBox::new(
+            Role::new("USER_METADATA_ACCESS".parse()?)
+                .add_permission(CanSetKeyValueInUserMetadata::new(
+                    "alice@wonderland".parse()?,
+                ))
+                .add_permission(CanRemoveKeyValueInUserMetadata::new(
+                    "alice@wonderland".parse()?,
+                )),
+        );
+        let alice_id = <Account as Identifiable>::Id::from_str("alice@wonderland")?;
+        let grant_permission = GrantBox::new(token, alice_id);
+
+        result.transactions[0].isi.extend(
+            public_blockchain::default_permission_token_definitions()
+                .into_iter()
+                .map(|token_definition| RegisterBox::new(token_definition.clone()).into()),
+        );
+        result.transactions[0].isi.push(mint.into());
+        result.transactions[0].isi.push(mint_cabbage.into());
+        result.transactions[0].isi.push(register_permission.into());
+        result.transactions[0]
+            .isi
+            .push(register_user_metadata_access.into());
+        result.transactions[0].isi.push(grant_permission.into());
+        result.transactions[0].isi.push(register_role.into());
+        Ok(result)
+    }
+
+    fn generate_synthetic(
+        domains: u64,
+        accounts_per_domain: u64,
+        assets_per_domain: u64,
+    ) -> color_eyre::Result<RawGenesisBlock> {
+        // Add default `Domain` and `Account` to still be able to query
+        let mut builder = RawGenesisBlockBuilder::new()
+            .domain("wonderland".parse()?)
+            .account("alice".parse()?, crate::DEFAULT_PUBLIC_KEY.parse()?)
+            .finish_domain();
+
+        for domain in 0..domains {
+            let mut domain_builder = builder.domain(format!("domain_{domain}").parse()?);
+
+            for account in 0..accounts_per_domain {
+                let (public_key, _) = iroha_crypto::KeyPair::generate()?.into();
+                domain_builder =
+                    domain_builder.account(format!("account_{account}").parse()?, public_key);
+            }
+
+            for asset in 0..assets_per_domain {
+                domain_builder = domain_builder
+                    .asset(format!("asset_{asset}").parse()?, AssetValueType::Quantity);
+            }
+
+            builder = domain_builder.finish_domain();
+        }
+        let mut genesis = builder.build();
+
+        let mints = {
+            let mut acc = Vec::new();
+            for domain in 0..domains {
+                for account in 0..accounts_per_domain {
+                    for asset in 0..assets_per_domain {
+                        let mint = MintBox::new(
+                            Value::U32(13_u32),
+                            IdBox::AssetId(AssetId::new(
+                                format!("asset_{asset}#domain_{domain}").parse()?,
+                                format!("account_{account}@domain_{domain}").parse()?,
+                            )),
+                        );
+                        acc.push(mint);
+                    }
+                }
+            }
+            acc
+        }
+        .into_iter()
+        .map(Into::into);
+
+        genesis.transactions[0].isi.extend(
+            public_blockchain::default_permission_token_definitions()
+                .into_iter()
+                .map(|token_definition| RegisterBox::new(token_definition.clone()).into()),
+        );
+        genesis.transactions[0].isi.extend(mints);
+        Ok(genesis)
+    }
+}
+
+mod client {
+    use std::str::FromStr as _;
+
+    use iroha_config::{
+        client::{BasicAuth, ConfigurationProxy, WebLogin},
+        torii::{uri::DEFAULT_API_URL, DEFAULT_TORII_TELEMETRY_URL},
+    };
+    use iroha_crypto::{Algorithm, PrivateKey, PublicKey};
+    use iroha_primitives::small::SmallStr;
 
     use super::*;
 
@@ -179,37 +384,27 @@ mod genesis {
 
     impl<T: Write> RunArgs<T> for Args {
         fn run(self, writer: &mut BufWriter<T>) -> Outcome {
-            writeln!(
-                writer,
-                "{}",
-                serde_json::to_string_pretty(&generate_default()?)?
-            )
-            .wrap_err("Failed to write.")
+            let config = ConfigurationProxy {
+                torii_api_url: Some(SmallStr::from_str(DEFAULT_API_URL)),
+                torii_telemetry_url: Some(SmallStr::from_str(DEFAULT_TORII_TELEMETRY_URL)),
+                account_id: Some("alice@wonderland".parse()?),
+                basic_auth: Some(Some(BasicAuth {
+                    web_login: WebLogin::new("mad_hatter")?,
+                    password: SmallStr::from_str("ilovetea"),
+                })),
+                public_key: Some(PublicKey::from_str(
+                    "ed01207233bfc89dcbd68c19fde6ce6158225298ec1131b6a130d1aeb454c1ab5183c0",
+                )?),
+                private_key: Some(PrivateKey::from_hex(
+                    Algorithm::Ed25519,
+                    "9ac47abf59b356e0bd7dcbbbb4dec080e302156a48ca907e47cb6aea1d32719e7233bfc89dcbd68c19fde6ce6158225298ec1131b6a130d1aeb454c1ab5183c0"
+                )?),
+                ..ConfigurationProxy::default()
+            }
+            .build()?;
+            writeln!(writer, "{}", serde_json::to_string_pretty(&config)?)
+                .wrap_err("Failed to write.")
         }
-    }
-
-    pub fn generate_default() -> color_eyre::Result<RawGenesisBlock> {
-        let mut result = RawGenesisBlockBuilder::new()
-            .domain("wonderland".parse()?)
-            .with_account("alice".parse()?, crate::DEFAULT_PUBLIC_KEY.parse()?)
-            .with_asset("rose".parse()?, AssetValueType::Quantity)
-            .finish_domain()
-            .build();
-        let mint = MintBox::new(
-            iroha_data_model::prelude::Value::U32(13_u32),
-            iroha_data_model::IdBox::AssetId(iroha_data_model::prelude::AssetId::new(
-                "rose#wonderland".parse()?,
-                "alice@wonderland".parse()?,
-            )),
-        );
-
-        result.transactions[0].isi.extend(
-            public_blockchain::default_permission_token_definitions()
-                .into_iter()
-                .map(|token_definition| RegisterBox::new(token_definition.clone()).into()),
-        );
-        result.transactions[0].isi.push(mint.into());
-        Ok(result)
     }
 }
 
@@ -223,7 +418,7 @@ mod docs {
     use std::{fmt::Debug, io::Write};
 
     use color_eyre::eyre::WrapErr as _;
-    use iroha_config::base::proxy::Documented;
+    use iroha_config::{base::proxy::Documented, iroha::ConfigurationProxy};
     use serde_json::Value;
 
     use super::*;
@@ -235,7 +430,7 @@ mod docs {
 
     impl<T: Write> RunArgs<T> for Args {
         fn run(self, writer: &mut BufWriter<T>) -> crate::Outcome {
-            Configuration::get_markdown(writer).wrap_err("Failed to generate documentation")
+            ConfigurationProxy::get_markdown(writer).wrap_err("Failed to generate documentation")
         }
     }
 
@@ -252,7 +447,40 @@ mod docs {
             let defaults = serde_json::to_string_pretty(&Self::default())?;
 
             writeln!(writer, "# Iroha Configuration reference\n")?;
-            writeln!(writer, "In this document we provide a reference and detailed descriptions of Iroha's configuration options.\n")?;
+            writeln!(writer, "In this document we provide a reference and detailed descriptions of Iroha's configuration options. \
+                              The options have different underlying types and default values, which are denoted in code as types wrapped in a single \
+                              `Option<..>` or in a double `Option<Option<..>>`. For the detailed explanation, please refer to \
+                              this [section](#configuration-types).\n")?;
+            writeln!(
+                writer,
+                "## Configuration types\n\n\
+                 ### `Option<..>`\n\n\
+                 A type wrapped in a single `Option<..>` signifies that in the corresponding `json` block there is a fallback value for this type, \
+                 and that it only serves as a reference. If a default for such a type has a `null` value, it means that there is no meaningful fallback \
+                 available for this particular value.\n\nAll the default values can be freely obtained from a provided [sample configuration file](../../../configs/peer/config.json), \
+                 but it should only serve as a starting point. If left unchanged, the sample configuration file would still fail to build due to it having `null` in place of \
+                 [public](#public_key) and [private](#private_key) keys as well as [endpoint](#torii.api_url) [URLs](#torii.telemetry_url). \
+                 These should be provided either by modifying the sample config file or as environment variables. \
+                 No other overloading of configuration values happens besides reading them from a file and capturing the environment variables.\n\n\
+                 For both types of configuration options wrapped in a single `Option<..>` (i.e. both those that have meaningful defaults and those that have `null`), \
+                 failure to provide them in any of the above two ways results in an error.\n\n\
+                 ### `Option<Option<..>>`\n\n\
+                 `Option<Option<..>>` types should be distinguished from types wrapped in a single `Option<..>`. Only the double option ones are allowed to stay `null`, \
+                 meaning that **not** providing them in an environment variable or a file will **not** result in an error.\n\n\
+                 Thus, only these types are truly optional in the mundane sense of the word. \
+                 An example of this distinction is genesis [public](#genesis.account_public_key) and [private](#genesis.account_private_key) key. \
+                 While the first one is a single `Option<..>` wrapped type, the latter is wrapped in `Option<Option<..>>`. This means that the genesis *public* key should always be \
+                 provided by the user, be it via a file config or an environment variable, whereas the *private* key is only needed for the peer that submits the genesis block, \
+                 and can be omitted for all others. The same logic goes for other double option fields such as logger file path.\n\n\
+                 ### Sumeragi: default `null` values\n\n\
+                 A special note about sumeragi fields with `null` as default: only the [`trusted_peers`](#sumeragi.trusted_peers) field out of the three can be initialized via a \
+                 provided file or an environment variable.\n\n\
+                 The other two fields, namely [`key_pair`](#sumeragi.key_pair) and [`peer_id`](#sumeragi.peer_id), go through a process of finalization where their values \
+                 are derived from the corresponding ones in the uppermost Iroha config (using its [`public_key`](#public_key) and [`private_key`](#private_key) fields) \
+                 or the Torii config (via its [`p2p_addr`](#torii.p2p_addr)). \
+                 This ensures that these linked fields stay in sync, and prevents the programmer error when different values are provided to these field pairs. \
+                 Providing either `sumeragi.key_pair` or `sumeragi.peer_id` by hand will result in an error, as it should never be done directly.\n"
+            )?;
             writeln!(writer, "## Default configuration\n")?;
             writeln!(
                 writer,

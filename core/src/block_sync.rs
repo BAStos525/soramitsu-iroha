@@ -8,75 +8,79 @@ use std::{fmt::Debug, sync::Arc, time::Duration};
 
 use iroha_actor::{broker::*, prelude::*, Context};
 use iroha_config::block_sync::Configuration;
-use iroha_crypto::SignatureOf;
+use iroha_crypto::*;
 use iroha_data_model::prelude::*;
 use iroha_logger::prelude::*;
-use rand::{prelude::SliceRandom, SeedableRng};
+use iroha_macro::*;
+use iroha_p2p::Post;
+use iroha_version::prelude::*;
+use parity_scale_codec::{Decode, Encode};
 
-use self::message::{Message, *};
-use crate::{
-    prelude::*,
-    sumeragi::{
-        message::{CommitBlock, GetNetworkTopology},
-        network_topology::Role,
-        SumeragiTrait,
-    },
-    VersionedCommittedBlock,
-};
-
-/// The state of `BlockSynchronizer`.
-#[derive(Clone, Debug)]
-enum State {
-    /// Not synchronizing now.
-    Idle,
-    /// Synchronization is in progress: validating and committing blocks.
-    /// Contains a vector of blocks left to commit and an id of the peer from which the blocks were requested.
-    InProgress(Vec<VersionedCommittedBlock>, PeerId),
-}
+use crate::{sumeragi::Sumeragi, NetworkMessage, VersionedCommittedBlock};
 
 /// Structure responsible for block synchronization between peers.
 #[derive(Debug)]
-pub struct BlockSynchronizer<S: SumeragiTrait> {
-    wsv: Arc<WorldStateView>,
-    sumeragi: AlwaysAddr<S>,
+pub struct BlockSynchronizer {
+    sumeragi: Arc<Sumeragi>,
     peer_id: PeerId,
-    state: State,
     gossip_period: Duration,
     block_batch_size: u32,
     broker: Broker,
     actor_channel_capacity: u32,
 }
 
-/// Block synchronizer
-pub trait BlockSynchronizerTrait: Actor + Handler<ContinueSync> + Handler<Message> {
-    /// Requires sumeragi for sending direct messages to it
-    type Sumeragi: SumeragiTrait;
+#[async_trait::async_trait]
+impl Actor for BlockSynchronizer {
+    fn actor_channel_capacity(&self) -> u32 {
+        self.actor_channel_capacity
+    }
 
-    /// Constructs `BlockSync`
-    fn from_configuration(
-        config: &Configuration,
-        wsv: Arc<WorldStateView>,
-        sumeragi: AlwaysAddr<Self::Sumeragi>,
-        peer_id: PeerId,
-        broker: Broker,
-    ) -> Self;
+    async fn on_start(&mut self, ctx: &mut Context<Self>) {
+        self.broker.subscribe::<message::Message, _>(ctx);
+        ctx.notify_every::<message::ReceiveUpdates>(self.gossip_period);
+    }
 }
 
-impl<S: SumeragiTrait> BlockSynchronizerTrait for BlockSynchronizer<S> {
-    type Sumeragi = S;
+#[async_trait::async_trait]
+impl Handler<message::ReceiveUpdates> for BlockSynchronizer {
+    type Result = ();
+    async fn handle(&mut self, _: message::ReceiveUpdates) {
+        if let Some(random_peer) = self.sumeragi.get_random_peer_for_block_sync() {
+            self.request_latest_blocks_from_peer(random_peer.id.clone())
+                .await;
+        }
+    }
+}
 
-    fn from_configuration(
+#[async_trait::async_trait]
+impl Handler<message::Message> for BlockSynchronizer {
+    type Result = ();
+    async fn handle(&mut self, message: message::Message) {
+        message.handle_message(self).await;
+    }
+}
+
+impl BlockSynchronizer {
+    /// Sends request for latest blocks to a chosen peer
+    async fn request_latest_blocks_from_peer(&mut self, peer_id: PeerId) {
+        message::Message::GetBlocksAfter(message::GetBlocksAfter::new(
+            self.sumeragi.latest_block_hash(),
+            self.peer_id.clone(),
+        ))
+        .send_to(self.broker.clone(), peer_id)
+        .await;
+    }
+
+    /// Create [`Self`] from [`Configuration`]
+    pub fn from_configuration(
         config: &Configuration,
-        wsv: Arc<WorldStateView>,
-        sumeragi: AlwaysAddr<S>,
+        sumeragi: Arc<Sumeragi>,
         peer_id: PeerId,
         broker: Broker,
     ) -> Self {
         Self {
-            wsv,
             peer_id,
             sumeragi,
-            state: State::Idle,
             gossip_period: Duration::from_millis(config.gossip_period_ms),
             block_batch_size: config.block_batch_size,
             broker,
@@ -85,138 +89,16 @@ impl<S: SumeragiTrait> BlockSynchronizerTrait for BlockSynchronizer<S> {
     }
 }
 
-/// Message to send to block synchronizer. It will call `continue_sync` method on it
-#[derive(Debug, Clone, Copy, iroha_actor::Message)]
-pub struct ContinueSync;
-
-/// Message to initiate receiving of latest blocks from other peers
-///
-/// Every `gossip_period` peer will poll one randomly selected peer for latest blocks
-#[derive(Debug, Clone, Copy, Default, iroha_actor::Message)]
-pub struct ReceiveUpdates;
-
-#[async_trait::async_trait]
-impl<S: SumeragiTrait> Actor for BlockSynchronizer<S> {
-    fn actor_channel_capacity(&self) -> u32 {
-        self.actor_channel_capacity
-    }
-
-    async fn on_start(&mut self, ctx: &mut Context<Self>) {
-        self.broker.subscribe::<Message, _>(ctx);
-        self.broker.subscribe::<ContinueSync, _>(ctx);
-        ctx.notify_every::<ReceiveUpdates>(self.gossip_period);
-    }
-}
-
-#[async_trait::async_trait]
-impl<S: SumeragiTrait> Handler<ReceiveUpdates> for BlockSynchronizer<S> {
-    type Result = ();
-    async fn handle(&mut self, ReceiveUpdates: ReceiveUpdates) {
-        let rng = &mut rand::rngs::StdRng::from_entropy();
-
-        if let Some(random_peer) = self.wsv.peers().choose(rng) {
-            self.request_latest_blocks_from_peer(random_peer.id.clone())
-                .await;
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl<S: SumeragiTrait> Handler<ContinueSync> for BlockSynchronizer<S> {
-    type Result = ();
-    async fn handle(&mut self, ContinueSync: ContinueSync) {
-        self.continue_sync().await;
-    }
-}
-
-#[async_trait::async_trait]
-impl<S: SumeragiTrait> Handler<Message> for BlockSynchronizer<S> {
-    type Result = ();
-    async fn handle(&mut self, message: Message) {
-        message.handle(self).await;
-    }
-}
-
-impl<S: SumeragiTrait + Debug> BlockSynchronizer<S> {
-    /// Sends request for latest blocks to a chosen peer
-    async fn request_latest_blocks_from_peer(&mut self, peer_id: PeerId) {
-        Message::GetBlocksAfter(GetBlocksAfter::new(
-            self.wsv.latest_block_hash(),
-            self.peer_id.clone(),
-        ))
-        .send_to(self.broker.clone(), peer_id)
-        .await;
-    }
-
-    /// Continues the synchronization if it was ongoing. Should be called after `WSV` update.
-    #[iroha_futures::telemetry_future]
-    pub async fn continue_sync(&mut self) {
-        let (blocks, peer_id) = if let State::InProgress(blocks, peer_id) = self.state.clone() {
-            (blocks, peer_id)
-        } else {
-            return;
-        };
-
-        info!(blocks_left = blocks.len(), "Synchronizing blocks");
-
-        let (this_block, remaining_blocks) = if let Some((blck, blcks)) = blocks.split_first() {
-            (blck, blcks)
-        } else {
-            self.state = State::Idle;
-            self.request_latest_blocks_from_peer(peer_id).await;
-            return;
-        };
-
-        let mut network_topology = self
-            .sumeragi
-            .send(GetNetworkTopology(this_block.header().clone()))
-            .await;
-        // If it is genesis topology we cannot apply view changes as peers have custom order!
-        #[allow(clippy::expect_used)]
-        if !this_block.header().is_genesis() {
-            network_topology = network_topology
-                .into_builder()
-                .with_view_changes(this_block.header().view_change_proofs.clone())
-                .build()
-                .expect(
-                    "Unreachable as doing view changes on valid topology will not raise an error.",
-                );
-        }
-        if self.wsv.as_ref().latest_block_hash() == this_block.header().previous_block_hash
-            && network_topology
-                .filter_signatures_by_roles(
-                    &[Role::ValidatingPeer, Role::Leader, Role::ProxyTail],
-                    this_block
-                        .verified_signatures()
-                        .map(SignatureOf::transmute_ref),
-                )
-                .len()
-                >= network_topology.min_votes_for_commit()
-        {
-            self.state = State::InProgress(remaining_blocks.to_vec(), peer_id);
-            self.sumeragi
-                .do_send(CommitBlock(this_block.clone().into()))
-                .await;
-        } else {
-            warn!(block_hash = %this_block.hash(), "Failed to commit a block received via synchronization request - validation failed");
-            self.state = State::Idle;
-        }
-    }
-}
-
-/// The module for block synchronization related peer to peer messages.
 pub mod message {
-    use iroha_actor::broker::Broker;
-    use iroha_crypto::*;
-    use iroha_data_model::prelude::*;
-    use iroha_logger::prelude::*;
-    use iroha_macro::*;
-    use iroha_p2p::Post;
-    use iroha_version::prelude::*;
-    use parity_scale_codec::{Decode, Encode};
+    //! Module containing messages for [`BlockSynchronizer`](super::BlockSynchronizer).
 
-    use super::{BlockSynchronizer, State};
-    use crate::{block::VersionedCommittedBlock, sumeragi::SumeragiTrait, NetworkMessage};
+    use super::*;
+
+    /// Message to initiate receiving of latest blocks from other peers
+    ///
+    /// Every `gossip_period` peer will poll one randomly selected peer for latest blocks
+    #[derive(Debug, Clone, Copy, Default, iroha_actor::Message)]
+    pub struct ReceiveUpdates;
 
     declare_versioned_with_scale!(VersionedMessage 1..2, Debug, Clone, iroha_macro::FromVariant, iroha_actor::Message);
 
@@ -288,35 +170,38 @@ pub mod message {
     impl Message {
         /// Handles the incoming message.
         #[iroha_futures::telemetry_future]
-        pub async fn handle<S: SumeragiTrait>(&self, block_sync: &mut BlockSynchronizer<S>) {
+        pub async fn handle_message(&self, block_sync: &mut BlockSynchronizer) {
             match self {
                 Message::GetBlocksAfter(GetBlocksAfter { hash, peer_id }) => {
                     if block_sync.block_batch_size == 0 {
                         warn!("Error: not sending any blocks as batch_size is equal to zero.");
                         return;
                     }
-                    if *hash == block_sync.wsv.latest_block_hash() {
+                    if *hash == block_sync.sumeragi.latest_block_hash() {
                         return;
                     }
 
-                    let blocks: Vec<_> = block_sync
-                        .wsv
-                        .blocks_after_hash(*hash)
-                        .take(block_sync.block_batch_size as usize)
-                        .collect();
+                    let mut blocks = block_sync.sumeragi.blocks_after_hash(*hash);
+                    blocks.truncate(block_sync.block_batch_size as usize);
 
                     if blocks.is_empty() {
                         warn!(%hash, "Block hash not found");
                     } else {
+                        trace!("Sharing blocks after hash: {}", hash);
                         Message::ShareBlocks(ShareBlocks::new(blocks, block_sync.peer_id.clone()))
                             .send_to(block_sync.broker.clone(), peer_id.clone())
                             .await;
                     }
                 }
-                Message::ShareBlocks(ShareBlocks { blocks, peer_id }) => {
-                    if let State::Idle = block_sync.state.clone() {
-                        block_sync.state = State::InProgress(blocks.clone(), peer_id.clone());
-                        block_sync.continue_sync().await;
+                Message::ShareBlocks(ShareBlocks { blocks, .. }) => {
+                    use crate::sumeragi::message::{BlockCommitted, Message, MessagePacket};
+                    for block in blocks {
+                        block_sync.sumeragi.incoming_message(MessagePacket::new(
+                            Vec::new(),
+                            Message::BlockCommitted(BlockCommitted {
+                                block: block.clone().into(),
+                            }),
+                        ));
                     }
                 }
             }

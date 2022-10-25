@@ -126,13 +126,13 @@ pub mod isi {
                         .cloned()
                         .collect();
 
-                    for id in keys {
+                    for key_id in keys {
                         wsv.modify_account(account.id(), |account_mut| {
-                            if account_mut.remove_asset(&id).is_none() {
-                                error!(%id, "asset not found - this is a bug");
+                            if account_mut.remove_asset(&key_id).is_none() {
+                                error!(%key_id, "asset not found. This is a bug");
                             }
 
-                            Ok(AccountEvent::Asset(AssetEvent::Deleted(id)))
+                            Ok(AccountEvent::Asset(AssetEvent::Deleted(key_id)))
                         })?;
                     }
                 }
@@ -173,12 +173,16 @@ pub mod isi {
                     let asset_definition = asset_definition_entry.definition_mut();
 
                     asset_definition.metadata_mut().insert_with_limits(
-                        self.key,
-                        self.value,
+                        self.key.clone(),
+                        self.value.clone(),
                         metadata_limits,
                     )?;
 
-                    Ok(AssetDefinitionEvent::MetadataInserted(asset_definition_id))
+                    Ok(AssetDefinitionEvent::MetadataInserted(MetadataChanged {
+                        target_id: asset_definition_id,
+                        key: self.key,
+                        value: Box::new(self.value),
+                    }))
                 },
             )
         }
@@ -200,12 +204,16 @@ pub mod isi {
                 |asset_definition_entry| {
                     let asset_definition = asset_definition_entry.definition_mut();
 
-                    asset_definition
+                    let value = asset_definition
                         .metadata_mut()
                         .remove(&self.key)
-                        .ok_or(FindError::MetadataKey(self.key))?;
+                        .ok_or_else(|| FindError::MetadataKey(self.key.clone()))?;
 
-                    Ok(AssetDefinitionEvent::MetadataRemoved(asset_definition_id))
+                    Ok(AssetDefinitionEvent::MetadataRemoved(MetadataChanged {
+                        target_id: asset_definition_id,
+                        key: self.key,
+                        value: Box::new(value),
+                    }))
                 },
             )
         }
@@ -222,14 +230,20 @@ pub mod isi {
         ) -> Result<(), Self::Error> {
             let domain_id = self.object_id;
 
+            let limits = wsv.config.domain_metadata_limits;
+
             wsv.modify_domain(&domain_id.clone(), |domain| {
-                let limits = wsv.config.domain_metadata_limits;
+                domain.metadata_mut().insert_with_limits(
+                    self.key.clone(),
+                    self.value.clone(),
+                    limits,
+                )?;
 
-                domain
-                    .metadata_mut()
-                    .insert_with_limits(self.key, self.value, limits)?;
-
-                Ok(DomainEvent::MetadataInserted(domain_id))
+                Ok(DomainEvent::MetadataInserted(MetadataChanged {
+                    target_id: domain_id,
+                    key: self.key,
+                    value: Box::new(self.value),
+                }))
             })
         }
     }
@@ -246,12 +260,16 @@ pub mod isi {
             let domain_id = self.object_id;
 
             wsv.modify_domain(&domain_id.clone(), |domain| {
-                domain
+                let value = domain
                     .metadata_mut()
                     .remove(&self.key)
-                    .ok_or(FindError::MetadataKey(self.key))?;
+                    .ok_or_else(|| FindError::MetadataKey(self.key.clone()))?;
 
-                Ok(DomainEvent::MetadataRemoved(domain_id))
+                Ok(DomainEvent::MetadataRemoved(MetadataChanged {
+                    target_id: domain_id,
+                    key: self.key,
+                    value: Box::new(value),
+                }))
             })
         }
     }

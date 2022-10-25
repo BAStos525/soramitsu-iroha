@@ -3,7 +3,6 @@
 
 #[cfg(not(feature = "std"))]
 use alloc::{
-    alloc::alloc,
     boxed::Box,
     collections::{btree_map, btree_set},
     format,
@@ -12,18 +11,16 @@ use alloc::{
 };
 use core::str::FromStr;
 #[cfg(feature = "std")]
-use std::{
-    alloc::alloc,
-    collections::{btree_map, btree_set},
-};
+use std::collections::{btree_map, btree_set};
 
 use derive_more::Display;
 use getset::{Getters, MutGetters, Setters};
 use iroha_data_model_derive::IdOrdEqHash;
-use iroha_ffi::{IntoFfi, TryFromReprC};
+use iroha_ffi::FfiType;
 use iroha_schema::IntoSchema;
 use parity_scale_codec::{Decode, Encode};
 use serde::{Deserialize, Serialize};
+use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 #[cfg(feature = "mutable_api")]
 use crate::Registrable;
@@ -34,14 +31,13 @@ use crate::{
     },
     domain::prelude::*,
     expression::{ContainsAny, ContextValue, EvaluatesTo},
-    ffi::ffi_item,
+    ffi::declare_item,
     metadata::Metadata,
     role::{prelude::RoleId, RoleIds},
     HasMetadata, Identifiable, Name, ParseError, PublicKey, Registered,
 };
 
-/// `AccountsMap` provides an API to work with collection of key (`Id`) - value
-/// (`Account`) pairs.
+/// API to work with collections of [`Id`] : [`Account`] mappings.
 pub type AccountsMap = btree_map::BTreeMap<<Account as Identifiable>::Id, Account>;
 
 // The size of the array must be fixed. If we use more than `1` we
@@ -92,12 +88,12 @@ impl From<GenesisAccount> for Account {
     Eq,
     PartialOrd,
     Ord,
+    Hash,
     Decode,
     Encode,
     Deserialize,
     Serialize,
-    IntoFfi,
-    TryFromReprC,
+    FfiType,
     IntoSchema,
 )]
 pub struct SignatureCheckCondition(pub EvaluatesTo<bool>);
@@ -134,7 +130,7 @@ impl Default for SignatureCheckCondition {
     }
 }
 
-ffi_item! {
+declare_item! {
     /// Builder which should be submitted in a transaction to create a new [`Account`]
     #[derive(
         Debug,
@@ -145,11 +141,9 @@ ffi_item! {
         Encode,
         Deserialize,
         Serialize,
-        IntoFfi,
-        TryFromReprC,
+        FfiType,
         IntoSchema,
     )]
-    #[id(type = "<Account as Identifiable>::Id")]
     #[display(fmt = "[{id}]")]
     pub struct NewAccount {
         /// Identification
@@ -202,11 +196,6 @@ impl NewAccount {
         }
     }
 
-    /// Identification
-    pub(crate) fn id(&self) -> &<Account as Identifiable>::Id {
-        &self.id
-    }
-
     /// Add [`Metadata`] to the account replacing previously defined
     #[must_use]
     pub fn with_metadata(mut self, metadata: Metadata) -> Self {
@@ -215,7 +204,7 @@ impl NewAccount {
     }
 }
 
-ffi_item! {
+declare_item! {
     /// Account entity is an authority which is used to execute `Iroha Special Instructions`.
     #[derive(
         Debug,
@@ -229,16 +218,14 @@ ffi_item! {
         Encode,
         Deserialize,
         Serialize,
-        IntoFfi,
-        TryFromReprC,
+        FfiType,
         IntoSchema,
     )]
     #[allow(clippy::multiple_inherent_impl)]
     #[display(fmt = "({id})")] // TODO: Add more?
-    #[id(type = "Id")]
     pub struct Account {
         /// An Identification of the [`Account`].
-        id: <Self as Identifiable>::Id,
+        id: Id,
         /// Assets in this [`Account`].
         assets: AssetsMap,
         /// [`Account`]'s signatories.
@@ -397,10 +384,9 @@ impl FromIterator<Account> for crate::Value {
     Hash,
     Decode,
     Encode,
-    Deserialize,
-    Serialize,
-    IntoFfi,
-    TryFromReprC,
+    DeserializeFromStr,
+    SerializeDisplay,
+    FfiType,
     IntoSchema,
 )]
 #[display(fmt = "{name}@{domain_id}")]

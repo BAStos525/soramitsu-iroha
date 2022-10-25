@@ -4,6 +4,7 @@
 use alloc::{format, string::String, vec::Vec};
 
 use iroha_crypto::Hash;
+use iroha_ffi::FfiType;
 use iroha_macro::FromVariant;
 use iroha_schema::prelude::IntoSchema;
 use parity_scale_codec::{Decode, Encode};
@@ -28,6 +29,7 @@ pub use crate::transaction::RejectionReason as PipelineRejectionReason;
     Hash,
     Serialize,
     Deserialize,
+    FfiType,
 )]
 pub struct EventFilter {
     /// If `Some::<EntityKind>` filters by the [`EntityKind`]. If `None` accepts all the [`EntityKind`].
@@ -116,7 +118,7 @@ pub enum EntityKind {
 }
 
 /// Strongly-typed [`Event`], which tells the receiver the kind of entity that changed, the change, and the hash of the entity.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, Deserialize, Serialize, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Decode, Encode, Deserialize, Serialize, IntoSchema)]
 pub struct Event {
     /// [`EntityKind`] of the entity that caused this [`Event`].
     pub entity_kind: EntityKind,
@@ -139,7 +141,17 @@ impl Event {
 
 /// [`Status`] of the entity.
 #[derive(
-    Debug, Clone, PartialEq, Eq, Decode, Encode, Serialize, Deserialize, FromVariant, IntoSchema,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Decode,
+    Encode,
+    Serialize,
+    Deserialize,
+    FromVariant,
+    IntoSchema,
 )]
 pub enum Status {
     /// Entity has been seen in blockchain, but has not passed validation.

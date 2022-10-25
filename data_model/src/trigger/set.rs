@@ -12,9 +12,9 @@
 #![allow(clippy::expect_used)]
 
 use core::{cmp::min, result::Result};
+use std::sync::RwLock;
 
 use dashmap::DashMap;
-use tokio::{sync::RwLock, task};
 
 use super::Id;
 use crate::{events::Filter as EventFilter, prelude::*};
@@ -331,7 +331,10 @@ impl Set {
                     .try_into()
                     .expect("`u32` should always fit in `usize`")
             ];
-            task::block_in_place(|| self.matched_ids.blocking_write()).extend(ids)
+            self.matched_ids
+                .write()
+                .expect("Trigger set is poisoned")
+                .extend(ids);
         }
     }
 
@@ -355,7 +358,10 @@ impl Set {
             }
         }
 
-        task::block_in_place(|| self.matched_ids.blocking_write()).push((event.into(), id.clone()))
+        self.matched_ids
+            .write()
+            .expect("Trigger set is poisoned")
+            .push((event.into(), id.clone()));
     }
 
     /// Calls `f` for every action, matched by previously called `handle_` methods.
@@ -371,12 +377,11 @@ impl Set {
     /// Failed actions won't appear on the next `inspect_matched()` call if they don't match new
     /// events by calling `handle_` methods.
     /// Repeats count of failed actions won't be decreased.
-    pub async fn inspect_matched<F, E>(&self, f: F) -> Result<(), Vec<E>>
+    pub fn inspect_matched<F, E>(&self, f: F) -> Result<(), Vec<E>>
     where
-        F: Fn(&dyn ActionTrait, Event) -> std::result::Result<(), E> + Send + Copy,
-        E: Send + Sync,
+        F: Fn(&dyn ActionTrait, Event) -> std::result::Result<(), E> + Copy,
     {
-        let (succeed, res) = self.map_matched(f).await;
+        let (succeed, res) = self.map_matched(f);
 
         for id in &succeed {
             // Ignoring error if trigger has not `Repeats::Exact(_)` but something else
@@ -402,10 +407,9 @@ impl Set {
     ///
     /// Returns vector of successfully executed triggers
     /// and result with errors vector if there are some
-    async fn map_matched<F, E>(&self, f: F) -> (Vec<Id>, Result<(), Vec<E>>)
+    fn map_matched<F, E>(&self, f: F) -> (Vec<Id>, Result<(), Vec<E>>)
     where
-        F: Fn(&dyn ActionTrait, Event) -> std::result::Result<(), E> + Send + Copy,
-        E: Send + Sync,
+        F: Fn(&dyn ActionTrait, Event) -> std::result::Result<(), E> + Copy,
     {
         let mut succeed = Vec::new();
         let mut errors = Vec::new();
@@ -421,7 +425,7 @@ impl Set {
 
         // Cloning and clearing `self.matched_ids` so that `handle_` call won't deadlock
         let matched_ids = {
-            let mut ids_write = self.matched_ids.write().await;
+            let mut ids_write = self.matched_ids.write().expect("Trigger set is poisoned");
             let ids_clone = ids_write.clone();
             ids_write.clear();
             ids_clone
@@ -453,8 +457,6 @@ impl Set {
                 Some(Err(err)) => errors.push(err),
                 None => {}
             };
-
-            task::yield_now().await;
         }
 
         if errors.is_empty() {

@@ -16,7 +16,7 @@ RUN set -eux && \
     cargo install cargo-lints webassembly-test-runner && \
     :
 
-# builder stage!!!
+# builder stage
 WORKDIR /iroha
 COPY . .
 RUN  rm -f rust-toolchain.toml

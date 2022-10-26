@@ -12,7 +12,7 @@ env:
 # `ubuntu-latest` and not `[self-hosted, Linux]`.
 jobs:
   dockerhub:
-    runs-on: [self-hosted, iroha-mac1]
+    runs-on: ubuntu-latest #[self-hosted, iroha-mac1]
     container:
       image: 7272721/i2-ci:nightly
     steps:

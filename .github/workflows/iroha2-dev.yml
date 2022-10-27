@@ -12,7 +12,7 @@ env:
 # `ubuntu-latest` and not `[self-hosted, Linux]`.
 jobs:
   dockerhub:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, iroha-mac1] #ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       - name: Set up Docker Buildx

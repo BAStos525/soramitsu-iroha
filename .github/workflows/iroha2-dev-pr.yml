@@ -20,29 +20,29 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
-    runs-on: ubuntu-latest
-    container:
-      image: 7272721/i2-ci:nightly
-    steps:
-      - uses: actions/checkout@v3
-      - uses: Swatinem/rust-cache@v2
-      - name: Check config.md
-        if: always()
-        run: ./scripts/check.sh docs
-      - name: Check genesis.json
-        if: always()
-        run: ./scripts/check.sh genesis
-      - name: Check client_cli/config.json
-        if: always()
-        run: ./scripts/check.sh client
-      - name: Check schema.json
-        if: always()
-        run: ./scripts/check.sh schema
-      - name: Wasm build check
-        if: always()
-        working-directory: wasm
-        run: mold --run cargo +nightly-2022-08-15 build --target wasm32-unknown-unknown --quiet
+  # check:
+  #   runs-on: ubuntu-latest
+  #   container:
+  #     image: 7272721/i2-ci:nightly
+  #   steps:
+  #     - uses: actions/checkout@v3
+  #     - uses: Swatinem/rust-cache@v2
+  #     - name: Check config.md
+  #       if: always()
+  #       run: ./scripts/check.sh docs
+  #     - name: Check genesis.json
+  #       if: always()
+  #       run: ./scripts/check.sh genesis
+  #     - name: Check client_cli/config.json
+  #       if: always()
+  #       run: ./scripts/check.sh client
+  #     - name: Check schema.json
+  #       if: always()
+  #       run: ./scripts/check.sh schema
+  #     - name: Wasm build check
+  #       if: always()
+  #       working-directory: wasm
+  #       run: mold --run cargo +nightly-2022-08-15 build --target wasm32-unknown-unknown --quiet
 
   with_coverage:
     runs-on: ubuntu-latest #[self-hosted, Linux]
@@ -82,26 +82,26 @@ jobs:
           git-commit: ${{ github.event.pull_request.base.sha }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-  integration:
-    runs-on: ubuntu-latest
-    container:
-      image: 7272721/i2-ci:nightly
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v3
-      - uses: Swatinem/rust-cache@v2
-      - name: Run tests, with no-default-features
-        run: |
-          mold --run cargo test --test mod --no-default-features -- \
-          integration:: --skip unstable_network
+  # integration:
+  #   runs-on: ubuntu-latest
+  #   container:
+  #     image: 7272721/i2-ci:nightly
+  #   timeout-minutes: 30
+  #   steps:
+  #     - uses: actions/checkout@v3
+  #     - uses: Swatinem/rust-cache@v2
+  #     - name: Run tests, with no-default-features
+  #       run: |
+  #         mold --run cargo test --test mod --no-default-features -- \
+  #         integration:: --skip unstable_network
 
-  unstable:
-    runs-on: ubuntu-latest #[self-hosted, Linux]
-    container:
-      image: 7272721/i2-ci:nightly
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v3
-      - uses: Swatinem/rust-cache@v2
-      - name: Run tests
-        run: mold --run cargo test -p iroha_client --tests --no-default-features unstable_network --quiet
+  # unstable:
+  #   runs-on: ubuntu-latest #[self-hosted, Linux]
+  #   container:
+  #     image: 7272721/i2-ci:nightly
+  #   timeout-minutes: 60
+  #   steps:
+  #     - uses: actions/checkout@v3
+  #     - uses: Swatinem/rust-cache@v2
+  #     - name: Run tests
+  #       run: mold --run cargo test -p iroha_client --tests --no-default-features unstable_network --quiet

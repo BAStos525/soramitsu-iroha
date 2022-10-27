@@ -73,6 +73,8 @@ jobs:
           # generate report without tests
           # https://github.com/taiki-e/cargo-llvm-cov#merge-coverages-generated-under-different-test-conditions
           mold --run cargo +$NIGHTLY llvm-cov --doctests --no-run --${{ matrix.feature_flag }} --workspace --lcov --output-path lcov.info
+      - name: Show path
+        run: ls -la
       - name: Upload coverage to coveralls.io
         if: matrix.feature_flag == 'all-features'
         uses: coverallsapp/github-action@1.1.3

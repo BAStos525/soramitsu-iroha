@@ -43,7 +43,7 @@ jobs:
           labels: commit=${{ github.sha }}
           build-args: TAG=dev
           file: Dockerfile
-          # This context specification is required
+          # This context specification is required!
           context: .
           cache-from: type=gha
           cache-to: type=gha,mode=max

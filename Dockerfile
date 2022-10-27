@@ -7,7 +7,7 @@ COPY . .
 RUN  rm -f rust-toolchain.toml
 RUN  mold --run cargo build --profile deploy --target x86_64-unknown-linux-musl --features vendored
 
-# final image
+# final image!
 FROM alpine:3.16
 
 ARG  STORAGE=/storage

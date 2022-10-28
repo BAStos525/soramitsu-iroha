@@ -6,6 +6,6 @@ COPY    . .
 RUN     cargo chef prepare --recipe-path recipe.json
 
 # chef stage
-FROM planner as keeper
-COPY --from=planner /iroha/recipe.json recipe.json
+# FROM planner
+# COPY --from=planner /iroha/recipe.json recipe.json
 RUN  cargo chef cook --profile deploy --target x86_64-unknown-linux-musl --features vendored --recipe-path recipe.json

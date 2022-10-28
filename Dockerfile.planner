@@ -1,5 +1,5 @@
 #planner stage
-ARG     TAG=dev
+ARG     TAG=dev@sha256:0644a38a7d0a408ebc276815ebbd786eccc98e4b3903266abb9ef9e7bb9e3d11
 FROM    hyperledger/iroha2-base:$TAG AS planner
 WORKDIR /iroha
 COPY    . .

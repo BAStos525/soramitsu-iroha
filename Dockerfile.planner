@@ -1,6 +1,6 @@
 #planner stage
 ARG     TAG=dev
-FROM    hyperledger/iroha2-base:$TAG AS planner
+FROM    bastos525/iroha2-base:$TAG AS planner
 WORKDIR /iroha
 COPY    . .
 RUN     cargo chef prepare --recipe-path recipe.json

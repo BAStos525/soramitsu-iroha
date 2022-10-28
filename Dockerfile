@@ -1,5 +1,6 @@
 # builder image
-FROM keeper AS builder
+ARG  TAG=dev
+FROM bastos525/iroha2-chef:$TAG AS builder
 
 #WORKDIR /iroha
 COPY . .

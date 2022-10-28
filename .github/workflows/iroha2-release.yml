@@ -10,6 +10,8 @@ env:
 jobs:
   registry:
     runs-on: ubuntu-latest
+    # container:
+    #   image: 7272721/i2-ci:nightly
     steps:
       - uses: actions/checkout@v3
       - name: Get tag from branch name
@@ -18,11 +20,11 @@ jobs:
           PREFIX='iroha2-'
           TAG=${BRANCH#$PREFIX}
           echo "TAG=$TAG" >>$GITHUB_ENV
-      - name: Set up Docker Buildx
-        id: buildx
-        uses: docker/setup-buildx-action@v2
-        with:
-          install: true
+      # - name: Set up Docker Buildx
+      #   id: buildx
+      #   uses: docker/setup-buildx-action@v2
+      #   with:
+      #     install: true
       - name: Login to DockerHub
         uses: docker/login-action@v2
         with:
@@ -36,17 +38,26 @@ jobs:
           password: ${{ secrets.HARBOR_TOKEN }}
       - name: Check changed files
         uses: jitterbit/get-changed-files@v1
-        id: base_image
-      - name: Build and push iroha2-base:dev image
-        if: contains(steps.base_image.outputs.added_modified, 'Dockerfile.base')
+        id: changed_config
+      - name: Build and push iroha2-base image
+        if: contains(steps.changed_config.outputs.added_modified, 'Dockerfile.base')
         uses: docker/build-push-action@v3
         with:
           push: true
           tags: |
             hyperledger/iroha2-base:${{ env.TAG }}
-            docker.soramitsu.co.jp/iroha2/iroha2-base:${{ env.TAG }}-${{ github.sha }}
+          #  docker.soramitsu.co.jp/iroha2/iroha2-base:${{ env.TAG }}-${{ github.sha }}
           labels: commit=${{ github.sha }}
           file: Dockerfile.base
+      - name: Build and push iroha2-chef image
+        uses: docker/build-push-action@v3
+        if: contains(steps.changed_config.outputs.added_modified, 'Cargo.lock')
+        with:
+          push: true
+          tags: bastos525/iroha2-chef:${{ env.TAG }}
+          labels: commit=${{ github.sha }}
+          file: Dockerfile.planner
+          context: .
       - name: Build and push iroha2 image
         uses: docker/build-push-action@v3
         with:

@@ -12,29 +12,40 @@ env:
 # `ubuntu-latest` and not `[self-hosted, Linux]`.
 jobs:
   dockerhub:
-    runs-on: [self-hosted, iroha-mac1] #ubuntu-latest
+    runs-on: ubuntu-latest # [self-hosted, iroha-mac1]
+    # container:
+    #   image: 7272721/i2-ci:nightly
     steps:
       - uses: actions/checkout@v3
-      - name: Set up Docker Buildx
-        id: buildx
-        uses: docker/setup-buildx-action@v2
-        with:
-          install: true
+      # - name: Set up Docker Buildx
+      #   id: buildx
+      #   uses: docker/setup-buildx-action@v2
+      #   with:
+      #     install: true
       - uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Check changed files
         uses: jitterbit/get-changed-files@v1
-        id: base_image
+        id: changed_config
       - name: Build and push iroha2-base:dev image
         uses: docker/build-push-action@v3
-        if: contains(steps.base_image.outputs.added_modified, 'Dockerfile.base')
+        if: contains(steps.changed_config.outputs.added_modified, 'Dockerfile.base')
         with:
           push: true
           tags: bastos525/iroha2-base:dev
           labels: commit=${{ github.sha }}
           file: Dockerfile.base
+      - name: Build and push iroha2-chef:dev image
+        uses: docker/build-push-action@v3
+        if: contains(steps.changed_config.outputs.added_modified, 'Cargo.lock')
+        with:
+          push: true
+          tags: bastos525/iroha2-chef:dev
+          labels: commit=${{ github.sha }}
+          file: Dockerfile.planner
+          context: .
       - name: Build and push iroha2:dev image
         uses: docker/build-push-action@v3
         with:
@@ -45,8 +56,6 @@ jobs:
           file: Dockerfile
           # This context specification is required!
           context: .
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
   # load-rs:
   #   runs-on: ubuntu-latest

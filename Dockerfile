@@ -1,5 +1,5 @@
 # builder image
-ARG  TAG=dev
+ARG  TAG=mac-dev
 
 FROM hyperledger/iroha2-base:$TAG AS builder
 

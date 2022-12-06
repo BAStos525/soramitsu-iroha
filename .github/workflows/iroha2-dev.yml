@@ -31,7 +31,7 @@ jobs:
         uses: docker/build-push-action@v3
         with:
           push: true
-          tags: bastots525/iroha2:dev
+          tags: bastos525/iroha2:dev
           labels: commit=${{ github.sha }}
           build-args: TAG=dev
           file: Dockerfile

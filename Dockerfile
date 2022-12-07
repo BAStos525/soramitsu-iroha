@@ -20,7 +20,7 @@ RUN set -eux && \
 WORKDIR /iroha
 COPY . .
 RUN  rm -f rust-toolchain.toml
-RUN  TARGET_CC=aarch64-linux-gnu-gcc cargo build --profile deploy --target aarch64-unknown-linux-musl -- link-arg=-lgcc -- target-feature=+crt-static --features vendored
+RUN  TARGET_CC=aarch64-linux-gnu-gcc cargo build --profile deploy --target aarch64-unknown-linux-musl -- link-arg -lgcc -- target-feature +crt-static --features vendored
 
 # final image
 FROM alpine:3.16

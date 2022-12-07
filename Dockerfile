@@ -4,7 +4,7 @@ FROM archlinux:base-devel AS builder
 ENV NIGHTLY=nightly-2022-08-15
 COPY ./rust-toolchain.toml .
 RUN set -eux && \
-    pacman -Syu rustup mold musl rust-musl --noconfirm && \
+    pacman -Syu rustup mold musl rust-musl aarch64-linux-gnu-gcc --noconfirm && \
     # toolchain: ./rust-toolchain.toml
     rustup target add aarch64-unknown-linux-musl  && \
     rustup component add rust-src llvm-tools-preview  && \

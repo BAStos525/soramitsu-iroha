@@ -6,7 +6,7 @@ COPY ./rust-toolchain.toml .
 RUN set -eux && \
     pacman -Syu rustup mold musl rust-musl --noconfirm && \
     # toolchain: ./rust-toolchain.toml
-    rustup target add x86_64-unknown-linux-musl && \
+    rustup target add aarch64-unknown-linux-musl  && \
     rustup component add rust-src llvm-tools-preview  && \
     # toolchain: $NIGHTLY
     rustup install --profile default $NIGHTLY && \
@@ -20,13 +20,13 @@ RUN set -eux && \
 WORKDIR /iroha
 COPY . .
 RUN  rm -f rust-toolchain.toml
-RUN  mold --run cargo build --profile deploy --target x86_64-unknown-linux-musl --features vendored
+RUN  mold --run cargo build --profile deploy --target aarch64-unknown-linux-musl --features vendored
 
 # final image
 FROM alpine:3.16
 
 ARG  STORAGE=/storage
-ARG  TARGET_DIR=/iroha/target/x86_64-unknown-linux-musl/deploy
+ARG  TARGET_DIR=/iroha/target/aarch64-unknown-linux-musl/deploy
 ENV  BIN_PATH=/usr/local/bin/
 ENV  CONFIG_DIR=/config
 ENV  IROHA2_CONFIG_PATH=$CONFIG_DIR/config.json

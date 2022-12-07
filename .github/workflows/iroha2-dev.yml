@@ -21,10 +21,12 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - uses: docker/setup-qemu-action@v2
+#      - uses: docker/setup-qemu-action@v2
       - name: Set up Docker Buildx
-        id: buildx
         uses: docker/setup-buildx-action@v2
+        id: buildx
+        with:
+          install: true
       - name: Build and push iroha2:dev image
         uses: docker/build-push-action@v3
         with:
@@ -35,9 +37,9 @@ jobs:
           file: Dockerfile
           # This context specification is required
           context: .
-          platforms: |-
-            linux/amd64
-            linux/arm64
+          # platforms: |-
+          #   linux/amd64
+          #   linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

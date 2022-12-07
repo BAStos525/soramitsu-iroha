@@ -20,7 +20,7 @@ RUN set -eux && \
 WORKDIR /iroha
 COPY . .
 RUN  rm -f rust-toolchain.toml
-RUN  mold --run cargo build --profile deploy --target aarch64-unknown-linux-musl --features vendored
+RUN  mold --run cargo build --profile deploy --target aarch64-unknown-linux-musl -- -C link-arg=-lgcc --features vendored
 
 # final image
 FROM alpine:3.16

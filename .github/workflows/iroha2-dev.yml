@@ -69,9 +69,19 @@ jobs:
       - name: Get PR labels
         id: pr-labels
         uses: joerick/pr-labels-action@v1.0.7
-      - name: Trigger Jenkins job to deploy iroha2:pr in k8s
+      # - name: Trigger Jenkins job to deploy iroha2:pr in k8s
+      #   if: contains(steps.pr-labels.outputs.labels, ' iroha2-pr-k8s ')
+      #   run: ls -la
+      - name: Trigger jenkins job
         if: contains(steps.pr-labels.outputs.labels, ' iroha2-pr-k8s ')
-        run: ls -la
+        uses: jabbukka/jenkins-trigger@main
+        with:
+          url: https://jenkins.soramitsu.co.jp/
+          job_name: "iroha2/deploy/iroha2-test"
+          user_name: vzyabkin
+          api_token: ${{ secrets.JENKINS_TOKEN }}
+          # wait: "true"
+          # timeout: "1000"
 
 
   # load-rs:

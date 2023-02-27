@@ -1,13 +1,22 @@
 name: I2::Dev::Publish
+permissions:
+  pull-requests: write
 
 on:
   push:
-    branches: [feature/DOPS-2261/i2-pr-deploy]
+    branches: [iroha2-dev]
   # Run the workflow to check that the docker containers are properly buildable
-  workflow_run:
-    workflows:
-      - "I2::Dev::Tests"
-    types: [requested]
+  # workflow_run:
+  #   workflows:
+  #     - "I2::Dev::Tests"
+  #   types: [requested]
+  pull_request:
+    branches: [feature/DOPS-2261/i2-pr-deploy]
+    # paths:
+    #   - '.github/workflows/**.yml'
+    types:
+      - labeled
+
 
 env:
   CARGO_TERM_COLOR: always
@@ -16,52 +25,49 @@ env:
 # no point in burning our AWS self-hosted runners' time. Hence
 # `ubuntu-latest` and not `[self-hosted, Linux]`.
 jobs:
-  # registry:
-  #   runs-on: [self-hosted, Linux, iroha2-dev-push]
-  #   container:
-  #     image: hyperledger/iroha2-ci:nightly-2022-12-22
-  #   steps:
-  #     - uses: actions/checkout@v3
-  #     - uses: docker/login-action@v2
-  #       with:
-  #         username: ${{ secrets.DOCKERHUB_USERNAME }}
-  #         password: ${{ secrets.DOCKERHUB_TOKEN }}
-  #     - name: Login to Soramitsu Harbor
-  #       uses: docker/login-action@v2
-  #       with:
-  #         registry: docker.soramitsu.co.jp
-  #         username: ${{ secrets.HARBOR_USERNAME }}
-  #         password: ${{ secrets.HARBOR_TOKEN }}
-  #     - name: Set up Docker Buildx
-  #       id: buildx
-  #       if: always()
-  #       uses: docker/setup-buildx-action@v2
-  #       with:
-  #         install: true
-  #     - name: Build and push iroha2:dev image
-  #       uses: docker/build-push-action@v4
-  #       if: always()
-  #       with:
-  #         push: true
-  #         tags: |
-  #           hyperledger/iroha2:dev
-  #           docker.soramitsu.co.jp/iroha2/iroha2:dev
-  #         labels: commit=${{ github.sha }}
-  #         build-args: TAG=dev
-  #         file: Dockerfile
-  #         # This context specification is required
-  #         context: .
-  #         cache-from: type=gha
-  #         cache-to: type=gha,mode=max
+  registry:
+    runs-on: [self-hosted, Linux, iroha2-dev-push]
+    container:
+      image: hyperledger/iroha2-ci:nightly-2022-12-22
+    steps:
+      - uses: actions/checkout@v3
+      - uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Login to Soramitsu Harbor
+        uses: docker/login-action@v2
+        with:
+          registry: docker.soramitsu.co.jp
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_TOKEN }}
+      - name: Set up Docker Buildx
+        id: buildx
+        if: always()
+        uses: docker/setup-buildx-action@v2
+        with:
+          install: true
+      - name: Build and push iroha2:dev image
+        uses: docker/build-push-action@v4
+        if: always()
+        with:
+          push: true
+          tags: |
+            hyperledger/iroha2:dev
+            docker.soramitsu.co.jp/iroha2/iroha2:dev
+          labels: commit=${{ github.sha }}
+          build-args: TAG=dev
+          file: Dockerfile
+          # This context specification is required
+          context: .
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   pr-deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Get PR labels
-        id: pr-labels
-        uses: joerick/pr-labels-action@v1.0.7
       - name: Trigger Jenkins job to deploy i2:pr in k8s
-        if: contains(steps.pr-labels.outputs.labels, ' iroha2-pr-k8s ')
+        if: ${{ github.event.label.name == 'iroha2-pr-k8s' }}
         run: ls -la
 
 

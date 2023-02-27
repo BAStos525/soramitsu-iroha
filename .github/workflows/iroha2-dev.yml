@@ -3,7 +3,7 @@ name: I2::Dev::Publish
 on:
   push:
     branches: [feature/DOPS-2261/i2-pr-deploy]
-  # Run the workflow to check that the docker containers are properly buildable
+  # Run the workflow to check that the docker containers are properly buildable!
   workflow_run:
     workflows:
       - "I2::Dev::Tests"

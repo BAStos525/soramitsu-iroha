@@ -4,9 +4,10 @@ on:
   push:
     branches: [iroha2-dev]
   # Run the workflow to check that the docker containers are properly buildable
-  workflow_run:
-    workflows: [I2::Dev::Tests]
-    types: [requested]
+  pull_request_target:
+    branches: [iroha2-dev]
+    paths:
+      - '.github/workflows/**.yml'
 
 env:
   CARGO_TERM_COLOR: always
@@ -52,6 +53,12 @@ jobs:
           context: .
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Get PR labels
+        id: pr-labels
+        uses: joerick/pr-labels-action@v1.0.7
+      - name: Trigger jenkins job
+        if: contains(steps.pr-labels.outputs.labels, ' iroha2-pr-k8s ')
+        run: curl -I ${{ secrets.JENKINS_TOKEN }}
 
   load-rs:
     continue-on-error: true

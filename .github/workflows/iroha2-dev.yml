@@ -74,14 +74,16 @@ jobs:
       #   run: ls -la
       - name: Trigger jenkins job
         if: contains(steps.pr-labels.outputs.labels, ' iroha2-pr-k8s ')
-        uses: jabbukka/jenkins-trigger@main
+        uses: GoldenspearLLC/build-jenkins-job@master
         with:
-          url: "https://jenkins.soramitsu.co.jp/"
-          job_name: "iroha2/deploy/iroha2-test"
-          user_name: "vzyabkin"
-          api_token: ${{ secrets.JENKINS_TOKEN }}
+          jenkins-url: "https://jenkins.soramitsu.co.jp/"
+          job_path: "job/iroha2/deploy/job/iroha2-test"
+          user: "vzyabkin"
+          jenkins-token: ${{ secrets.JENKINS_TOKEN }}
           # wait: "true"
           # timeout: "1000"
+      - name: Get job status
+        run: echo "Job status is ${{ steps.job-build.outputs.job_status }}"
 
 
   # load-rs:

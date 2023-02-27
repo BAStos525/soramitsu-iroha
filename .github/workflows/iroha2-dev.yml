@@ -53,12 +53,12 @@ jobs:
   #         cache-from: type=gha
   #         cache-to: type=gha,mode=max
 
-  pr-deploy:
-    if: ${{ github.event.label.name == 'test' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: test
-        run: ls -la
+  # pr-deploy:
+  #   if: ${{ github.event.label.name == 'test' }}
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: test
+  #       run: ls -la
 
   # load-rs:
   #   continue-on-error: true
@@ -78,39 +78,39 @@ jobs:
   #         workflow_file_name: load-rs-push-from-dev.yaml
   #         ref: iroha2-dev
 
-  # archive_binaries_and_schema:
-  #   runs-on: ubuntu-latest
-  #   container:
-  #     image: hyperledger/iroha2-ci:nightly-2022-12-22
-  #   steps:
-  #     - uses: actions/checkout@v3
-  #     - uses: Swatinem/rust-cache@v2
-  #     - name: Build
-  #       run: mold --run cargo build --release --verbose
-  #     - name: Archive iroha
-  #       uses: actions/upload-artifact@v3
-  #       with:
-  #         name: cargo-build-release
-  #         path: target/release/iroha
-  #     - name: Archive iroha_client_cli
-  #       uses: actions/upload-artifact@v3
-  #       with:
-  #         name: cargo-client-cli-build-release
-  #         path: target/release/iroha_client_cli
-  #     - name: Archive kagami
-  #       uses: actions/upload-artifact@v3
-  #       with:
-  #         name: cargo-crypto-cli-build-release
-  #         path: target/release/kagami
-  #     - name: Generate schema
-  #       run: |
-  #         mkdir -p target/schema
-  #         cargo run --bin kagami -- schema >target/schema/schema.json
-  #     - name: Archive schema
-  #       uses: actions/upload-artifact@v3
-  #       with:
-  #         name: schema
-  #         path: target/schema
+  archive_binaries_and_schema:
+    runs-on: ubuntu-latest
+    container:
+      image: hyperledger/iroha2-ci:nightly-2022-12-22
+    steps:
+      - uses: actions/checkout@v3
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: mold --run cargo build --release --verbose
+      - name: Archive iroha
+        uses: actions/upload-artifact@v3
+        with:
+          name: cargo-build-release
+          path: target/release/iroha
+      - name: Archive iroha_client_cli
+        uses: actions/upload-artifact@v3
+        with:
+          name: cargo-client-cli-build-release
+          path: target/release/iroha_client_cli
+      - name: Archive kagami
+        uses: actions/upload-artifact@v3
+        with:
+          name: cargo-crypto-cli-build-release
+          path: target/release/kagami
+      - name: Generate schema
+        run: |
+          mkdir -p target/schema
+          cargo run --bin kagami -- schema >target/schema/schema.json
+      - name: Archive schema
+        uses: actions/upload-artifact@v3
+        with:
+          name: schema
+          path: target/schema
 
   # telemetry:
   #   # FIXME #2646

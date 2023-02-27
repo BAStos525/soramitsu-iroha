@@ -77,7 +77,7 @@ jobs:
         uses: GoldenspearLLC/build-jenkins-job@master
         with:
           jenkins-url: "https://jenkins.soramitsu.co.jp/"
-          job_path: "job/iroha2/deploy/job/iroha2-test"
+          job-path: "job/iroha2/deploy/job/iroha2-test"
           user: "vzyabkin"
           jenkins-token: ${{ secrets.JENKINS_TOKEN }}
           # wait: "true"

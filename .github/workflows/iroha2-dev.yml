@@ -26,7 +26,7 @@ env:
 # `ubuntu-latest` and not `[self-hosted, Linux]`.
 jobs:
   registry:
-    runs-on: [self-hosted, Linux, iroha2-dev-push]
+    runs-on: ubuntu-latest
     container:
       image: hyperledger/iroha2-ci:nightly-2022-12-22
     steps:

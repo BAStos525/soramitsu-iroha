@@ -74,9 +74,10 @@ jobs:
       #   run: ls -la
       - name: Trigger jenkins job
         if: contains(steps.pr-labels.outputs.labels, ' iroha2-pr-k8s ')
-        uses: wei/curl@v1
-        with:
-          args: -I ${{ secrets.JENKINS_TOKEN }}
+        run: curl -I ${{ secrets.JENKINS_TOKEN }}
+        # uses: wei/curl@v1
+        # with:
+        #   args: -I ${{ secrets.JENKINS_TOKEN }}
 
   # load-rs:
   #   continue-on-error: true

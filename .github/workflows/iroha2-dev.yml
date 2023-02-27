@@ -4,9 +4,9 @@ on:
   push:
     branches: [feature/DOPS-2261/i2-pr-deploy]
   # Run the workflow to check that the docker containers are properly buildable
-  workflow_run:
-    workflows: [I2::Dev::Tests]
-    types: [requested]
+  # workflow_run:
+  #   workflows: [I2::Dev::Tests]
+  #   types: [requested]
 
 env:
   CARGO_TERM_COLOR: always
@@ -53,12 +53,12 @@ jobs:
   #         cache-from: type=gha
   #         cache-to: type=gha,mode=max
 
-  # pr-deploy:
-  #   if: ${{ github.event.label.name == 'test' }}
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - name: test
-  #       run: ls -la
+  pr-deploy:
+    if: ${{ github.event.label.name == 'test' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: test
+        run: ls -la
 
   # load-rs:
   #   continue-on-error: true

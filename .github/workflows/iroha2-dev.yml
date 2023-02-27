@@ -76,9 +76,9 @@ jobs:
         if: contains(steps.pr-labels.outputs.labels, ' iroha2-pr-k8s ')
         uses: jabbukka/jenkins-trigger@main
         with:
-          url: https://jenkins.soramitsu.co.jp/
+          url: "https://jenkins.soramitsu.co.jp/"
           job_name: "iroha2/deploy/iroha2-test"
-          user_name: vzyabkin
+          user_name: "vzyabkin"
           api_token: ${{ secrets.JENKINS_TOKEN }}
           # wait: "true"
           # timeout: "1000"

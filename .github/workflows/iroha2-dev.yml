@@ -5,7 +5,8 @@ on:
     branches: [iroha2-dev]
   # Run the workflow to check that the docker containers are properly buildable
   workflow_run:
-    workflows: [I2::Dev::Tests]
+    workflows:
+      - I2::Dev::Tests
     types: [requested]
 
 env:

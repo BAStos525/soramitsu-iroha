@@ -14,8 +14,8 @@ on:
     branches: [feature/DOPS-2261/i2-pr-deploy]
     # paths:
     #   - '.github/workflows/**.yml'
-    types:
-      - labeled
+    # types:
+    #   - labeled
 
 
 env:
@@ -66,8 +66,11 @@ jobs:
   pr-deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Jenkins job to deploy i2:pr in k8s
-        if: ${{ github.event.label.name == 'iroha2-pr-k8s' }}
+      - name: Get PR labels
+        id: pr-labels
+        uses: joerick/pr-labels-action@v1.0.7
+      - name: Trigger Jenkins job to deploy iroha2:pr in k8s
+        if: contains(steps.pr-labels.outputs.labels, ' iroha2-pr-k8s ')
         run: ls -la
 
 

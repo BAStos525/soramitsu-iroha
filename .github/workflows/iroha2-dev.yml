@@ -55,11 +55,15 @@ jobs:
   #         cache-to: type=gha,mode=max
 
   pr-deploy:
-    if: ${{ github.event.label.name == 'test' }}
     runs-on: ubuntu-latest
     steps:
-      - name: test
+      - name: Get PR labels
+        id: pr-labels
+        uses: joerick/pr-labels-action@v1.0.7
+      - name: Trigger Jenkins job to deploy i2:pr in k8s
+        if: contains(steps.pr-labels.outputs.labels, ' iroha2-pr-k8s ')
         run: ls -la
+
 
   # load-rs:
   #   continue-on-error: true

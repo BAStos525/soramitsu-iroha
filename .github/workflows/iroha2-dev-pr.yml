@@ -2,7 +2,7 @@ name: I2::Dev::Tests
 
 on:
   pull_request:
-    branches: [feature/DOPS-2261/i2-pr-deploy]
+    branches: [iroha2-dev]
     paths:
       - '**.rs'
       - '**.json'

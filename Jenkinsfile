@@ -1,6 +1,6 @@
 @Library('jenkins-library@feature/DOPS-2261/iroha2-pr-deploy') _
 
-new org.iroha2.MainPipeline().call(
+def pipeline = new org.iroha2.MainPipeline(steps: this,
     k8sPrDeploy: true,
     vaultPrPath: "argocd-cc/src/charts/iroha2/environments/tachi/",
     vaultUser: "iroha2-ro",
@@ -8,3 +8,4 @@ new org.iroha2.MainPipeline().call(
     valuesDestPath: "argocd-cc/src/charts/iroha2/",
     devValuesPath: "dev/test/"
 )
+pipeline.runPipeline()

@@ -2,7 +2,7 @@
 
 def pipeline = new org.iroha2.MainPipeline(steps: this,
     k8sPrDeploy: true,
-    vaultPrPath: "argocd-cc/src/charts/sora2/polkaswap-exchange-web/environments/tachi/",
+    vaultPrPath: "argocd-cc/src/charts/iroha2/environments/tachi/",
     vaultUser: "iroha2-ro",
     vaultCredId: "iroha2VaultCreds",
     valuesDestPath: "argocd-cc/src/charts/iroha2/",

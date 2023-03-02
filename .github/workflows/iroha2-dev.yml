@@ -1,6 +1,6 @@
 name: I2::Dev::Publish
-permissions:
-  pull-requests: read
+# permissions:
+#   pull-requests: read
 
 on:
   push:
@@ -63,21 +63,21 @@ jobs:
   #         cache-from: type=gha
   #         cache-to: type=gha,mode=max
 
-  pr-deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Get PR labels
-        id: pr-labels
-        uses: joerick/pr-labels-action@v1.0.7
-      # - name: Trigger Jenkins job to deploy iroha2:pr in k8s
-      #   if: contains(steps.pr-labels.outputs.labels, ' iroha2-pr-k8s ')
-      #   run: ls -la
-      - name: Trigger jenkins job
-        if: contains(steps.pr-labels.outputs.labels, ' iroha2-pr-k8s ')
-        run: curl -I ${{ secrets.JENKINS_TOKEN }}
-        # uses: wei/curl@v1
-        # with:
-        #   args: -I ${{ secrets.JENKINS_TOKEN }}
+  # pr-deploy:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Get PR labels
+  #       id: pr-labels
+  #       uses: joerick/pr-labels-action@v1.0.7
+  #     # - name: Trigger Jenkins job to deploy iroha2:pr in k8s
+  #     #   if: contains(steps.pr-labels.outputs.labels, ' iroha2-pr-k8s ')
+  #     #   run: ls -la
+  #     - name: Trigger jenkins job
+  #       if: contains(steps.pr-labels.outputs.labels, ' iroha2-pr-k8s ')
+  #       run: curl -I ${{ secrets.JENKINS_TOKEN }}
+  #       # uses: wei/curl@v1
+  #       # with:
+  #       #   args: -I ${{ secrets.JENKINS_TOKEN }}
 
   # load-rs:
   #   continue-on-error: true

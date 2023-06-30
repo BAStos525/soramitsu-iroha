@@ -3,7 +3,7 @@ name: I2::Dev::Publish
 on:
   push:
     branches: [iroha2-dev]
-  # Run the workflow to check that the docker containers are properly buildable
+  # Run the workflow to check that the docker containers are properly buildable!!!
   pull_request_target:
     branches: [iroha2-dev]
     paths:
@@ -17,7 +17,7 @@ env:
 # `ubuntu-latest` and not `[self-hosted, Linux]`.
 jobs:
   registry:
-    runs-on: [self-hosted, Linux, iroha2-dev-push]
+    runs-on: ubuntu-latest
     container:
       image: hyperledger/iroha2-ci:nightly-2022-12-22
     steps:

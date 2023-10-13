@@ -134,7 +134,7 @@ jobs:
   #         context: .
 
   client_cli_test:
-    runs-on: [self-hosted, Linux, iroha2ci]
+    runs-on: ubuntu-latet
     container:
       image: hyperledger/iroha2-ci:nightly-2023-06-25
     timeout-minutes: 60

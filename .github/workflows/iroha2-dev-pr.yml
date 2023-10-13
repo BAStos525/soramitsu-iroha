@@ -16,7 +16,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CLIENT_CLI_DIR: "/__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}/target/debug"
-  ALLURE_RESULTS: "${{ github.workspace }}/allure-results"
+  ALLURE_RESULTS: "${{ github.workspace }}/client_cli/pytests/allure-results"
 
 jobs:
   # consistency:
@@ -134,7 +134,7 @@ jobs:
   #         context: .
 
   client_cli_test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latet
     container:
       image: hyperledger/iroha2-ci:nightly-2023-06-25
     timeout-minutes: 60
@@ -168,7 +168,7 @@ jobs:
         continue-on-error: true
         working-directory: client_cli/pytests
         run: |
-          poetry run pytest --alluredir=${{ env.ALLURE_RESULTS }}
+          poetry run pytest --alluredir allure-results
       - name: Upload allure-results artifact
         uses: actions/upload-artifact@v3
         with:

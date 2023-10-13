@@ -4,7 +4,8 @@ on:
   pull_request:
     branches:
       - 'iroha2**'
-    types: [closed]
+      - 'allure-artifact/test'
+    types: [closed, edited, reopened]
 
 jobs:
   upload_test_results:
@@ -26,9 +27,14 @@ jobs:
       - name: Download allure-results artifact
         uses: dawidd6/action-download-artifact@v2
         with:
-          workflow: iroha2-${{ env.TAG }}-pr.yml
+        #  workflow: iroha2-dev-pr.yml
           name: allure-results-${{ github.event.pull_request.head.sha }}
           search_artifacts: true
+      - name: check fs
+        run: |
+          ls -la
+          ls -la /${{ github.workspace }}
+          ls -la /${{ github.workspace }}/allure-results-${{ github.event.pull_request.head.sha }}
       - name: Upload results to Allure Test Ops
         run:  allurectl upload --endpoint https://soramitsu.testops.cloud \
               --token ${{ secrets.ALLURE_TOKEN }} \

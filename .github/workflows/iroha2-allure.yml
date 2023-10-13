@@ -1,0 +1,37 @@
+name: I2::Allure::Upload client-cli-tests results
+
+on:
+  pull_request:
+    branches:
+      - 'iroha2**'
+    types: [closed]
+
+jobs:
+  upload_test_results:
+    if: github.event.pull_request.merged
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get tag from branch name
+        run: |
+          BRANCH=${{ github.ref_name }}
+          PREFIX='iroha2-'
+          TAG=${BRANCH#$PREFIX}
+          echo "TAG=$TAG" >>$GITHUB_ENV
+      - name: Install allurectl
+        uses: allure-framework/setup-allurectl@v1
+        # with:
+        #   allure-endpoint: https://soramitsu.testops.cloud
+        #   allure-token: ${{ secrets.ALLURE_TOKEN }}
+        #   allure-project-id: 1
+      - name: Download allure-results artifact
+        uses: dawidd6/action-download-artifact@v2
+        with:
+          workflow: iroha2-${{ env.TAG }}-pr.yml
+          name: allure-results-${{ github.event.pull_request.head.sha }}
+          search_artifacts: true
+      - name: Upload results to Allure Test Ops
+        run:  allurectl upload --endpoint https://soramitsu.testops.cloud \
+              --token ${{ secrets.ALLURE_TOKEN }} \
+              --project-id 1 \
+              --launch-name "Local PC manual launch 2023-10-13" \
+              ${{ github.workspace }}/allure-results-${{ github.event.pull_request.head.sha }}

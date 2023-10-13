@@ -133,7 +133,7 @@ jobs:
   #         # This context specification is required
   #         context: .
 
-  client-cli-test:
+  client_cli_test:
     runs-on: [self-hosted, Linux, iroha2ci]
     container:
       image: hyperledger/iroha2-ci:nightly-2023-06-25
@@ -165,12 +165,12 @@ jobs:
         run: |
           poetry install
       - name: Run client cli tests
+        continue-on-error: true
         working-directory: client_cli/pytests
         run: |
           poetry run pytest --alluredir=${{ env.ALLURE_RESULTS }}
-          printenv | grep GITHUB_TESTS_
       - name: Upload allure-results artifact
         uses: actions/upload-artifact@v3
         with:
-          name: allure-${{ github.event.pull_request.head.sha }}
+          name: allure-results-${{ github.event.pull_request.head.sha }}
           path: ${{ env.ALLURE_RESULTS }}

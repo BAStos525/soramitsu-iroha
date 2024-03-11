@@ -2,7 +2,7 @@ name: I2::Dev::Publish
 
 on:
   push:
-    branches: [iroha2-dev]
+    branches: [test/11-03-23/spot-runners]
 
 env:
   CARGO_TERM_COLOR: always
@@ -10,7 +10,7 @@ env:
 
 jobs:
   registry:
-    runs-on: [self-hosted, Linux, iroha2]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Set up Docker Buildx
@@ -27,7 +27,7 @@ jobs:
           load: true
           file: Dockerfile
           tags: |
-            hyperledger/iroha2:dev
+            bastos525/iroha2:dev
             docker.soramitsu.co.jp/iroha2/iroha2:dev
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -48,20 +48,20 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Login to Soramitsu Harbor
-        uses: docker/login-action@v3
-        with:
-          registry: docker.soramitsu.co.jp
-          username: ${{ secrets.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_TOKEN }}
+      # - name: Login to Soramitsu Harbor
+      #   uses: docker/login-action@v3
+      #   with:
+      #     registry: docker.soramitsu.co.jp
+      #     username: ${{ secrets.HARBOR_USERNAME }}
+      #     password: ${{ secrets.HARBOR_TOKEN }}
       - name: Push iroha2:dev image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           tags: |
-            hyperledger/iroha2:dev
-            docker.soramitsu.co.jp/iroha2/iroha2:dev
+            bastos525/iroha2:dev
+           # docker.soramitsu.co.jp/iroha2/iroha2:dev
           labels: commit=${{ github.sha }}
 
   archive_binaries_and_schema:

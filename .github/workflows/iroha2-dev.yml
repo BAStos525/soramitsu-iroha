@@ -30,6 +30,7 @@ jobs:
           file: Dockerfile
           tags: |
             bastos525/iroha2:dev
+            hyperledger/iroha2:dev
             docker.soramitsu.co.jp/iroha2/iroha2:dev
           cache-from: type=gha
           cache-to: type=gha,mode=max

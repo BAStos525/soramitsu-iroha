@@ -38,14 +38,14 @@ jobs:
       #   run: |
       #     docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.single.yml up --wait || exit 1
       #     docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.single.yml down
-      # - name: Test docker-compose.local.yml before pushing
-      #   run: |
-      #     docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.local.yml up --wait || exit 1
-      #     docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.local.yml down
-      - name: Test docker-compose.yml before pushing
+      - name: Test docker-compose.local.yml before pushing
         run: |
-          docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.yml up --wait || exit 1
-          docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.yml down
+          docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.local.yml up --wait || exit 1
+          docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.local.yml down
+      # - name: Test docker-compose.yml before pushing
+      #   run: |
+      #     docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.yml up --wait || exit 1
+      #     docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.yml down
       - name: Login to DockerHub
         uses: docker/login-action@v3
         with:

@@ -95,13 +95,13 @@ jobs:
       - name: DefectDojo
         if: always()
         id: defectdojo
-        uses: C4tWithShell/defectdojo-action@1.0.1
+        uses: C4tWithShell/defectdojo-action@1.0.2
         with:
           token: ${{ secrets.DEFECTOJO_TOKEN }}
           defectdojo_url: ${{ secrets.DEFECTOJO_URL }}
           product_type: iroha2
           engagement: ${{ github.ref_name }}
-          tools: ("Trivy Scan" "Github Vulnerability Scan")
+          tools: "Trivy Scan, Github Vulnerability Scan"
           sonar_projectKey: bastos525:soramitsu-iroha
           github_token: ${{ secrets.GITHUB_TOKEN }}
           github_repository: ${{ github.repository }}

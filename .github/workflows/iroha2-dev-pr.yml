@@ -101,7 +101,7 @@ jobs:
           defectdojo_url: ${{ secrets.DEFECTOJO_URL }}
           product_type: iroha2
           engagement: ${{ github.ref_name }}
-          tools: "Trivy Scan, Github Vulnerability Scan"
+          tools: "SonarQube API Import, Github Vulnerability Scan"
           sonar_projectKey: bastos525:soramitsu-iroha
           github_token: ${{ secrets.GITHUB_TOKEN }}
           github_repository: ${{ github.repository }}

@@ -12,6 +12,7 @@ use tokio::{
         TcpStream,
     },
     sync::{mpsc, oneshot},
+    time::Duration,
 };
 
 use crate::{boilerplate::*, Error};
@@ -38,6 +39,7 @@ pub mod handles {
         key_pair: KeyPair,
         connection_id: ConnectionId,
         service_message_sender: mpsc::Sender<ServiceMessage<T>>,
+        idle_timeout: Duration,
     ) {
         let peer = state::Connecting {
             peer_addr,
@@ -47,6 +49,7 @@ pub mod handles {
         let peer = RunPeerArgs {
             peer,
             service_message_sender,
+            idle_timeout,
         };
         tokio::task::spawn(run::run::<T, K, E, _>(peer).in_current_span());
     }
@@ -57,6 +60,7 @@ pub mod handles {
         key_pair: KeyPair,
         connection: Connection,
         service_message_sender: mpsc::Sender<ServiceMessage<T>>,
+        idle_timeout: Duration,
     ) {
         let peer = state::ConnectedFrom {
             peer_addr,
@@ -66,6 +70,7 @@ pub mod handles {
         let peer = RunPeerArgs {
             peer,
             service_message_sender,
+            idle_timeout,
         };
         tokio::task::spawn(run::run::<T, K, E, _>(peer).in_current_span());
     }
@@ -92,6 +97,8 @@ mod run {
     //! Module with peer [`run`] function.
 
     use iroha_logger::prelude::*;
+    use parity_scale_codec::Decode;
+    use tokio::time::Instant;
 
     use super::{
         cryptographer::Cryptographer,
@@ -108,6 +115,7 @@ mod run {
         RunPeerArgs {
             peer,
             service_message_sender,
+            idle_timeout,
         }: RunPeerArgs<T, P>,
     ) {
         let conn_id = peer.connection_id();
@@ -118,10 +126,14 @@ mod run {
         // Insure proper termination from every execution path.
         async {
             // Try to do handshake process
-            let peer = match peer.handshake().await {
-                Ok(ready) => ready,
-                Err(error) => {
+            let peer = match tokio::time::timeout(idle_timeout, peer.handshake()).await {
+                Ok(Ok(ready)) => ready,
+                Ok(Err(error)) => {
                     iroha_logger::error!(%error, "Failure during handshake.");
+                    return;
+                },
+                Err(error) => {
+                    iroha_logger::error!(%error, "Other peer is idle during handshake");
                     return;
                 }
             };
@@ -175,8 +187,22 @@ mod run {
             let mut message_reader = MessageReader::new(read, cryptographer.clone());
             let mut message_sender = MessageSender::new(write, cryptographer);
 
+            let mut idle_interval = tokio::time::interval_at(Instant::now() + idle_timeout, idle_timeout);
+            let mut ping_interval = tokio::time::interval_at(Instant::now() + idle_timeout / 2, idle_timeout / 2);
+
             loop {
                 tokio::select! {
+                    _ = ping_interval.tick() => {
+                        iroha_logger::trace!("Sending ping");
+                        if let Err(error) = message_sender.send_message(Message::<T>::Ping).await {
+                            iroha_logger::error!(%error, "Failed to send ping to peer.");
+                            break;
+                        }
+                    }
+                    _ = idle_interval.tick() => {
+                        iroha_logger::error!(timeout=idle_timeout.as_secs(), "Connection with peer is idle");
+                        break;
+                    }
                     msg = post_receiver.recv() => {
                         let Some(msg) = msg else {
                             iroha_logger::debug!("Peer handle dropped.");
@@ -187,10 +213,12 @@ mod run {
                         if post_receiver_len > 100 {
                             iroha_logger::warn!(size=post_receiver_len, "Peer post messages are pilling up");
                         }
-                        if let Err(error) = message_sender.send_message(msg).await {
+                        if let Err(error) = message_sender.send_message(Message::Message(msg)).await {
                             iroha_logger::error!(%error, "Failed to send message to peer.");
                             break;
                         }
+                        // Reset ping timeout as peer send another message
+                        ping_interval.reset();
                     }
                     msg = message_reader.read_message() => {
                         let msg = match msg {
@@ -206,12 +234,21 @@ mod run {
                                 break;
                             }
                         };
-                        iroha_logger::trace!("Received peer message");
-                        let peer_message = PeerMessage(peer_id.clone(), msg);
-                        if peer_message_sender.send(peer_message).await.is_err() {
-                            iroha_logger::error!("Network dropped peer message channel.");
-                            break;
-                        }
+                        match msg {
+                            Message::Ping => {
+                                iroha_logger::trace!("Received peer ping");
+                            },
+                            Message::Message(msg) => {
+                                iroha_logger::trace!("Received peer message");
+                                let peer_message = PeerMessage(peer_id.clone(), msg);
+                                if peer_message_sender.send(peer_message).await.is_err() {
+                                    iroha_logger::error!("Network dropped peer message channel.");
+                                    break;
+                                }
+                            }
+                        };
+                        // Reset idle timeout as we received message from peer 
+                        idle_interval.reset();
                     }
                     else => break,
                 }
@@ -229,6 +266,7 @@ mod run {
     pub(super) struct RunPeerArgs<T: Pload, P> {
         pub peer: P,
         pub service_message_sender: mpsc::Sender<ServiceMessage<T>>,
+        pub idle_timeout: Duration,
     }
 
     /// Trait for peer stages that might be used as starting point for peer's [`run`] function.
@@ -364,6 +402,13 @@ mod run {
             );
             Ok(())
         }
+    }
+
+    /// Either message or ping
+    #[derive(Encode, Decode, Clone, Debug)]
+    enum Message<T> {
+        Message(T),
+        Ping,
     }
 }
 

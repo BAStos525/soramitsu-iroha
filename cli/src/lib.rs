@@ -206,6 +206,7 @@ impl Iroha {
         let network = IrohaNetwork::start(
             config.common.p2p_address.clone(),
             config.common.key_pair.clone(),
+            config.common.idle_timeout,
         )
         .await
         .wrap_err("Unable to start P2P-network")?;

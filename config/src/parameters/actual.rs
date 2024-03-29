@@ -72,6 +72,7 @@ pub struct Common {
     pub chain_id: ChainId,
     pub key_pair: KeyPair,
     pub p2p_address: SocketAddr,
+    pub idle_timeout: Duration,
 }
 
 impl Common {

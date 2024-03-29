@@ -38,7 +38,8 @@ async fn network_create() {
     let address = socket_addr!(127.0.0.1:12_000);
     let key_pair = KeyPair::random();
     let public_key = key_pair.public_key().clone();
-    let network = NetworkHandle::start(address.clone(), key_pair)
+    let idle_timeout = Duration::from_secs(60);
+    let network = NetworkHandle::start(address.clone(), key_pair, idle_timeout)
         .await
         .unwrap();
     tokio::time::sleep(delay).await;
@@ -139,6 +140,7 @@ impl TestActor {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_networks() {
     let delay = Duration::from_millis(300);
+    let idle_timeout = Duration::from_secs(60);
     setup_logger();
     let key_pair1 = KeyPair::random();
     let public_key1 = key_pair1.public_key().clone();
@@ -146,13 +148,13 @@ async fn two_networks() {
     let public_key2 = key_pair2.public_key().clone();
     info!("Starting first network...");
     let address1 = socket_addr!(127.0.0.1:12_005);
-    let mut network1 = NetworkHandle::start(address1.clone(), key_pair1)
+    let mut network1 = NetworkHandle::start(address1.clone(), key_pair1, idle_timeout)
         .await
         .unwrap();
 
     info!("Starting second network...");
     let address2 = socket_addr!(127.0.0.1:12_010);
-    let network2 = NetworkHandle::start(address2.clone(), key_pair2)
+    let network2 = NetworkHandle::start(address2.clone(), key_pair2, idle_timeout)
         .await
         .unwrap();
 
@@ -287,7 +289,10 @@ async fn start_network(
     let actor = TestActor::start(messages);
 
     let PeerId { address, .. } = peer.clone();
-    let mut network = NetworkHandle::start(address, key_pair).await.unwrap();
+    let idle_timeout = Duration::from_secs(60);
+    let mut network = NetworkHandle::start(address, key_pair, idle_timeout)
+        .await
+        .unwrap();
     network.subscribe_to_peers_messages(actor);
 
     let _ = barrier.wait().await;

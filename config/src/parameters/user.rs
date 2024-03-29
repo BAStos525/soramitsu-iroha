@@ -186,7 +186,7 @@ impl Root {
             }
         }
 
-        let (p2p_address, block_sync, transaction_gossiper) = self.network.parse();
+        let (p2p_address, idle_timeout, block_sync, transaction_gossiper) = self.network.parse();
 
         let logger = self.logger;
         let queue = self.queue;
@@ -228,6 +228,7 @@ impl Root {
             chain_id: self.chain_id,
             key_pair: key_pair.unwrap(),
             p2p_address,
+            idle_timeout,
         };
         let telemetry = telemetry.unwrap();
         let genesis = genesis.unwrap();
@@ -457,20 +458,31 @@ pub struct Network {
     pub block_gossip_period: Duration,
     pub transaction_gossip_max_size: NonZeroU32,
     pub transaction_gossip_period: Duration,
+    /// Duration of time after which connection with peer is terminated if peer is idle
+    pub idle_timeout: Duration,
 }
 
 impl Network {
-    fn parse(self) -> (SocketAddr, actual::BlockSync, actual::TransactionGossiper) {
+    fn parse(
+        self,
+    ) -> (
+        SocketAddr,
+        Duration,
+        actual::BlockSync,
+        actual::TransactionGossiper,
+    ) {
         let Self {
             address,
             block_gossip_max_size,
             block_gossip_period,
             transaction_gossip_max_size,
             transaction_gossip_period,
+            idle_timeout,
         } = self;
 
         (
             address,
+            idle_timeout,
             actual::BlockSync {
                 gossip_period: block_gossip_period,
                 gossip_max_size: block_gossip_max_size,

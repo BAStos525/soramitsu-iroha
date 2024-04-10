@@ -3,12 +3,12 @@ name: I2::Dev::Static
 on:
   pull_request:
     branches: [i2/sonarqube-defectdojo]
-    paths:
-      - '**.rs'
-      - '**.json'
-      - '**.toml'
-      - '.github/workflows/iroha2-dev-pr-static.yml'
-      - 'client_cli/pytests/**/*.py'
+    # paths:
+    #   - '**.rs'
+    #   - '**.json'
+    #   - '**.toml'
+    #   - '.github/workflows/iroha2-dev-pr-static.yml'
+    #   - 'client_cli/pytests/**/*.py'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

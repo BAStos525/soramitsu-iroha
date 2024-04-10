@@ -103,7 +103,7 @@ jobs:
     if: false
     runs-on: ubuntu-latest
     container:
-      image: bastos525/iroha2-ci:nightly-2024-01-12-jq
+      image: hyperledger/iroha2-ci:nightly-2024-01-12
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
@@ -153,6 +153,8 @@ jobs:
 
   sonarqube-defectdojo:
     runs-on: ubuntu-latest
+    container:
+      image: bastos525/iroha2-ci:nightly-2024-01-12-jq
     steps:
       - name: Download clippy report artifact
         uses: dawidd6/action-download-artifact@v3.1.4

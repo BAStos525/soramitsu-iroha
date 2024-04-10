@@ -2,101 +2,101 @@ name: I2::Dev::Publish
 
 on:
   push:
-    branches: [iroha2-dev]
+    branches: [i2/sonarqube-defectdojo]
 
 env:
   CARGO_TERM_COLOR: always
   DOCKER_COMPOSE_PATH: configs/swarm
 
 jobs:
-  registry:
-    runs-on: [self-hosted, Linux, iroha2]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Docker Buildx
-        id: buildx
-        if: always()
-        uses: docker/setup-buildx-action@v3
-        with:
-          install: true
-      - name: Build and export to Docker iroha2:dev image
-        uses: docker/build-push-action@v5
-        if: always()
-        with:
-          context: .
-          load: true
-          file: Dockerfile
-          tags: |
-            hyperledger/iroha2:dev
-            docker.soramitsu.co.jp/iroha2/iroha2:dev
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      - name: Test docker-compose.single.yml before pushing
-        run: |
-          docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.single.yml up --wait || exit 1
-          docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.single.yml down
-      - name: Test docker-compose.local.yml before pushing
-        run: |
-          docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.local.yml up --wait || exit 1
-          docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.local.yml down
-      - name: Test docker-compose.yml before pushing
-        run: |
-          docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.yml up --wait || exit 1
-          docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.yml down
-      - name: Login to DockerHub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Login to Soramitsu Harbor
-        uses: docker/login-action@v3
-        with:
-          registry: docker.soramitsu.co.jp
-          username: ${{ secrets.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_TOKEN }}
-      - name: Push iroha2:dev image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: |
-            hyperledger/iroha2:dev
-            docker.soramitsu.co.jp/iroha2/iroha2:dev
-          labels: commit=${{ github.sha }}
+  # registry:
+  #   runs-on: [self-hosted, Linux, iroha2]
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - name: Set up Docker Buildx
+  #       id: buildx
+  #       if: always()
+  #       uses: docker/setup-buildx-action@v3
+  #       with:
+  #         install: true
+  #     - name: Build and export to Docker iroha2:dev image
+  #       uses: docker/build-push-action@v5
+  #       if: always()
+  #       with:
+  #         context: .
+  #         load: true
+  #         file: Dockerfile
+  #         tags: |
+  #           hyperledger/iroha2:dev
+  #           docker.soramitsu.co.jp/iroha2/iroha2:dev
+  #         cache-from: type=gha
+  #         cache-to: type=gha,mode=max
+  #     - name: Test docker-compose.single.yml before pushing
+  #       run: |
+  #         docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.single.yml up --wait || exit 1
+  #         docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.single.yml down
+  #     - name: Test docker-compose.local.yml before pushing
+  #       run: |
+  #         docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.local.yml up --wait || exit 1
+  #         docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.local.yml down
+  #     - name: Test docker-compose.yml before pushing
+  #       run: |
+  #         docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.yml up --wait || exit 1
+  #         docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.yml down
+  #     - name: Login to DockerHub
+  #       uses: docker/login-action@v3
+  #       with:
+  #         username: ${{ secrets.DOCKERHUB_USERNAME }}
+  #         password: ${{ secrets.DOCKERHUB_TOKEN }}
+  #     - name: Login to Soramitsu Harbor
+  #       uses: docker/login-action@v3
+  #       with:
+  #         registry: docker.soramitsu.co.jp
+  #         username: ${{ secrets.HARBOR_USERNAME }}
+  #         password: ${{ secrets.HARBOR_TOKEN }}
+  #     - name: Push iroha2:dev image
+  #       uses: docker/build-push-action@v5
+  #       with:
+  #         context: .
+  #         push: true
+  #         tags: |
+  #           hyperledger/iroha2:dev
+  #           docker.soramitsu.co.jp/iroha2/iroha2:dev
+  #         labels: commit=${{ github.sha }}
 
-  archive_binaries_and_schema:
-    runs-on: ubuntu-latest
-    container:
-      image: hyperledger/iroha2-ci:nightly-2024-01-12
-    steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-      - name: Build
-        run: mold --run cargo build --release --verbose
-      - name: Archive iroha
-        uses: actions/upload-artifact@v3
-        with:
-          name: cargo-build-release
-          path: target/release/iroha
-      - name: Archive iroha_client_cli
-        uses: actions/upload-artifact@v3
-        with:
-          name: cargo-client-cli-build-release
-          path: target/release/iroha_client_cli
-      - name: Archive kagami
-        uses: actions/upload-artifact@v3
-        with:
-          name: cargo-crypto-cli-build-release
-          path: target/release/kagami
-      - name: Generate schema
-        run: |
-          mkdir -p target/schema
-          cargo run --bin kagami -- schema >target/schema/schema.json
-      - name: Archive schema
-        uses: actions/upload-artifact@v3
-        with:
-          name: schema
-          path: target/schema
+  # archive_binaries_and_schema:
+  #   runs-on: ubuntu-latest
+  #   container:
+  #     image: hyperledger/iroha2-ci:nightly-2024-01-12
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: Swatinem/rust-cache@v2
+  #     - name: Build
+  #       run: mold --run cargo build --release --verbose
+  #     - name: Archive iroha
+  #       uses: actions/upload-artifact@v3
+  #       with:
+  #         name: cargo-build-release
+  #         path: target/release/iroha
+  #     - name: Archive iroha_client_cli
+  #       uses: actions/upload-artifact@v3
+  #       with:
+  #         name: cargo-client-cli-build-release
+  #         path: target/release/iroha_client_cli
+  #     - name: Archive kagami
+  #       uses: actions/upload-artifact@v3
+  #       with:
+  #         name: cargo-crypto-cli-build-release
+  #         path: target/release/kagami
+  #     - name: Generate schema
+  #       run: |
+  #         mkdir -p target/schema
+  #         cargo run --bin kagami -- schema >target/schema/schema.json
+  #     - name: Archive schema
+  #       uses: actions/upload-artifact@v3
+  #       with:
+  #         name: schema
+  #         path: target/schema
 
   telemetry:
     # FIXME #2646
@@ -150,3 +150,48 @@ jobs:
         with:
           name: telemetry
           path: target/telemetry
+
+  sonarqube-defectdojo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download clippy report artifact
+        uses: dawidd6/action-download-artifact@v3.1.4
+        with:
+          workflow: iroha2-dev-pr.yml
+          name: clippy.json
+          search_artifacts: true
+      - name: Download lcov report artifact
+        uses: dawidd6/action-download-artifact@v3.1.4
+        with:
+          workflow: iroha2-dev-pr.yml
+          name: lcov.info
+          search_artifacts: true
+      - name: SonarQube Scan
+        uses: sonarsource/sonarqube-scan-action@v2.0.2
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        with:
+          args: >
+            -Dcommunity.rust.clippy.reportPaths=clippy.json
+            -Dcommunity.rust.lcov.reportPaths=lcov.info
+      - name: DefectDojo
+        id: defectdojo
+        uses: C4tWithShell/defectdojo-action@1.0.4
+        with:
+          token: ${{ secrets.DEFECTOJO_TOKEN }}
+          defectdojo_url: ${{ secrets.DEFECTOJO_URL }}
+          product_type: iroha2
+          engagement: ${{ github.ref_name }}
+          tools: "SonarQube API Import,Github Vulnerability Scan"
+          sonar_projectKey: bastos525:soramitsu-iroha
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_repository: ${{ github.repository }}
+          product: ${{ github.repository }}
+          environment: Test
+          reports: '{"Github Vulnerability Scan": "github.json"}'
+      - name: Show Defectdojo response
+        if: always()
+        run: |
+          set -e
+          printf '%s\n' '${{ steps.defectdojo.outputs.response }}'

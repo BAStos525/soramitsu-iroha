@@ -103,7 +103,7 @@ jobs:
     if: false
     runs-on: ubuntu-latest
     container:
-      image: hyperledger/iroha2-ci:nightly-2024-01-12
+      image: bastos525/iroha2-ci:nightly-2024-01-12-jq
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2

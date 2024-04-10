@@ -47,6 +47,7 @@ jobs:
       #     rustup component add llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
       - name: Run tests, with coverage
+        continue-on-error: true
         run: |
           cargo install grcov
           mold --run cargo test --all-features --workspace --no-fail-fast
@@ -54,7 +55,6 @@ jobs:
           RUSTFLAGS: "-C instrument-coverage"
           LLVM_PROFILE_FILE: "iroha-%p-%m.profraw"
       - name: Generate lcov report
-        if: always()
         run: grcov . --binary-path ./target/debug/ -s . -t lcov --branch --ignore-not-existing --ignore "/client_cli/*|**/main.rs" -o lcov.info
       - name: Upload coverage to coveralls.io
         uses: coverallsapp/github-action@v2

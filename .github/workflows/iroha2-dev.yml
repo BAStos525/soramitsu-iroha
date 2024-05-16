@@ -2,7 +2,7 @@ name: I2::Dev::Publish
 
 on:
   push:
-    branches: [main]
+    branches: [fix/dops-3186/i2-refactor-sonar-dojo]
 
 env:
   CARGO_TERM_COLOR: always

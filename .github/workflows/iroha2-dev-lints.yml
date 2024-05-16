@@ -2,7 +2,7 @@ name: I2::Dev::Lints
 
 on:
   workflow_run:
-    workflows: [I2::Dev::Tests, I2::Dev::Static]
+    workflows: ["I2::Dev::Tests", "I2::Dev::Static"]
     types: [requested]
 
 concurrency:

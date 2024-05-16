@@ -36,8 +36,8 @@ jobs:
         if: always()
         run: ./scripts/tests/consistency.sh docker-compose
 
-  # include: client/tests/integration/
-  # exclude: client/tests/integration/extra_functional
+  ## include: client/tests/integration/
+  ## exclude: client/tests/integration/extra_functional
   integration:
     runs-on: [self-hosted, Linux, iroha2]
     container:

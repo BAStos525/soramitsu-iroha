@@ -25,12 +25,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-
       - name: Default executor format
         run: |
           cd ./default_executor
           mold --run cargo fmt --all -- --check
-
       - name: Integration tests smart contracts format
         run: |
           cd ./client/tests/integration/smartcontracts

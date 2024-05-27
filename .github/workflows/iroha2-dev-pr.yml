@@ -2,7 +2,7 @@ name: I2::Dev::Tests
 
 on:
   pull_request:
-    branches: [main]
+    branches: [i2/remove-coveralls]
     paths:
       - '**.rs'
       - '**.json'
@@ -20,7 +20,7 @@ env:
   CLIENT_CLI_DIR: "/__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}/test"
 
 jobs:
-  # consistency:!!!!
+  # consistency:!!
   #   runs-on: [self-hosted, Linux, iroha2]
   #   container:
   #     image: hyperledger/iroha2-ci:nightly-2024-04-18

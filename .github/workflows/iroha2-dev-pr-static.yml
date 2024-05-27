@@ -2,7 +2,7 @@ name: I2::Dev::Static
 
 on:
   pull_request:
-    branches: [i2/sonar-CI-checks]
+    branches: [i2/remove-coveralls]
     paths:
       - '**.rs'
       - '**.json'
@@ -18,7 +18,7 @@ env:
   RUSTUP_TOOLCHAIN: nightly-2024-04-18
 
 jobs:
-  # smart_contracts_analysis:!!!!
+  # smart_contracts_analysis:!!
   #   runs-on: ubuntu-latest
   #   container:
   #     image: hyperledger/iroha2-ci:nightly-2024-04-18

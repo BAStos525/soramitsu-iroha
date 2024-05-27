@@ -52,7 +52,7 @@ jobs:
 
   # exclude: client/tests/integration/
   with_coverage:
-    runs-on: [self-hosted, Linux, iroha2]
+    runs-on: self-hosted #[self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2024-04-18
     steps:

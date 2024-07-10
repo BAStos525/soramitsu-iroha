@@ -66,4 +66,3 @@ jobs:
         with:
           name: lcov.info
           path: lcov.info
-

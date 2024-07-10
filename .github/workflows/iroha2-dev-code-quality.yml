@@ -22,4 +22,4 @@ jobs:
             github-token: ${{ secrets.G_ACCESS_TOKEN }}
       - name: Show artifact
         run: |
-          ls -l lints/my-artifact
+          ls -la lints

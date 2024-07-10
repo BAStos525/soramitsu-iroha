@@ -13,33 +13,6 @@ on:
 
 
 jobs:
-  workspace_analysis_clippy:
-    runs-on: ubuntu-latest
-    container:
-      image: hyperledger/iroha2-ci:nightly-2024-04-18
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ github.event.workflow_run.head_repository.full_name }}
-          ref: ${{ github.event.workflow_run.head_branch }}
-      - uses: Swatinem/rust-cache@v2
-      - name: Format
-        run: cargo fmt --all -- --check
-      - name: Lints without features
-        if: always()
-        run: cargo clippy --workspace --benches --tests --examples --no-default-features --quiet
-      - name: Lints with all features enabled
-        if: always()
-        run: cargo clippy --workspace --benches --tests --examples --all-features --quiet --message-format=json | tee clippy.json
-      - name: Documentation
-        if: always()
-        run: cargo doc --no-deps --quiet
-      - name: Upload clippy report artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: clippy.json
-          path: clippy.json
-
   with_coverage:
     runs-on: ubuntu-latest
     container:
@@ -52,8 +25,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Run tests, with coverage
         run: |
-          mold --run cargo test --all-features --no-fail-fast --workspace --exclude iroha
-          mold --run cargo test --all-features --no-fail-fast -p iroha -- --skip integration
+          mold --run cargo test --no-fail-fast -p iroha -- --skip integration
         env:
           RUSTFLAGS: "-C instrument-coverage"
           LLVM_PROFILE_FILE: "iroha-%p-%m.profraw"

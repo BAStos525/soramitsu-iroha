@@ -32,7 +32,7 @@ jobs:
       - name: Generate lcov report
         if: always()
         run: grcov . --binary-path ./target/debug/ -s . -t lcov --branch --ignore-not-existing --ignore "/client_cli" --ignore "**/main.rs" -o lcov.info
-      - name: Upload lcov report artifact
+      - name: Upload lcov report artifact-test
         if: always()
         uses: actions/upload-artifact@v4
         with:

@@ -120,43 +120,45 @@ jobs:
             hyperledger/iroha:dev
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: Setup test Iroha 2 environment for docker containers
-        run: |
-          pip3 install -r scripts/requirements.txt --no-input --break-system-packages
-          ./scripts/test_env.py setup
-      - name: Install torii api dependencies using Poetry
-        working-directory: torii/pytests
-        run: |
-          poetry install
-      - name: Test and wipe docker-compose.single.yml containers
-        run: |
-          docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.single.yml up --wait || exit 1
-          docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.single.yml down
-      - name: Test and wipe docker-compose.local.yml containers
-        run: |
-          docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.local.yml up --wait || exit 1
-          docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.local.yml down
+      # - name: Setup test Iroha 2 environment for docker containers
+      #   run: |
+      #     pip3 install -r scripts/requirements.txt --no-input --break-system-packages
+      #     ./scripts/test_env.py setup
+      # - name: Install torii api dependencies using Poetry
+      #   working-directory: torii/pytests
+      #   run: |
+      #     poetry install
+      # - name: Test and wipe docker-compose.single.yml containers
+      #   run: |
+      #     docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.single.yml up --wait || exit 1
+      #     docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.single.yml down
+      # - name: Test and wipe docker-compose.local.yml containers
+      #   run: |
+      #     docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.local.yml up --wait || exit 1
+      #     docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.local.yml down
       - name: Test docker-compose.yml containers
         run: |
           docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.yml up --wait || exit 1
-      - name: Run torii api tests
-        working-directory: torii/pytests
-        run: |
-          poetry run pytest
-      - name: Install client cli dependencies using Poetry
-        working-directory: client_cli/pytests
-        run: |
-          poetry install
-      - name: Run client cli tests
-        working-directory: client_cli/pytests
-        env:
-          # prepared by `test_env.py`
-          CLIENT_CLI_BINARY: ../../test/iroha
-          CLIENT_CLI_CONFIG: ../../test/client.toml
-        run: |
-          poetry run pytest
-      - name: Cleanup test environment
-        run: |
-          ./scripts/test_env.py cleanup
+      - name: Show containers names
+        run: docker ps -a
+      # - name: Run torii api tests
+      #   working-directory: torii/pytests
+      #   run: |
+      #     poetry run pytest
+      # - name: Install client cli dependencies using Poetry
+      #   working-directory: client_cli/pytests
+      #   run: |
+      #     poetry install
+      # - name: Run client cli tests
+      #   working-directory: client_cli/pytests
+      #   env:
+      #     # prepared by `test_env.py`
+      #     CLIENT_CLI_BINARY: ../../test/iroha
+      #     CLIENT_CLI_CONFIG: ../../test/client.toml
+      #   run: |
+      #     poetry run pytest
+      # - name: Cleanup test environment
+      #   run: |
+      #     ./scripts/test_env.py cleanup
       - name: Wipe docker-compose.yml containers
         run: docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.yml down

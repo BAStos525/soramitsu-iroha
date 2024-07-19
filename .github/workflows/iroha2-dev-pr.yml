@@ -103,7 +103,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: create folder
-        run: mkdir /test
+        run: mkdir test
       - uses: actions/checkout@v4
       - name: show user
         run: whoami

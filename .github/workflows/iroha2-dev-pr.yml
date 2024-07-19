@@ -102,13 +102,13 @@ jobs:
     runs-on: ubuntu-latest #[self-hosted, Linux, iroha2]
     timeout-minutes: 60
     steps:
-      - name: create folder
-        run: mkdir test
-      - name: show new folder
-        run: ls -la
+      # - name: create folder
+      #   run: mkdir test
+      # - name: show new folder
+      #   run: ls -la
       - uses: actions/checkout@v4
-      - name: show current path
-        run: pwd
+      # - name: show current path
+      #   run: pwd
       - name: create folder 2
         run: mkdir test
       - name: show directories

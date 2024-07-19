@@ -104,15 +104,13 @@ jobs:
     steps:
       - name: create folder
         run: mkdir test
+      - name: show new folder
+        run: ls -la
       - uses: actions/checkout@v4
-      - name: show user
-        run: whoami
       - name: show current path
         run: pwd
       - name: show directories
         run: ls -la
-      - name: show new folder
-        run: ls -la /
       # - uses: Swatinem/rust-cache@v2
       # - name: Set up Docker Buildx
       #   id: buildx

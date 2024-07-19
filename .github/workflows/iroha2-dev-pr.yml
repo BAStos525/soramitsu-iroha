@@ -103,10 +103,14 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - name: show user
+        run: whoami
       - name: show current path
         run: pwd
       - name: show directories
         run: ls -la
+      - name: change permissions
+        run: chown root:root .
       - name: create folder
         run: mkdir /test
       - name: show new folder

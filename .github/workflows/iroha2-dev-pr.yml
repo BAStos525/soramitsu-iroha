@@ -102,6 +102,8 @@ jobs:
     runs-on: ubuntu-latest #[self-hosted, Linux, iroha2]
     timeout-minutes: 60
     steps:
+      - name: create folder
+        run: mkdir /test
       - uses: actions/checkout@v4
       - name: show user
         run: whoami
@@ -109,12 +111,8 @@ jobs:
         run: pwd
       - name: show directories
         run: ls -la
-      - name: change permissions
-        run: chown root:root .
-      - name: create folder
-        run: mkdir /test
       - name: show new folder
-        run: ls -la
+        run: ls -la /
       # - uses: Swatinem/rust-cache@v2
       # - name: Set up Docker Buildx
       #   id: buildx

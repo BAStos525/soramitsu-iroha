@@ -191,7 +191,7 @@ jobs:
         run: |
           docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.local.yml up --wait || exit 1
           docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.local.yml down
-      - name: Test docker-compose.yml containers
+      - name: Run docker-compose.yml containers
         run: docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.yml up --wait || exit 1
       - name: Run Torii API Tests
         working-directory: torii/pytests
@@ -212,5 +212,5 @@ jobs:
           CLIENT_CLI_BINARY: ../../${{ env.TEST_DIR }}/${{ env.IROHA_BIN }}
           CLIENT_CLI_CONFIG: ../../${{ env.TEST_DIR }}/client.toml
         run: ${{ env.POETRY_PATH }} run pytest
-      - name: Tear Down Docker Compose Setup
+      - name: Wipe docker-compose.yml containers
         run: docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.yml down

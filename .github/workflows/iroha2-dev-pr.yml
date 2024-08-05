@@ -19,7 +19,7 @@ env:
   CARGO_TERM_COLOR: always
   CLIENT_CLI_DIR: "/__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}/test"
   DOCKER_COMPOSE_PATH: defaults
-  TEST_DIR: "test"
+  TEST_DIR: "tmp/test"
   IROHA_BIN: "iroha"
   IROHA_CONTAINER: "defaults-irohad0-1"
   PYTHON_VERSION: "3.11"
@@ -150,7 +150,7 @@ jobs:
           name: clippy.json
           path: clippy.json
 
-  torii-api-client-cli-docker-compose-tests:
+  torii-api-client-cli-tests:
     runs-on: [self-hosted, Linux, iroha2]
     timeout-minutes: 60
     steps:

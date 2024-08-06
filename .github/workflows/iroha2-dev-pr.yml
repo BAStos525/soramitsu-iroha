@@ -158,19 +158,9 @@ jobs:
         uses: actions/checkout@v4
       - name: Set up Docker Buildx
         id: buildx
-        if: always()
         uses: docker/setup-buildx-action@v3
         with:
           install: true
-      - name: Install Python and Poetry
-        run: |
-          yum install -y python${{ env.PYTHON_VERSION }} python${{ env.PYTHON_VERSION }}-devel
-          curl -sSL https://install.python-poetry.org | python3 -
-          echo 'export PATH="${{ env.POETRY_PATH }}:$PATH"' >> /etc/profile
-          source /etc/profile
-      - name: Install Torii API Dependencies
-        working-directory: torii/pytests
-        run: ${{ env.POETRY_PATH }} install
       - name: Build and Tag Docker Images
         uses: docker/build-push-action@v6
         if: always()
@@ -193,10 +183,20 @@ jobs:
           docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.local.yml down
       - name: Run docker-compose.yml containers
         run: docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.yml up --wait || exit 1
+      - name: Install Python and Poetry
+        run: |
+          yum install -y python${{ env.PYTHON_VERSION }} python${{ env.PYTHON_VERSION }}-devel
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo 'export PATH="${{ env.POETRY_PATH }}:$PATH"' >> /etc/profile
+          source /etc/profile
+      - name: Install Torii API Dependencies
+        working-directory: torii/pytests
+        run: ${{ env.POETRY_PATH }} install
       - name: Run Torii API Tests
         working-directory: torii/pytests
         run: ${{ env.POETRY_PATH }} run pytest
       - name: Copy Client CLI Binary from Iroha Container
+        if: always()
         run: |
           mkdir -p ${{ env.TEST_DIR }}
           docker cp ${{ env.IROHA_CONTAINER }}:/usr/local/bin/${{ env.IROHA_BIN }} ${{ env.TEST_DIR }}
@@ -213,4 +213,5 @@ jobs:
           CLIENT_CLI_CONFIG: ../../${{ env.TEST_DIR }}/client.toml
         run: ${{ env.POETRY_PATH }} run pytest
       - name: Wipe docker-compose.yml containers
+        if: always()
         run: docker compose -f ${{ env.DOCKER_COMPOSE_PATH }}/docker-compose.yml down
